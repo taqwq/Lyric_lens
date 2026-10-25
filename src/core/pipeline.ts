@@ -1,134 +1,118 @@
 /*
- * Translates one song. Normally a single request: the model reads the whole song, writes
- * the context, then every unique line with its notes, streamed. If the stream stops early
- * (output limit, dropped connection, provider error after some output), a follow-up
- * request sends the full lyrics again plus the lines already done and asks only for the
- * rest, so the song is always understood as a whole and nothing already received is lost.
+ * One tap, one request (docs/DESIGN.md §1, principle 2). The model reads the whole song,
+ * writes the song record, then one record per distinct line, streamed. Whatever arrives is
+ * applied (and saved by the caller) immediately. If the stream stops early, the song simply
+ * stays partial with a reason; continuing is the reader's next tap, never automatic.
  */
-import { generateWithFallback } from '../llm/chain';
+import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
 import { LLMError } from '../llm/errors';
 import type { ProviderConfig, ThinkingLevel } from '../llm/types';
 import { buildPrompt } from './prompt';
 import { ProtocolParser, type ProtocolEvent } from './protocol';
-import { looseText, missingLines } from './song';
-import type { LineResult, Note, SongRecord, SongSource } from './types';
+import { headMatches, looseText, missingLines } from './song';
+import type { LineResult, Note, SongRecord, SongSource, StopInfo } from './types';
 
-const MAX_ROUNDS = 3;
 const MAX_NOTES_PER_LINE = 3;
 
 export interface TranslateOptions {
   providers: ProviderConfig[];
   thinking: ThinkingLevel;
   signal?: AbortSignal;
-  /** Called after every applied batch of events (cheap; UI may throttle). */
+  /** Called after every applied batch of records. */
   onUpdate?: (record: SongRecord) => void;
+  /** Engine-level progress (which model, waits). Not shown on the reading surface. */
   onStatus?: (text: string) => void;
 }
 
-function contains(line: string, span: string): boolean {
-  const s = looseText(span);
-  return Boolean(s) && looseText(line).includes(s);
+export interface TranslateOutcome {
+  record: SongRecord;
+  complete: boolean;
+  /** Why the song is still partial. */
+  stop?: StopInfo;
+  model: string;
 }
 
-/** Notes reference a line by id and quote a phrase from it. Trust the quote over the id:
- *  if the phrase is not on that line but is on exactly one (or a nearest) other line,
- *  move the note there. */
-export function placeNote(source: SongSource, uid: number, span: string): number | null {
-  const stated = source.unique[uid - 1];
-  if (stated && contains(stated.text, span)) return uid;
-  const matches = source.unique.filter((u) => contains(u.text, span));
-  if (matches.length) {
-    return matches.reduce((best, u) => (Math.abs(u.uid - uid) < Math.abs(best.uid - uid) ? u : best)).uid;
+/** Maps an engine error to the reason the reader sees at the seam. */
+export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
+  switch (error.kind) {
+    case 'overloaded': return { reason: 'busy', at: now };
+    case 'rate': return { reason: 'rate', at: now, until: now + Math.max(error.retryAfterMs, 60_000) };
+    case 'quota': return { reason: 'quota', at: now, until: error.retryAfterMs > 60_000 ? now + error.retryAfterMs : nextPacificMidnight(now) };
+    case 'auth': return { reason: 'auth', at: now };
+    case 'blocked': return { reason: 'blocked', at: now };
+    case 'network':
+    case 'timeout': return { reason: 'network', at: now };
+    case 'aborted': return { reason: 'stopped', at: now };
+    default: return { reason: 'unusable', at: now };
   }
-  return stated ? uid : null;
+}
+
+function sameNote(a: Note, b: Note): boolean {
+  return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
 }
 
 export class RecordBuilder {
-  private readonly pendingNotes = new Map<number, Note[]>();
-  /** uids accepted in this run (others are kept as-is). */
   private readonly targets: Set<number>;
+  /** Distinct lines accepted in this request. */
   added = 0;
+  /** Line records dropped because their echoed first words did not match the line. */
+  misaligned = 0;
 
   constructor(private readonly source: SongSource, readonly record: SongRecord, targets: number[]) {
     this.targets = new Set(targets);
   }
 
-  retarget(targets: number[]): void {
-    this.targets.clear();
-    targets.forEach((t) => this.targets.add(t));
-  }
-
   apply(events: ProtocolEvent[]): boolean {
     let changed = false;
     for (const ev of events) {
-      if (ev.type === 'about' || ev.type === 'voice') {
-        const ctx = this.record.context ?? { about: '', voice: '' };
-        if (!ctx[ev.type]) {
-          ctx[ev.type] = ev.text;
-          this.record.context = ctx;
-          changed = true;
-        }
-        continue;
-      }
-      if (ev.type === 'line') {
-        const u = this.source.unique[ev.uid - 1];
-        if (!u || !this.targets.has(ev.uid) || this.record.lines[u.key]?.ja) continue;
-        const result: LineResult = { ja: ev.ja };
-        const notes = this.pendingNotes.get(ev.uid);
-        if (notes?.length) result.notes = notes.slice(0, MAX_NOTES_PER_LINE);
-        this.pendingNotes.delete(ev.uid);
-        this.record.lines[u.key] = result;
-        this.added += 1;
+      if (ev.type === 'song') {
+        if (this.record.song?.who && this.record.song.what) continue;
+        this.record.song = { who: ev.who, what: ev.what, ...(ev.tone ? { tone: ev.tone } : {}), ...(ev.motifs ? { motifs: ev.motifs } : {}) };
         changed = true;
         continue;
       }
-      // note
-      const uid = placeNote(this.source, ev.uid, ev.span);
-      if (uid == null || !this.targets.has(uid)) continue;
-      const note: Note = { kind: ev.kind, span: ev.span, text: ev.text };
-      if (ev.unsure) note.unsure = true;
-      const u = this.source.unique[uid - 1]!;
-      const existing = this.record.lines[u.key];
-      if (existing) {
-        const notes = existing.notes ?? [];
-        if (notes.length >= MAX_NOTES_PER_LINE || notes.some((n) => looseText(n.span) === looseText(note.span) && n.kind === note.kind)) continue;
-        existing.notes = [...notes, note];
-        changed = true;
-      } else {
-        const list = this.pendingNotes.get(uid) ?? [];
-        if (!list.some((n) => looseText(n.span) === looseText(note.span) && n.kind === note.kind)) list.push(note);
-        this.pendingNotes.set(uid, list);
+      if (ev.type !== 'line') continue;
+      const u = this.source.unique[ev.uid - 1];
+      if (!u || !this.targets.has(ev.uid) || this.record.lines[u.key]?.ja) continue;
+      if (!headMatches(ev.head, u.text)) {
+        this.misaligned += 1;
+        continue;
       }
+      const notes: Note[] = [];
+      for (const raw of ev.notes) {
+        const note: Note = { kind: raw.kind, phrase: raw.phrase, text: raw.text };
+        if (raw.conjecture) note.conjecture = true;
+        if (raw.genius) note.genius = raw.genius;
+        if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
+      }
+      const result: LineResult = { ja: ev.ja };
+      if (notes.length) result.notes = notes;
+      this.record.lines[u.key] = result;
+      this.added += 1;
+      changed = true;
     }
     return changed;
   }
 }
 
 function outputBudget(expectedChars: number): number {
-  // Japanese is ~1 token/char on these tokenizers; leave generous room for thinking.
-  return Math.min(65_536, Math.max(8192, Math.round(expectedChars * 2.2) + 6000));
-}
-
-export interface TranslateOutcome {
-  record: SongRecord;
-  complete: boolean;
-  model: string;
-  provider: string;
+  // Japanese is ~1 token per character; the rest is room for the model's thinking.
+  return Math.min(65_536, Math.max(8192, Math.round(expectedChars * 1.6) + 8000));
 }
 
 export async function translateSong(source: SongSource, record: SongRecord, options: TranslateOptions): Promise<TranslateOutcome> {
+  const targets = missingLines(source, record);
+  if (!targets.length) {
+    delete record.stop;
+    return { record, complete: true, model: record.model ?? '' };
+  }
+  const prompt = buildPrompt(source, record, targets);
+  const builder = new RecordBuilder(source, record, targets.map((t) => t.uid));
+  const parser = new ProtocolParser();
   let model = record.model ?? '';
-  let provider = '';
-  let lastError: LLMError | null = null;
+  let stop: StopInfo | undefined;
 
-  for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const targets = missingLines(source, record);
-    if (!targets.length) break;
-    const prompt = buildPrompt(source, record, targets);
-    const builder = new RecordBuilder(source, record, targets.map((t) => t.uid));
-    const parser = new ProtocolParser();
-    if (round > 0) options.onStatus?.(`残り${targets.length}行を続けて訳しています`);
-
+  try {
     const result = await generateWithFallback(options.providers, {
       system: prompt.system,
       user: prompt.user,
@@ -136,22 +120,25 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
       thinking: options.thinking,
       onText: (chunk) => {
         if (builder.apply(parser.feed(chunk))) options.onUpdate?.(record);
+        // Only translated lines count as progress: a stream that dies after the song
+        // record alone lets the chain fall back to another model.
+        return builder.added > 0;
       },
     }, { signal: options.signal, onStatus: options.onStatus });
-
-    // Only a cleanly finished stream may flush its last, newline-less line.
-    if (result.finish === 'stop' && builder.apply(parser.flush())) options.onUpdate?.(record);
+    if (builder.apply(parser.flush())) options.onUpdate?.(record);
     model = result.model;
-    provider = result.provider;
-    record.model = model;
-    lastError = result.error ?? null;
-
-    if (builder.added === 0) {
-      throw lastError ?? new LLMError('empty', '訳を受け取れませんでした。モデルが形式どおりに答えなかった可能性があります。', { detail: result.text.slice(0, 3000) });
-    }
+    if (result.error) stop = stopFromError(result.error);
+    else if (result.finish === 'length') stop = { reason: 'length', at: Date.now() };
+  } catch (error) {
+    if (!(error instanceof LLMError)) throw error;
+    stop = stopFromError(error);
   }
 
-  const complete = missingLines(source, record).length === 0;
-  if (!complete && lastError) throw lastError;
-  return { record, complete, model, provider };
+  if (model) record.model = model;
+  if (!missingLines(source, record).length) {
+    delete record.stop;
+    return { record, complete: true, model };
+  }
+  record.stop = stop ?? { reason: builder.added ? 'gaps' : 'unusable', at: Date.now() };
+  return { record, complete: false, stop: record.stop, model };
 }

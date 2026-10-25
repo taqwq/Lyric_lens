@@ -68,7 +68,11 @@ export function classifyHttpError(status: number, bodyText: string, rawHeaders =
     return new LLMError('auth', message, opts);
   }
   if (status === 429 || /RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(everything)) {
-    const daily = /PerDay|per.day|daily|limit: 0\b|free_tier|FreeTier|insufficient_quota|credits/i.test(everything);
+    // Free-tier errors say "free_tier" whatever the window, so name the window first:
+    // a per-minute limit must not bench a model until the daily reset.
+    const perDay = /PerDay|per.day|daily|limit: 0\b|insufficient_quota|credits/i.test(everything);
+    const perMinute = /PerMinute|per.minute/i.test(everything);
+    const daily = perDay || (!perMinute && /free_tier|FreeTier/i.test(everything));
     return new LLMError(daily ? 'quota' : 'rate', message, opts);
   }
   if (status === 404 || /NOT_FOUND|model_not_found|does not exist|is not found/i.test(everything)) {

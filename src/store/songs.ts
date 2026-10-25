@@ -1,31 +1,34 @@
-import { getJSON, listKeys, remove, setJSON } from '../platform/storage';
+import { getJSON, getRaw, listKeys, remove, setJSON } from '../platform/storage';
 import type { SongRecord } from '../core/types';
 
-const SONG_PREFIX = 'll3:song:';
-const INDEX_KEY = 'll3:songs';
-const MAX_SONGS = 200;
+const SONG_PREFIX = 'll3:s:';
+const INDEX_KEY = 'll3:index';
+const MAX_SONGS = 300;
 
-type Index = Record<string, number>;
+/** id → [updatedAt, partial?1:0] */
+type Index = Record<string, [number, number]>;
 
-function songKey(path: string): string {
-  return SONG_PREFIX + path;
+function songKey(id: string): string {
+  return SONG_PREFIX + id;
 }
 
-export async function loadSong(path: string): Promise<SongRecord | null> {
-  const record = await getJSON<SongRecord | null>(songKey(path), null);
-  if (!record || record.v !== 1 || typeof record.lines !== 'object') return null;
+export async function loadSong(id: string): Promise<SongRecord | null> {
+  const record = await getJSON<SongRecord | null>(songKey(id), null);
+  if (!record || record.v !== 2 || typeof record.lines !== 'object') return null;
   return record;
 }
 
+/** Saves a record and evicts the least recently used finished songs beyond the cap.
+ *  A partial song is never evicted: it holds work the reader may still resume. */
 export async function saveSong(record: SongRecord): Promise<void> {
   record.updatedAt = Date.now();
-  await setJSON(songKey(record.path), record);
+  await setJSON(songKey(record.id), record);
   const index = await getJSON<Index>(INDEX_KEY, {});
-  index[record.path] = record.updatedAt;
-  const paths = Object.keys(index);
-  if (paths.length > MAX_SONGS) {
-    paths.sort((a, b) => (index[b] ?? 0) - (index[a] ?? 0));
-    for (const old of paths.slice(MAX_SONGS)) {
+  index[record.id] = [record.updatedAt, record.stop ? 1 : 0];
+  const ids = Object.keys(index);
+  if (ids.length > MAX_SONGS) {
+    const evictable = ids.filter((id) => !index[id]?.[1]).sort((a, b) => (index[a]?.[0] ?? 0) - (index[b]?.[0] ?? 0));
+    for (const old of evictable.slice(0, ids.length - MAX_SONGS)) {
       delete index[old];
       await remove(songKey(old));
     }
@@ -33,15 +36,22 @@ export async function saveSong(record: SongRecord): Promise<void> {
   await setJSON(INDEX_KEY, index);
 }
 
-export async function deleteSong(path: string): Promise<void> {
-  await remove(songKey(path));
+export async function deleteSong(id: string): Promise<void> {
+  await remove(songKey(id));
   const index = await getJSON<Index>(INDEX_KEY, {});
-  delete index[path];
+  delete index[id];
   await setJSON(INDEX_KEY, index);
 }
 
-export async function songCount(): Promise<number> {
-  return Object.keys(await getJSON<Index>(INDEX_KEY, {})).length;
+export async function storageSummary(): Promise<{ count: number; bytes: number }> {
+  let count = 0;
+  let bytes = 0;
+  for (const key of await listKeys()) {
+    if (!key.startsWith(SONG_PREFIX)) continue;
+    count += 1;
+    bytes += ((await getRaw(key)) ?? '').length * 2;
+  }
+  return { count, bytes };
 }
 
 export async function deleteAllSongs(): Promise<void> {
@@ -53,7 +63,7 @@ export async function deleteAllSongs(): Promise<void> {
 export class SaveQueue {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: SongRecord | null = null;
-  constructor(private readonly delayMs = 1200) {}
+  constructor(private readonly delayMs = 700) {}
 
   schedule(record: SongRecord): void {
     this.pending = record;

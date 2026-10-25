@@ -77,7 +77,7 @@ if (songId && !process.argv.includes('--no-annotations')) {
 }
 console.log(`${source.meta.artist} – ${source.meta.title}: ${source.lines.length} lines, ${source.unique.length} unique, about=${source.meta.about?.length ?? 0} chars, annotations=${source.meta.annotations?.length ?? 0}`);
 
-const record = emptyRecord(path, source.meta);
+const record = emptyRecord(songId ? `id:${songId}` : `path:${path}`, path, source.meta);
 const started = Date.now();
 let firstLineAt = 0;
 const outcome = await translateSong(source, record, {
@@ -95,10 +95,10 @@ const outcome = await translateSong(source, record, {
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 const notes = Object.values(record.lines).flatMap((l) => l.notes ?? []);
 const status = songStatus(source, record);
-console.log(`model=${outcome?.model ?? record.model} total=${seconds(Date.now() - started)}s firstLine=${firstLineAt ? seconds(firstLineAt - started) : '-'}s status=${status.kind} notes=${notes.length}`);
+console.log(`model=${outcome?.model ?? record.model} total=${seconds(Date.now() - started)}s firstLine=${firstLineAt ? seconds(firstLineAt - started) : '-'}s status=${status.kind} stop=${record.stop?.reason ?? '-'} notes=${notes.length}`);
 
 const out: string[] = [`# ${source.meta.artist} – ${source.meta.title}`, '', `model: ${record.model} / thinking: ${thinking}`, ''];
-if (record.context) out.push(`**about**: ${record.context.about}`, '', `**voice**: ${record.context.voice}`, '');
+if (record.song) out.push(`**誰が誰に**: ${record.song.who}`, '', `**この曲は**: ${record.song.what}`, '', `tone: ${record.song.tone ?? ''} / motifs: ${JSON.stringify(record.song.motifs ?? [])}`, '');
 let section = -1;
 for (const line of source.lines) {
   if (line.section !== section) {
@@ -107,7 +107,8 @@ for (const line of source.lines) {
   }
   const r = record.lines[line.key];
   out.push(`- ${line.text}`, `  - ${r?.ja ?? '（未訳）'}`);
-  for (const n of r?.notes ?? []) out.push(`    - [${n.kind}${n.unsure ? '?' : ''}] «${n.span}» ${n.text}`);
+  if (line.occurrence > 0) continue;
+  for (const n of r?.notes ?? []) out.push(`    - [${n.kind}${n.conjecture ? '?' : ''}${n.genius ? ` g:${n.genius}` : ''}] «${n.phrase}» ${n.text}`);
 }
 mkdirSync('tmp', { recursive: true });
 const file = `tmp/report-${path.split('/').pop()}-${(record.model ?? 'x').replace(/[^\w.-]/g, '_')}-${thinking}.md`;

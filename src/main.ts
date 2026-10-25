@@ -12,9 +12,7 @@ function registerMenu(label: string, fn: () => void): void {
 function boot(): void {
   injectStyle('ll-style', css);
   const app = new App();
-  registerMenu('Lyric Lens：設定', () => app.openSettings(false));
-  registerMenu('Lyric Lens：この曲を訳す／続きを訳す', () => void app.translate());
-  registerMenu('Lyric Lens：この曲を訳し直す', () => void app.translate(true));
+  registerMenu('Lyric Lens の設定', () => app.openSettings(null));
   app.start().catch((error) => console.error('[Lyric Lens] failed to start', error));
   console.info(`[Lyric Lens] v${__VERSION__}`);
 }

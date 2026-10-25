@@ -1,80 +1,104 @@
 /*
- * Streaming line protocol the model writes. One record per line, so every completed
- * line is usable the moment it arrives and a cut-off response still keeps everything
- * before the cut:
+ * The model answers with line-delimited JSON (docs/DESIGN.md §8), one record per line:
  *
- *   @about: この曲が何をしている曲か
- *   @voice: 語り手と、誰に向けているか
- *   L12: 日本語訳
- *   N12: slang | original phrase | 説明
- *   N12?: reference | original phrase | 推測を含む説明
+ *   {"t":"song","who":"…","what":"…","tone":"…","motifs":[{"en":"…","ja":"…"}]}
+ *   {"t":"line","id":"L12","head":"first three words","ja":"…","notes":[{"q":"…","k":"slang","x":"…","c":false,"g":"123"}]}
+ *   {"t":"end"}
  *
- * Plain text (not JSON) also works with every provider, including local models
- * without structured output support.
+ * Every completed line is usable the moment it arrives, a record that fails to parse costs
+ * only that line, and a cut-off stream keeps everything before the cut.
  */
 import { NOTE_KINDS, type NoteKind } from './types';
 
+export interface RawNote {
+  phrase: string;
+  kind: NoteKind;
+  text: string;
+  conjecture: boolean;
+  genius?: string;
+}
+
 export type ProtocolEvent =
-  | { type: 'about'; text: string }
-  | { type: 'voice'; text: string }
-  | { type: 'line'; uid: number; ja: string }
-  | { type: 'note'; uid: number; kind: NoteKind; span: string; text: string; unsure: boolean };
+  | { type: 'song'; who: string; what: string; tone?: string; motifs?: Array<{ en: string; ja: string }> }
+  | { type: 'line'; uid: number; head?: string; ja: string; notes: RawNote[] }
+  | { type: 'end' };
 
 const KIND_ALIASES: Record<string, NoteKind> = {
   slang: 'slang', aave: 'slang', jargon: 'slang', 'スラング': 'slang',
-  wordplay: 'wordplay', pun: 'wordplay', 'double-entendre': 'wordplay', double_entendre: 'wordplay', '言葉遊び': 'wordplay',
-  reference: 'reference', ref: 'reference', allusion: 'reference', background: 'reference', '背景': 'reference',
+  wordplay: 'wordplay', pun: 'wordplay', 'double-entendre': 'wordplay', double_entendre: 'wordplay', '掛詞': 'wordplay',
+  reference: 'reference', ref: 'reference', allusion: 'reference', background: 'reference', '引用': 'reference', '元ネタ': 'reference',
   idiom: 'idiom', expression: 'idiom', '慣用句': 'idiom',
-  ambiguity: 'ambiguity', ambiguous: 'ambiguity', '多義': 'ambiguity',
+  ambiguous: 'ambiguous', ambiguity: 'ambiguous', '二通りに読める': 'ambiguous', '多義': 'ambiguous',
 };
 
-const LINE_RE = /^L\s*(\d{1,4})\s*[:：]\s*(.*)$/i;
-const NOTE_RE = /^N\s*(\d{1,4})\s*([?？])?\s*[:：]\s*(.+)$/i;
-const META_RE = /^@?\s*(about|voice)\s*[:：]\s*(.+)$/i;
+function str(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
+}
 
-function cleanup(raw: string): string {
-  return raw
-    .replace(/^\s*(?:[-*•]\s+)?/, '')
-    .replace(/^\*\*(.+?)\*\*/, '$1')
-    .trim();
+function kindOf(value: unknown): NoteKind | null {
+  const raw = str(value).toLowerCase();
+  return KIND_ALIASES[raw] ?? (NOTE_KINDS.find((k) => raw.startsWith(k)) ?? null);
+}
+
+function uidOf(value: unknown): number | null {
+  const m = /^\s*L?\s*(\d{1,4})\s*$/i.exec(str(value));
+  return m ? Number(m[1]) : null;
 }
 
 function stripWrappingQuotes(text: string): string {
   const t = text.trim();
-  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith('“') && t.endsWith('”')))) {
-    return t.slice(1, -1).trim();
-  }
+  if (t.length >= 2 && /^["“「『]/.test(t) && /["”」』]$/.test(t)) return t.slice(1, -1).trim();
   return t;
 }
 
-export function parseProtocolLine(raw: string): ProtocolEvent | null {
-  const line = cleanup(raw);
+function notesOf(value: unknown): RawNote[] {
+  if (!Array.isArray(value)) return [];
+  const out: RawNote[] = [];
+  for (const n of value as Array<Record<string, unknown>>) {
+    if (!n || typeof n !== 'object') continue;
+    const kind = kindOf(n.k ?? n.kind);
+    const phrase = stripWrappingQuotes(str(n.q ?? n.phrase ?? n.span));
+    const text = str(n.x ?? n.text ?? n.note);
+    if (!kind || !phrase || !text) continue;
+    const c = n.c ?? n.conjecture;
+    const genius = str(n.g ?? n.genius);
+    out.push({ phrase, kind, text, conjecture: c === true || c === 'true' || c === 1, ...(genius ? { genius } : {}) });
+  }
+  return out;
+}
+
+/** One output line → event, or null when it is not a usable record. */
+export function parseRecord(raw: string): ProtocolEvent | null {
+  let line = raw.trim();
   if (!line || line.startsWith('```')) return null;
-
-  let m = LINE_RE.exec(line);
-  if (m) {
-    const ja = stripWrappingQuotes(m[2] ?? '');
-    if (!ja) return null;
-    return { type: 'line', uid: Number(m[1]), ja };
+  line = line.replace(/^[-*•]\s+/, '').replace(/,\s*$/, '');
+  const start = line.indexOf('{');
+  const end = line.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(line.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
   }
-
-  m = NOTE_RE.exec(line);
-  if (m) {
-    const parts = (m[3] ?? '').split(/\s*[|｜]\s*/);
-    if (parts.length < 3) return null;
-    const kindRaw = (parts[0] ?? '').toLowerCase().replace(/[^a-z_\-\p{L}]/gu, '');
-    const kind = KIND_ALIASES[kindRaw] ?? (NOTE_KINDS as readonly string[]).find((k) => kindRaw.startsWith(k)) as NoteKind | undefined;
-    const span = stripWrappingQuotes(parts[1] ?? '').replace(/^[「『]|[」』]$/g, '');
-    const text = parts.slice(2).join(' | ').trim();
-    if (!kind || !span || !text) return null;
-    return { type: 'note', uid: Number(m[1]), kind, span, text, unsure: Boolean(m[2]) };
+  const t = str(data.t ?? data.type).toLowerCase();
+  if (t === 'end') return { type: 'end' };
+  if (t === 'song') {
+    const who = str(data.who);
+    const what = str(data.what);
+    if (!who && !what) return null;
+    const motifs = Array.isArray(data.motifs)
+      ? (data.motifs as Array<Record<string, unknown>>).map((m) => ({ en: str(m?.en), ja: str(m?.ja) })).filter((m) => m.en && m.ja)
+      : undefined;
+    const tone = str(data.tone);
+    return { type: 'song', who, what, ...(tone ? { tone } : {}), ...(motifs?.length ? { motifs } : {}) };
   }
-
-  m = META_RE.exec(line);
-  if (m) {
-    const text = (m[2] ?? '').trim();
-    if (!text) return null;
-    return { type: (m[1] ?? '').toLowerCase() === 'about' ? 'about' : 'voice', text };
+  if (t === 'line' || (!t && data.id != null && data.ja != null)) {
+    const uid = uidOf(data.id);
+    const ja = stripWrappingQuotes(str(data.ja));
+    if (uid == null || !ja) return null;
+    const head = str(data.head);
+    return { type: 'line', uid, ja, notes: notesOf(data.notes), ...(head ? { head } : {}) };
   }
   return null;
 }
@@ -88,20 +112,18 @@ export class ProtocolParser {
     const events: ProtocolEvent[] = [];
     let nl: number;
     while ((nl = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, nl);
+      const ev = parseRecord(this.buffer.slice(0, nl));
       this.buffer = this.buffer.slice(nl + 1);
-      const ev = parseProtocolLine(line);
       if (ev) events.push(ev);
     }
     return events;
   }
 
-  /** Call once the stream ended normally. A cut-off stream should not flush:
-   *  its last line may be half a translation. */
+  /** The last line has no newline; a JSON record is self-delimiting, so it is safe to
+   *  parse even after a cut (a truncated record simply fails to parse). */
   flush(): ProtocolEvent[] {
-    const rest = this.buffer;
+    const ev = parseRecord(this.buffer);
     this.buffer = '';
-    const ev = parseProtocolLine(rest);
     return ev ? [ev] : [];
   }
 }
