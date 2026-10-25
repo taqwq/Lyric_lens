@@ -56,7 +56,10 @@ function nextUtcMidnight(now = Date.now()): number {
 function cooldownFor(config: ProviderConfig, error: LLMError): number {
   const now = Date.now();
   switch (error.kind) {
-    case 'quota': return config.kind === 'gemini' ? nextPacificMidnight(now) : nextUtcMidnight(now);
+    case 'quota':
+      // Google states the exact wait ("retryDelay": "57083s"); otherwise assume the daily reset.
+      if (error.retryAfterMs > 60_000) return now + error.retryAfterMs;
+      return config.kind === 'gemini' ? nextPacificMidnight(now) : nextUtcMidnight(now);
     case 'rate': return now + Math.max(error.retryAfterMs, 60_000);
     case 'overloaded': return now + 2 * 60_000;
     case 'not-found': return now + 3 * 24 * 60 * 60_000;

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev-harness",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/serve.mjs", "5178"],
+      "port": 5178
+    }
+  ]
+}

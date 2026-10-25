@@ -4,3 +4,4 @@ node_modules/
 *.log
 coverage/
 tmp/
+dev/lyric-lens.dev.user.js
