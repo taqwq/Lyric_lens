@@ -15,7 +15,13 @@ createServer(async (req, res) => {
   if (!file.startsWith(root)) { res.writeHead(403).end(); return; }
   try {
     const body = await readFile(file);
-    res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(body);
+    // CORS + private-network headers let a real genius.com tab load the dev build for testing.
+    res.writeHead(200, {
+      'content-type': types[extname(file)] ?? 'application/octet-stream',
+      'cache-control': 'no-store',
+      'access-control-allow-origin': '*',
+      'access-control-allow-private-network': 'true',
+    }).end(body);
   } catch {
     res.writeHead(404).end('not found');
   }

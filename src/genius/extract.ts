@@ -164,7 +164,18 @@ export function extractMeta(doc: Document = document): SongMeta {
   return meta;
 }
 
-export function songPath(loc: Location = location): string {
+/** Stable identity of the open song. Opening an annotation rewrites the URL to the
+ *  annotation's id (genius.com/11592958) while the page stays on the same song, so the
+ *  canonical song URL wins over location when it is one. */
+export function songPath(loc: Location = location, doc?: Document): string {
+  const canonical = doc?.querySelector('link[rel="canonical"]')?.getAttribute('href')
+    ?? doc?.querySelector('meta[property="og:url"]')?.getAttribute('content');
+  if (canonical) {
+    try {
+      const path = new URL(canonical, loc.href).pathname.replace(/\/+$/, '');
+      if (/-lyrics$/i.test(path)) return path;
+    } catch { /* malformed: fall back to location */ }
+  }
   return loc.pathname.replace(/\/+$/, '') || '/';
 }
 
@@ -182,5 +193,5 @@ export function readPage(doc: Document = document, loc: Location = location): Pa
   if (!extraction) return null;
   const source = buildSong(extractMeta(doc), extraction.rows);
   if (!source.lines.length) return null;
-  return { path: songPath(loc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, containers: extraction.containers };
+  return { path: songPath(loc, doc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, containers: extraction.containers };
 }

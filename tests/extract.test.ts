@@ -1,6 +1,7 @@
 import './setup';
 
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
 import { extractLyrics, extractMeta, lyricsContainers, readPage, songPath } from '../src/genius/extract';
 
 function parse(html: string): Document {
@@ -230,5 +231,17 @@ describe('extractMeta', () => {
     expect(meta).toEqual({ title: 'HUMBLE.', artist: '' });
     expect('album' in meta).toBe(false);
     expect('about' in meta).toBe(false);
+  });
+});
+
+describe('songPath with a canonical URL', () => {
+  it('keeps the song identity when Genius rewrites the URL to an annotation id', () => {
+    const dom = new JSDOM('<head><link rel="canonical" href="https://genius.com/Kendrick-lamar-humble-lyrics"></head>', { url: 'https://genius.com/11592958' });
+    expect(songPath(dom.window.location as unknown as Location, dom.window.document)).toBe('/Kendrick-lamar-humble-lyrics');
+  });
+
+  it('ignores a canonical URL that is not a song page', () => {
+    const dom = new JSDOM('<head><link rel="canonical" href="https://genius.com/artists/Kendrick-lamar"></head>', { url: 'https://genius.com/x-lyrics' });
+    expect(songPath(dom.window.location as unknown as Location, dom.window.document)).toBe('/x-lyrics');
   });
 });

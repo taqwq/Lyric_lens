@@ -29,9 +29,19 @@ export class InlineRenderer {
   private page: PageSong | null = null;
 
   render({ page, record, fallback, running }: RenderInput): void {
-    if (this.page && this.page.path !== page.path) this.open.clear();
-    if (this.page !== page) this.clear();
+    // Same song re-read (Genius re-rendered, URL changed for an annotation…): keep the
+    // existing nodes that are still in place instead of rebuilding everything.
+    if (this.page && this.page.path !== page.path) {
+      this.clear();
+      this.open.clear();
+    }
     this.page = page;
+    for (const [i, el] of this.els) {
+      if (i < page.source.lines.length) continue;
+      el.remove();
+      this.els.delete(i);
+      this.sigs.delete(i);
+    }
 
     page.source.lines.forEach((line, i) => {
       const anchor = page.anchors[i];
@@ -47,7 +57,7 @@ export class InlineRenderer {
         return;
       }
       const result = fresh ?? old;
-      const sig = `${state}|${result?.ja ?? ''}|${JSON.stringify(result?.notes ?? [])}`;
+      const sig = `${line.key}|${state}|${result?.ja ?? ''}|${JSON.stringify(result?.notes ?? [])}`;
       if (current && this.sigs.get(i) === sig && current.isConnected && current.previousSibling === anchor) return;
 
       const next = this.build(line.key, state, result);
