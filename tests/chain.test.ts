@@ -1,7 +1,17 @@
 import './setup';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearCooldowns, generateWithFallback, isUsable, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
+import {
+  clearCooldowns,
+  cooldownId,
+  generateWithFallback,
+  isUsable,
+  keyStatus,
+  keyTag,
+  markKey,
+  nextPacificMidnight,
+  type ChainResult,
+} from '../src/llm/chain';
 import { LLMError } from '../src/llm/errors';
 import type { HttpResult, StreamRequest } from '../src/platform/http';
 import { streamRequest } from '../src/platform/http';
@@ -31,6 +41,8 @@ type Reply =
 const queues = new Map<string, Reply[]>();
 /** Every generation request, by model, in order. Model-list requests are not included. */
 let generated: string[] = [];
+/** The API key each generation request carried, parallel to `generated`. */
+let generatedKeys: string[] = [];
 let listReply: Reply = { status: 200, body: JSON.stringify(MODEL_LIST) };
 
 function reply(model: string, ...replies: Reply[]): void {
@@ -49,6 +61,7 @@ async function serve(req: StreamRequest): Promise<HttpResult> {
     else if (req.url.endsWith('/chat/completions')) model = (JSON.parse(req.body ?? '{}') as { model: string }).model;
     else throw new Error(`unexpected URL ${req.url}`);
     generated.push(model);
+    generatedKeys.push(req.headers?.['x-goog-api-key'] ?? req.headers?.Authorization?.replace(/^Bearer /, '') ?? '');
     next = queues.get(model)?.shift();
   }
   if (!next) throw new Error(`no scripted reply left for ${model}`);
@@ -83,10 +96,11 @@ const rateLimited = (retryDelay: string) => googleError(429, 'RESOURCE_EXHAUSTED
 ]);
 
 const COOLDOWNS = 'll3:cooldowns';
-const cooldownKey = (model: string) => `gemini:${GEMINI_BASE}:${model}`;
 const readCooldowns = () => getJSON<Record<string, { until: number; reason: string }>>(COOLDOWNS, {});
 
 const gemini = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({ ...newProvider('gemini', 'test-key'), ...overrides });
+/** Cooldowns are kept per preset, endpoint, API key and model. */
+const cooldownKey = (model: string, config: ProviderConfig = gemini()) => cooldownId(config, model);
 
 interface Run {
   chunks: string[];
@@ -94,12 +108,17 @@ interface Run {
   promise: Promise<ChainResult>;
 }
 
-function start(configs: ProviderConfig[], signal?: AbortSignal): Run {
+/** `verdict` is what the consumer's onText answers for a chunk (chunks so far, including this one);
+ *  by default it gives no verdict, like a consumer written before verdicts existed. */
+function start(configs: ProviderConfig[], signal?: AbortSignal, verdict?: (chunks: string[]) => boolean | void): Run {
   const chunks: string[] = [];
   const statuses: string[] = [];
   const promise = generateWithFallback(
     configs,
-    { system: 'sys', user: 'usr', maxOutputTokens: 1000, thinking: 'low', onText: (t) => chunks.push(t) },
+    {
+      system: 'sys', user: 'usr', maxOutputTokens: 1000, thinking: 'low',
+      onText: (t) => { chunks.push(t); return verdict?.(chunks); },
+    },
     { onStatus: (s) => statuses.push(s), signal },
   );
   return { chunks, statuses, promise };
@@ -116,6 +135,7 @@ beforeEach(() => {
   http.mockImplementation(serve);
   queues.clear();
   generated = [];
+  generatedKeys = [];
   listReply = { status: 200, body: JSON.stringify(MODEL_LIST) };
 });
 
@@ -213,7 +233,7 @@ describe('generateWithFallback: model fallback', () => {
     expect(generated).toEqual([]);
   });
 
-  it('returns finish "length" for MAX_TOKENS so the pipeline can continue', async () => {
+  it('returns finish "length" for MAX_TOKENS so the caller can report the cut', async () => {
     reply(A, { status: 200, body: textEvent('L1: あ\n') + stopEvent('MAX_TOKENS') });
     const result = await start([gemini()]).promise;
     expect(result.finish).toBe('length');
@@ -316,6 +336,89 @@ describe('generateWithFallback: quota cooldowns', () => {
   });
 });
 
+describe('cooldown ids and API keys', () => {
+  it('cooldownId is preset, endpoint, key fingerprint and model', () => {
+    const config = gemini();
+    expect(cooldownId(config, 'm')).toBe(`gemini:${GEMINI_BASE}:${keyTag(config)}:m`);
+    expect(cooldownId(config, '')).toBe(`gemini:${GEMINI_BASE}:${keyTag(config)}:`);
+    expect(cooldownId({ ...config, baseUrl: 'https://proxy.example' }, 'm')).toBe(`gemini:https://proxy.example:${keyTag(config)}:m`);
+  });
+
+  it('keyTag is stable, ignores surrounding whitespace, tells keys apart, and does not contain the key', () => {
+    expect(keyTag(gemini())).toBe(keyTag(gemini()));
+    expect(keyTag(gemini({ apiKey: '  test-key \n' }))).toBe(keyTag(gemini()));
+    expect(keyTag(gemini({ apiKey: 'another-key' }))).not.toBe(keyTag(gemini()));
+    expect(keyTag(gemini({ apiKey: 'test-kez' }))).not.toBe(keyTag(gemini()));
+    expect(keyTag(gemini({ apiKey: 'AIzaSyEXAMPLEKEYEXAMPLEKEY' }))).not.toContain('AIza');
+    expect(cooldownId(gemini({ apiKey: 'AIzaSyEXAMPLEKEYEXAMPLEKEY' }), 'm')).not.toContain('AIzaSyEXAMPLE');
+  });
+
+  it('stores a cooldown under the id of the key that hit the limit', async () => {
+    const config = gemini({ apiKey: 'key-one' });
+    reply(A, dailyQuota());
+    reply(B, ok('L1: あ\n'));
+    await start([config]).promise;
+    const stored = await readCooldowns();
+    expect(Object.keys(stored)).toEqual([cooldownId(config, A)]);
+    expect(stored[cooldownKey(A, config)]?.reason).toBe('quota');
+    expect(stored[cooldownKey(A, gemini({ apiKey: 'key-two' }))]).toBeUndefined();
+  });
+
+  it("still tries a second Gemini key after the first key's models are all in quota cooldown", async () => {
+    const first = gemini({ apiKey: 'key-one' });
+    const second = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+    reply(A, dailyQuota());
+    reply(B, dailyQuota());
+    reply(C, dailyQuota());
+    expect((await settle(start([first]))).error?.kind).toBe('quota');
+    expect(generatedKeys).toEqual(['key-one', 'key-one', 'key-one']);
+
+    // the first key is spent for today; the second is another project with its own quota
+    generated = [];
+    generatedKeys = [];
+    reply(A, ok('L1: あ\n'));
+    const run = start([first, second]);
+    const result = await run.promise;
+    expect(result.model).toBe(A);
+    expect(generated).toEqual([A]);
+    expect(generatedKeys).toEqual(['key-two']); // nothing was spent on key-one
+    expect(run.chunks.join('')).toBe('L1: あ\n');
+    const stored = await readCooldowns();
+    expect(Object.keys(stored).sort()).toEqual([A, B, C].map((m) => cooldownId(first, m)).sort());
+  });
+
+  it('keeps a spent key skipped when another provider entry carries the same key', async () => {
+    const first = gemini({ apiKey: 'key-one' });
+    reply(A, dailyQuota());
+    reply(B, dailyQuota());
+    reply(C, dailyQuota());
+    await settle(start([first]));
+
+    generated = [];
+    const again = await settle(start([gemini({ id: 'gemini-again', apiKey: 'key-one' })]));
+    expect(again.error?.kind).toBe('quota');
+    expect(again.error?.message).toContain('上限');
+    expect(generated).toEqual([]);
+  });
+
+  it('keeps the model list per key too', async () => {
+    const first = gemini({ apiKey: 'key-one' });
+    const second = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+    reply(A, ok('L1: あ\n'), ok('L1: い\n'), ok('L1: う\n'));
+    await start([first]).promise;
+    await start([second]).promise;
+    const listRequests = () => http.mock.calls.filter(([r]) => r.url.includes('/v1beta/models?'));
+    expect(listRequests()).toHaveLength(2);
+    expect(listRequests().map(([r]) => r.headers?.['x-goog-api-key'])).toEqual(['key-one', 'key-two']);
+    expect((await getJSON<{ models: unknown[] } | null>(`ll3:models:${cooldownId(first, '')}`, null))?.models).toHaveLength(3);
+    expect((await getJSON<{ models: unknown[] } | null>(`ll3:models:${cooldownId(second, '')}`, null))?.models).toHaveLength(3);
+
+    // a key that is already listed is not listed again
+    await start([first]).promise;
+    expect(listRequests()).toHaveLength(2);
+  });
+});
+
 describe('generateWithFallback: auth', () => {
   it('throws kind "auth" on 401 and does not try the provider\'s other models', async () => {
     reply(A, unauthorized());
@@ -327,6 +430,59 @@ describe('generateWithFallback: auth', () => {
     expect(error?.provider).toBe('Google Gemini');
     expect(generated).toEqual([A]);
     expect(await readCooldowns()).toEqual({}); // a bad key is not a cooldown
+  });
+
+  it('remembers a rejected key: keyStatus reports "bad" for that key only', async () => {
+    const config = gemini();
+    expect(await keyStatus(config)).toEqual({ kind: 'ok' });
+    reply(A, unauthorized());
+    await settle(start([config]));
+
+    expect(await keyStatus(config)).toEqual({ kind: 'bad' });
+    expect(await keyStatus({ ...config, id: 'elsewhere' })).toEqual({ kind: 'bad' }); // same key, wherever it is configured
+    expect(await keyStatus(gemini({ apiKey: 'a-different-key' }))).toEqual({ kind: 'ok' });
+    expect(await keyStatus(gemini({ apiKey: '   ' }))).toEqual({ kind: 'missing' });
+  });
+
+  it('markKey(config, true) condemns a key and markKey(config, false) forgives it', async () => {
+    const config = gemini();
+    await markKey(config, true);
+    expect(await keyStatus(config)).toEqual({ kind: 'bad' });
+    await markKey(config, false);
+    expect(await keyStatus(config)).toEqual({ kind: 'ok' });
+  });
+
+  it('does not mark the key bad for failures that are not about the key', async () => {
+    const config = gemini();
+    reply(A, busy());
+    reply(B, dailyQuota());
+    reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    await settle(start([config]));
+    expect((await keyStatus(config)).kind).not.toBe('bad');
+  });
+
+  it('keyStatus reports "resting" with the earliest reset when every model is out of quota', async () => {
+    const config = gemini();
+    reply(A, dailyQuota());
+    reply(B, dailyQuota());
+    reply(C, dailyQuota());
+    await settle(start([config]));
+    const status = await keyStatus(config);
+    expect(status.kind).toBe('resting');
+    const stored = await readCooldowns();
+    expect(status.kind === 'resting' && status.until).toBe(Math.min(...Object.values(stored).map((c) => c.until)));
+  });
+
+  // The key is just as invalid when the rejection comes from the model-list request that precedes
+  // generation (the usual place for a revoked key, since automatic model choice lists first), but
+  // only the generation path calls markKey (src/llm/chain.ts:243-248 versus :321-324). The settings
+  // sheet then keeps showing the key as fine, because keyStatus relies on that mark.
+  it('also remembers a key that was rejected by the model-list request', async () => {
+    listReply = unauthorized();
+    const config = gemini();
+    const { error } = await settle(start([config]));
+    expect(error?.kind).toBe('auth');
+    expect(await keyStatus(config)).toEqual({ kind: 'bad' });
   });
 
   it('moves on to the next provider after an auth failure', async () => {
@@ -380,7 +536,7 @@ describe('generateWithFallback: partial output', () => {
     expect(result.model).toBe(A);
     expect(result.finish).toBe('unknown');
     expect(result.finishDetail).toBe('network');
-    expect(generated).toEqual([A]); // no reconnect, no fallback: the pipeline asks for the rest
+    expect(generated).toEqual([A]); // no reconnect, no fallback: the caller keeps what arrived
     expect(await readCooldowns()).toEqual({});
   });
 
@@ -394,6 +550,53 @@ describe('generateWithFallback: partial output', () => {
     expect(run.chunks).toEqual(['L1: あ\n']);
     expect(result.error?.kind).toBe('overloaded');
     expect(generated).toEqual([A]);
+  });
+
+  it('keeps the partial output when onText said the text was useful', async () => {
+    reply(A, { partial: textEvent('{"t":"line"}\n'), throws: new LLMError('overloaded', 'busy') });
+    reply(B, ok('should not be used'));
+    const run = start([gemini()], undefined, () => true);
+    const result = await run.promise;
+    expect(result.error?.kind).toBe('overloaded');
+    expect(result.model).toBe(A);
+    expect(generated).toEqual([A]);
+  });
+
+  it('falls through to the next model when onText said false for everything before the error', async () => {
+    reply(A, { partial: textEvent('{"t":"song"}\n') + textEvent('{"t":"song"}\n'), throws: new LLMError('overloaded', 'busy') });
+    reply(B, ok('L1: あ\n'));
+    const run = start([gemini()], undefined, () => false);
+    const result = await run.promise;
+    expect(generated).toEqual([A, B]);
+    expect(result.model).toBe(B);
+    expect(result.error).toBeUndefined();
+    expect(result.finish).toBe('stop');
+    expect((await readCooldowns())[cooldownKey(A)]?.reason).toBe('overloaded'); // the failed model is still benched
+    // the abandoned attempt's text was delivered, then the next model's text follows it
+    expect(run.chunks).toEqual(['{"t":"song"}\n', '{"t":"song"}\n', 'L1: あ\n']);
+  });
+
+  it('keeps the attempt once any chunk was useful, even if earlier ones were not', async () => {
+    reply(A, { partial: textEvent('first\n') + textEvent('second\n') + textEvent('third\n'), throws: new LLMError('overloaded', 'busy') });
+    reply(B, ok('should not be used'));
+    const run = start([gemini()], undefined, (chunks) => chunks.length >= 2);
+    const result = await run.promise;
+    expect(result.error?.kind).toBe('overloaded');
+    expect(generated).toEqual([A]);
+  });
+
+  it('a "not yet useful" attempt that ends cleanly is still a success', async () => {
+    reply(A, ok('L1: あ\n'));
+    const result = await start([gemini()], undefined, () => false).promise;
+    expect(result.model).toBe(A);
+    expect(result.error).toBeUndefined();
+  });
+
+  it('gives up with the error when the models keep failing before anything useful', async () => {
+    for (const model of [A, B]) reply(model, { partial: textEvent('x\n'), throws: new LLMError('blocked', 'filtered') });
+    const { error } = await settle(start([gemini()], undefined, () => false));
+    expect(error?.kind).toBe('blocked');
+    expect(generated).toEqual([A, B]); // a second refusal ends the round
   });
 
   it('a stream error before any text still falls through to the next model', async () => {

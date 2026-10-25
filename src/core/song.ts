@@ -91,7 +91,8 @@ export function emptyRecord(id: string, path: string, meta: SongMeta): SongRecor
 
 /** Normalized words, for checking that a model's echo of a line's first words matches it. */
 export function headWords(text: string): string[] {
-  return lineKey(text).replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).filter(Boolean);
+  // Apostrophes at word edges ('Cause, countin') are often dropped when a model echoes words.
+  return lineKey(text).replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).map((w) => w.replace(/^'+|'+$/g, '')).filter(Boolean);
 }
 
 /** The model echoes the first few English words of each line it translates; a mismatch

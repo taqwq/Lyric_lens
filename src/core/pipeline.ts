@@ -129,6 +129,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     model = result.model;
     if (result.error) stop = stopFromError(result.error);
     else if (result.finish === 'length') stop = { reason: 'length', at: Date.now() };
+    else if (result.finish === 'blocked') stop = { reason: 'blocked', at: Date.now() };
   } catch (error) {
     if (!(error instanceof LLMError)) throw error;
     stop = stopFromError(error);

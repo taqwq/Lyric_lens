@@ -6,3 +6,4 @@ coverage/
 tmp/
 dev/lyric-lens.dev.user.js
 dev/real/
+.claude/scheduled_tasks.lock
