@@ -78,15 +78,6 @@
 </div>
 <div class="LyricsFooter__Container" style="padding:20px">footer</div>
 
-<script>
-  // Dev harness: settings with a mock key so no real API is ever called.
-  if (!localStorage.getItem('lyric-lens-dev:ll3:settings') && !location.search.includes('fresh')) {
-    localStorage.setItem('lyric-lens-dev:ll3:settings', JSON.stringify({
-      providers: [{ id: 'gemini', kind: 'gemini', preset: 'gemini', baseUrl: '', apiKey: 'mock-key', model: '', enabled: true }],
-      thinking: 'low', showTranslation: true, showSummary: true, autoTranslate: false,
-    }));
-  }
-</script>
 <script src="mock-llm.js"></script>
 <script src="lyric-lens.dev.user.js"></script>
 </body>

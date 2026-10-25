@@ -5,3 +5,4 @@ node_modules/
 coverage/
 tmp/
 dev/lyric-lens.dev.user.js
+dev/real/

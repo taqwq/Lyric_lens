@@ -2,6 +2,12 @@
 // translation built from the prompt. Mode via localStorage "ll-mock-mode":
 //   ok (default) | busy-first | cut | quota | slow | garbage
 (() => {
+  if (!localStorage.getItem('lyric-lens-dev:ll3:settings') && !location.search.includes('fresh')) {
+    localStorage.setItem('lyric-lens-dev:ll3:settings', JSON.stringify({
+      providers: [{ id: 'gemini', kind: 'gemini', preset: 'gemini', baseUrl: '', apiKey: 'mock-key', model: '', enabled: true }],
+      thinking: 'low', showTranslation: true, showSummary: true, autoTranslate: false,
+    }));
+  }
   const realFetch = window.fetch.bind(window);
   const mode = () => localStorage.getItem('ll-mock-mode') || 'ok';
   let calls = 0;
