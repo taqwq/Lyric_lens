@@ -96,7 +96,7 @@ export class RecordBuilder {
         changed = true;
       } else {
         const list = this.pendingNotes.get(uid) ?? [];
-        list.push(note);
+        if (!list.some((n) => looseText(n.span) === looseText(note.span) && n.kind === note.kind)) list.push(note);
         this.pendingNotes.set(uid, list);
       }
     }

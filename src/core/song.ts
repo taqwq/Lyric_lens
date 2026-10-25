@@ -10,7 +10,7 @@ export function lineKey(text: string): string {
     .replace(/[“”„]/g, '"')
     .replace(/[‐-―]/g, '-')
     .replace(/\s+/g, ' ')
-    .replace(/\s*([,.!?;:])\s*$/g, '')
+    .replace(/[\s,.!?;:…]+$/u, '')
     .trim();
 }
 

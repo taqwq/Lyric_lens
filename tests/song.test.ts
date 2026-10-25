@@ -52,11 +52,11 @@ describe('lineKey', () => {
   // The doc comment says edits that "only touch punctuation" must map to the same key,
   // but only a single trailing mark is removed, so an ellipsis / doubled mark changes the key
   // ("wait…" NFKC-expands to "wait..." and keeps two dots).
-  it.fails('treats a trailing ellipsis like no punctuation', () => {
+  it('treats a trailing ellipsis like no punctuation', () => {
     expect(lineKey('Wait…')).toBe(lineKey('Wait'));
   });
 
-  it.fails('treats doubled trailing punctuation like a single mark', () => {
+  it('treats doubled trailing punctuation like a single mark', () => {
     expect(lineKey('Wait!!')).toBe(lineKey('Wait!'));
   });
 });

@@ -11,6 +11,7 @@ import { translateSong } from '../src/core/pipeline';
 import { emptyRecord, songStatus } from '../src/core/song';
 import type { SongSource } from '../src/core/types';
 import { readPage } from '../src/genius/extract';
+import { fetchAnnotations } from '../src/genius/annotations';
 import { useFetchTransport } from '../src/platform/http';
 import { memoryStorage, setKV } from '../src/platform/storage';
 import { newProvider } from '../src/store/settings';
@@ -28,10 +29,9 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-async function loadSource(target: string): Promise<{ source: SongSource; path: string }> {
+async function loadSource(target: string): Promise<{ source: SongSource; path: string; songId?: string | null }> {
   if (target.endsWith('.json')) {
-    const data = JSON.parse(readFileSync(target, 'utf8')) as { source: SongSource; path: string };
-    return data;
+    return JSON.parse(readFileSync(target, 'utf8')) as { source: SongSource; path: string; songId?: string | null };
   }
   const res = await fetch(target, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36', 'accept-language': 'en-US,en;q=0.9' } });
   if (!res.ok) throw new Error(`fetch ${target}: HTTP ${res.status}`);
@@ -41,8 +41,8 @@ async function loadSource(target: string): Promise<{ source: SongSource; path: s
   if (!page) throw new Error('no lyrics found');
   mkdirSync('tmp/songs', { recursive: true });
   const slug = page.path.split('/').pop() ?? 'song';
-  writeFileSync(`tmp/songs/${slug}.json`, JSON.stringify({ path: page.path, source: page.source }, null, 2));
-  return { source: page.source, path: page.path };
+  writeFileSync(`tmp/songs/${slug}.json`, JSON.stringify({ path: page.path, songId: page.songId, source: page.source }, null, 2));
+  return { source: page.source, path: page.path, songId: page.songId };
 }
 
 const target = process.argv[2];
@@ -59,8 +59,11 @@ const keyName = `${presetId.toUpperCase()}_API_KEY`;
 const provider = { ...newProvider(presetId, keys[keyName] ?? ''), model: arg('model') ?? '' };
 const thinking = (arg('thinking') ?? 'medium') as ThinkingLevel;
 
-const { source, path } = await loadSource(target);
-console.log(`${source.meta.artist} – ${source.meta.title}: ${source.lines.length} lines, ${source.unique.length} unique, about=${source.meta.about?.length ?? 0} chars`);
+const { source, path, songId } = await loadSource(target);
+if (songId && !process.argv.includes('--no-annotations')) {
+  source.meta.annotations = await fetchAnnotations(songId, { origin: 'https://genius.com' });
+}
+console.log(`${source.meta.artist} – ${source.meta.title}: ${source.lines.length} lines, ${source.unique.length} unique, about=${source.meta.about?.length ?? 0} chars, annotations=${source.meta.annotations?.length ?? 0}`);
 
 const record = emptyRecord(path, source.meta);
 const started = Date.now();

@@ -101,9 +101,11 @@ async function candidateModels(provider: Provider, signal?: AbortSignal): Promis
     const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
     if (auto.length) return config.kind === 'gemini' ? auto.slice(0, 10) : auto.slice(0, 3);
   } catch (error) {
-    if (error instanceof LLMError && (error.kind === 'auth' || error.kind === 'aborted')) throw error;
+    // Gemini has known model ids to fall back on; other endpoints do not.
+    if (!(error instanceof LLMError) || error.kind === 'auth' || error.kind === 'aborted' || config.kind !== 'gemini') throw error;
   }
-  return config.kind === 'gemini' ? FALLBACK_GEMINI : [];
+  if (config.kind === 'gemini') return FALLBACK_GEMINI;
+  throw new LLMError('not-found', '使えるモデルが見つからない。設定でモデルを指定して。');
 }
 
 /* ---------- the chain ---------- */
@@ -199,7 +201,8 @@ export async function generateWithFallback(
       const order: string[] = [];
       const busyLast: string[] = [];
       for (const model of models) {
-        if (pass > 0) { if (busyNow.has(cooldownId(config, model))) order.push(model); continue; }
+        // Retry passes only revisit the best two busy models: every attempt may count against quota.
+        if (pass > 0) { if (busyNow.has(cooldownId(config, model)) && order.length < 2) order.push(model); continue; }
         const cd = cooldowns[cooldownId(config, model)];
         if (cd && cd.until > Date.now() && !config.model) {
           if (cd.reason === 'overloaded') busyLast.push(model);
@@ -264,7 +267,7 @@ export async function generateWithFallback(
     }
 
     errors.push(...passErrors);
-    const busy = passErrors.some((e) => e.kind === 'overloaded')
+    const busy = busyNow.size > 0
       && passErrors.every((e) => ['overloaded', 'not-found', 'timeout', 'network', 'quota'].includes(e.kind));
     if (!busy) break;
   }

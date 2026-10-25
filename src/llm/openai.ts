@@ -33,6 +33,13 @@ export class ThinkFilter {
     }
     return out;
   }
+
+  /** Emits a held-back partial tag once the stream has ended. */
+  flush(): string {
+    const rest = this.inside ? '' : this.pending;
+    this.pending = '';
+    return rest;
+  }
 }
 
 export class OpenAICompatibleProvider implements Provider {
@@ -134,6 +141,11 @@ export class OpenAICompatibleProvider implements Provider {
       onText: (chunk) => { for (const payload of sse.feed(chunk)) handle(payload); },
     });
     for (const payload of sse.flush()) handle(payload);
+    const tail = think.flush();
+    if (tail) {
+      text += tail;
+      req.onText(tail);
+    }
 
     if (res.status < 200 || res.status >= 300) throw classifyHttpError(res.status, res.text, res.headers);
     if (streamError) throw streamError;

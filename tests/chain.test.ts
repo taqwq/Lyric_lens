@@ -199,7 +199,7 @@ describe('generateWithFallback: model fallback', () => {
   // candidateModels() swallows a failed model listing and returns [] for non-Gemini providers,
   // no error is recorded, and the chain finally throws the default "API key not set" auth error.
   // A Groq/Ollama outage therefore looks like a missing key.
-  it.fails('does not report a failed model listing as a missing API key', async () => {
+  it('does not report a failed model listing as a missing API key', async () => {
     listReply = { status: 500, body: 'internal error' };
     const { error } = await settle(start([newProvider('groq', 'gk')]));
     expect(error).toBeInstanceOf(LLMError);
@@ -420,7 +420,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     const { error } = await done;
 
     expect(error?.kind).toBe('overloaded');
-    expect(generated).toEqual([A, B, C, A, B, C, A, B, C]);
+    expect(generated).toEqual([A, B, C, A, B, A, B]); // retry passes only revisit the best two busy models
     expect(run.statuses.filter((s) => s.includes('どのモデルも混雑しています'))).toHaveLength(10 + 25);
     expect(run.statuses).toContain('どのモデルも混雑しています · 10秒後にもう一度試します');
     expect(run.statuses).toContain('どのモデルも混雑しています · 25秒後にもう一度試します');

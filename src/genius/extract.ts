@@ -6,6 +6,7 @@
  */
 import { buildSong, isSectionHeader, type RawLyricRow } from '../core/song';
 import type { SongMeta, SongSource } from '../core/types';
+import { songIdFromPage } from './annotations';
 
 export const OWN_CLASS_PREFIX = 'll-';
 
@@ -166,6 +167,8 @@ export function songPath(loc: Location = location): string {
 
 export interface PageSong {
   path: string;
+  /** Genius song id, for its annotations API. */
+  songId: string | null;
   source: SongSource;
   anchors: Node[];
   containers: HTMLElement[];
@@ -176,5 +179,5 @@ export function readPage(doc: Document = document, loc: Location = location): Pa
   if (!extraction) return null;
   const source = buildSong(extractMeta(doc), extraction.rows);
   if (!source.lines.length) return null;
-  return { path: songPath(loc), source, anchors: extraction.anchors, containers: extraction.containers };
+  return { path: songPath(loc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, containers: extraction.containers };
 }
