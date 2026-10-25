@@ -933,6 +933,7 @@ ${req.user}` : req.user }] }],
           let error = null;
           for (let attempt = 1; attempt <= 2; attempt += 1) {
             onStatus?.(`${label} · ${shortModel(model)}`);
+            options.onAttempt?.();
             let produced = false;
             try {
               const result = await provider.generate({
@@ -1002,17 +1003,18 @@ ${req.user}` : req.user }] }],
 
 ## 進め方
 1. 歌詞を最後まで読み、誰が誰に語っているか、何が起きているか、語調と温度感をつかむ。前半の言葉が後半で回収・反転されていないか、語り手が途中で替わらないか（客演のヴァースなど）も確かめる。
-2. その理解を song レコードに書いてから、1行ずつ訳す。
+2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy など）も入れ、全行でその訳語を使う。呼びかけ語の訳は who と矛盾させない。
 
 ## 訳（ja）
 - 何より先に、語調と温度感を写す：自慢、挑発、脅し、皮肉、自嘲、色気、甘さ、ユーモア。意味はその次。かしこまった書き言葉に丸めない。
 - 一人称と語尾は語り手の人物像と相手との関係で決め、同じ語り手の間は保つ（俺／僕／あたし／私、〜だぜ／〜じゃねえ／〜だよ）。
-- 卑語や乱暴な表現は原文と同じ強さで訳す。和らげも誇張もしない。
+- 卑語・性的な語・乱暴な表現は、同じ強さの口語で訳す。遠回しな言い換えや、医学・役所で使う硬い語に置き換えない。誇張もしない。
 - スラング・AAVE・隠語は意味で訳す。直訳して意味が通らない訳にしない。
+- AAVE の文法はそのまま読む：三単現の -s や be 動詞の省略は普通の平叙文で、命令文ではない（例：Nobody love her は「誰も彼女を愛さない」、She don't care は「あいつは気にしない」）。習慣の be、ain't、無変化の過去形（put / hit / quit など）に注意する。lil' baby や shorty は多くの場合女性を指し、聞き手の you と取り違えない。
 - 1つの文が複数行にまたがるときは、各行に対応する部分を訳し、続けて読むと自然な日本語になるようにする。
 - 括弧内の掛け合い・コーラス・アドリブも省かず、括弧付きで訳に残す。
 - 原文にない人物関係・出来事・感情・因果を足さない。曖昧な箇所は曖昧なまま訳す。
-- 訳には訳文だけを書く。説明や補足を混ぜない（必要なら注へ）。括弧で語句の意味を補うのも不可（×「パルメザン（大金）」→ ○ 訳では「札束」などと訳し切るか、注に回す）。括弧を使ってよいのは原文の括弧（掛け合い・アドリブ）だけ。
+- 訳には訳文だけを書く。説明や補足を混ぜない。訳文に（）を書くのは、原文の同じ位置に ( ) があるときだけ。語の意味の補足は notes に書く。
 - 長さの目安はスマホで1行（およそ24字）。ただし語調や二重の意味を削ってまで縮めない。
 - 人名・ブランド・地名はカタカナ（定着した表記があればそれ）。
 
@@ -1021,6 +1023,8 @@ ${req.user}` : req.user }] }],
 - k の種類：slang（直訳で誤るスラング・AAVE・隠語）／wordplay（音・綴り・多義の仕掛け）／reference（知らないと意味が変わる人物・出来事・作品・文化）／idiom（慣用句）／ambiguous（現実的に二通りに読める。両方の読みを書く）
 - 付けないもの：名前が出るだけの人名やブランド・商品名（知らないと行の意味を取り違える場合だけ付ける）、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
 - 迷ったら付けない。指示にある上限件数を超えない。
+- 優先順：訳で消えてしまう掛詞・音遊び ＞ 裏の意味があるスラング ＞ 知らないと意味が変わる reference。
+- x を「〜の一種」「〜のこと」のような辞書の定義で始めない。この行で何が起きているかを書く。
 - q は原文の行からそのまま抜き出した語句。x は日本語で2文以内・80字程度。訳の言い直しではなく、訳から抜け落ちる情報を書く。
 - Genius の注釈は有力な手がかり。使ったときは g にその id を入れる。丸写しせず要点だけ書く。
 - 確証のない事実（特に reference）は c を true にする。Genius の注釈で裏付けられるなら false。
@@ -1239,6 +1243,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       return events;
     }
+    /** Drops a half-received line (a failed attempt's tail) before the next attempt streams. */
+    reset() {
+      this.buffer = "";
+    }
     /** The last line has no newline; a JSON record is self-delimiting, so it is safe to
      *  parse even after a cut (a truncated record simply fails to parse). */
     flush() {
@@ -1334,6 +1342,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return { reason: "unusable", at: now };
     }
   }
+  var GLOSS = /[（(][^（）()]{1,24}[）)]/g;
+  function stripGlosses(ja, source) {
+    if (/[（(]/.test(source) || !GLOSS.test(ja)) return ja;
+    const stripped = ja.replace(GLOSS, "").replace(/\s{2,}/g, " ").replace(/\s+([、。！？!?])/g, "$1").trim();
+    return stripped || ja;
+  }
   function sameNote(a, b) {
     return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
   }
@@ -1371,7 +1385,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           if (raw.genius) note.genius = raw.genius;
           if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
         }
-        const result = { ja: ev.ja };
+        const result = { ja: stripGlosses(ev.ja, u.text) };
         if (notes.length) result.notes = notes;
         this.record.lines[u.key] = result;
         this.added += 1;
@@ -1404,7 +1418,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           if (builder.apply(parser.feed(chunk))) options.onUpdate?.(record);
           return builder.added > 0;
         }
-      }, { signal: options.signal, onStatus: options.onStatus });
+      }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset() });
       if (builder.apply(parser.flush())) options.onUpdate?.(record);
       model = result.model;
       if (result.error) stop = stopFromError(result.error);
@@ -1648,8 +1662,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     start(onAbort) {
       this.timer = setInterval(async () => {
         const current = await getJSON(KEY, null);
-        if (current?.tab === TAB_ID && current.abort) onAbort();
-        await setJSON(KEY, { ...this.lock, beat: Date.now(), ...current?.abort ? { abort: true } : {} });
+        const ours = current?.tab === TAB_ID && current.id === this.lock.id;
+        if (current && !ours) {
+          if (this.timer) clearInterval(this.timer);
+          this.timer = null;
+          return;
+        }
+        if (ours && current?.abort) onAbort();
+        await setJSON(KEY, { ...this.lock, beat: Date.now(), ...ours && current?.abort ? { abort: true } : {} });
       }, BEAT_MS);
     }
     async release() {
@@ -1851,6 +1871,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "el", null);
       __publicField(this, "sig", "");
     }
+    get element() {
+      return this.el;
+    }
     render(page, view) {
       const first = page.containers[0];
       if (!first?.isConnected) return;
@@ -1862,6 +1885,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (sig !== this.sig) {
         this.sig = sig;
         this.el.replaceChildren(...this.content(view));
+      } else {
+        this.el.querySelectorAll(".ll-actions .ll-btn").forEach((b, i) => {
+          b.disabled = Boolean(view.actions[i]?.disabled);
+        });
       }
       const header = Array.from(first.children).find((c) => c.hasAttribute("data-exclude-from-selection") && c !== this.el) ?? null;
       const placed = this.el.parentNode === first && (header ? this.el.previousElementSibling === header : first.firstChild === this.el);
@@ -1885,6 +1912,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             "data-primary": a.primary ? "" : null,
             onclick: (e) => {
               e.preventDefault();
+              if (button.disabled) return;
+              if (a.primary) button.disabled = true;
               a.onClick(button);
             }
           }, a.label);
@@ -1975,12 +2004,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           repeat,
           notes.length,
           notes[0]?.phrase ?? "",
-          open,
           state === "seam" ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ""
         ].join("");
         let el = current;
         if (!el) {
-          el = h("span", { class: "ll-line", lang: "ja" });
+          el = h("span", { class: "ll-line", lang: "ja", "data-exclude-from-selection": "true" });
           isolateClicks(el);
         }
         if (this.sigs.get(i) !== sig) {
@@ -1988,7 +2016,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           el.dataset.state = state;
           if (repeat) el.dataset.repeat = "";
           else delete el.dataset.repeat;
-          el.replaceChildren(...this.content(state, i, result?.ja ?? "", notes.length, repeat, open, input));
+          el.replaceChildren(...this.content(state, i, result?.ja ?? "", notes.length, repeat, input));
           if (state === "filled" && wasWaiting && input.animate) {
             el.dataset.ink = "";
             setTimeout(() => {
@@ -1997,30 +2025,38 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           }
           this.sigs.set(i, sig);
         }
+        el.querySelector(".ll-mark")?.setAttribute("aria-expanded", String(open));
+        const seamButton = state === "seam" ? el.querySelector(".ll-seam .ll-btn") : null;
+        if (seamButton) seamButton.disabled = Boolean(input.seam?.button.disabled);
         if (!el.isConnected || el.previousSibling !== anchor) {
-          if (!insertAfter(anchor, el)) {
-            this.nodes.delete(i);
-            this.sigs.delete(i);
-            return;
-          }
+          if (!insertAfter(anchor, el)) return;
         }
         this.nodes.set(i, el);
       });
+      const live = new Set(this.nodes.values());
+      for (const container of page.containers) {
+        container.querySelectorAll(".ll-line").forEach((n) => {
+          if (!live.has(n)) n.remove();
+        });
+      }
     }
-    content(state, index, ja, noteCount, repeat, open, input) {
+    content(state, index, ja, noteCount, repeat, input) {
       if (state === "empty" || state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
       if (state === "gap") return [h("span", { class: "ll-ja", "aria-label": "まだ訳せていない行" }, "—")];
       if (state === "seam" && input.seam) {
         const { seam } = input;
-        return [h(
-          "span",
-          { class: "ll-seam" },
-          h("span", { class: "ll-seam-text" }, seam.text),
-          h("button", { class: "ll-btn", type: "button", disabled: Boolean(seam.button.disabled), onclick: (e) => {
+        const button = h("button", {
+          class: "ll-btn",
+          type: "button",
+          disabled: Boolean(seam.button.disabled),
+          onclick: (e) => {
             e.preventDefault();
+            if (button.disabled) return;
+            button.disabled = true;
             seam.button.onClick();
-          } }, seam.button.label)
-        )];
+          }
+        }, seam.button.label);
+        return [h("span", { class: "ll-seam" }, h("span", { class: "ll-seam-text" }, seam.text), button)];
       }
       const out = [h("span", { class: "ll-ja" }, ja)];
       if (repeat) out.push(h("span", { class: "ll-repeat", "aria-label": "くり返し" }, "↺"));
@@ -2034,10 +2070,17 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           class: "ll-mark",
           type: "button",
           "aria-label": label,
-          "aria-expanded": String(open),
+          "aria-expanded": "false",
           onclick: (e) => {
             e.preventDefault();
             input.onMark(index);
+          },
+          onkeydown: (e) => {
+            if (e.key === "Escape" && mark.getAttribute("aria-expanded") === "true") {
+              e.preventDefault();
+              e.stopPropagation();
+              input.onMark(index);
+            }
           }
         }, "※");
         if (input.onMarkHover && matchMedia("(pointer: fine)").matches) {
@@ -2068,18 +2111,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   // src/genius/ranges.ts
   var QUOTES = "'‘’ʼ`´";
   var DQUOTES = '"“”„';
+  var G_ENDING = "\0";
   function escapeChar(ch) {
     if (QUOTES.includes(ch)) return `[${QUOTES}]`;
     if (DQUOTES.includes(ch)) return `[${DQUOTES}]`;
+    if (ch === "…") return "(?:…|\\.{3})";
+    if (ch === G_ENDING) return `(?:g|[${QUOTES}])?`;
     if (/\s/.test(ch)) return "\\s+";
     return ch.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
   }
   function phrasePattern(phrase) {
-    const trimmed = phrase.normalize("NFKC").trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, "");
-    if (!trimmed) return null;
+    let text2 = phrase.trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, "").replace(/\.{3}/g, "…");
+    if (!text2) return null;
+    text2 = text2.replace(/([A-Za-z]+)in(?:g|['‘’ʼ])?(?![A-Za-z])/g, `$1in${G_ENDING}`);
     let source = "";
     let lastWasSpace = false;
-    for (const ch of trimmed) {
+    for (const ch of text2) {
       const space = /\s/.test(ch);
       if (space && lastWasSpace) continue;
       source += escapeChar(ch);
@@ -2092,8 +2139,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
   }
   function locatePhrase(raw, phrase) {
-    const re = phrasePattern(phrase);
-    const m = re?.exec(raw.normalize("NFKC").length === raw.length ? raw.normalize("NFKC") : raw);
+    const m = phrasePattern(phrase)?.exec(raw);
     if (!m) return null;
     return { start: m.index, end: m.index + m[0].length };
   }
@@ -2159,13 +2205,16 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     get openIndex() {
       return this.current?.index ?? null;
     }
+    get state() {
+      return this.current;
+    }
     open(note, onClose) {
       this.close();
       this.current = note;
       const notes = note.result.notes ?? [];
       const el = h(
         "div",
-        { class: "ll-note", lang: "ja", role: "note" },
+        { class: "ll-note", lang: "ja", role: "note", "data-exclude-from-selection": "true" },
         h("div", { class: "ll-note-body" }, notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? "")))
       );
       isolateClicks(el);
@@ -2676,7 +2725,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function formatWhen(until, now = Date.now()) {
     const day = (t) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
     const time = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(until));
-    return day(until) === day(now) ? time : `明日 ${time}`;
+    return until <= now || day(until) === day(now) ? time : `明日 ${time}`;
   }
   function formatDate(at) {
     return new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "long", day: "numeric" }).format(new Date(at));
@@ -3462,6 +3511,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "lines", new LineRenderer());
       __publicField(this, "notes", new NoteView());
       __publicField(this, "renderQueued", false);
+      /** One-shot scroll reference for the next render (the control the reader just used). */
+      __publicField(this, "preferAnchor", null);
+      /** Set between the tap and the request start: a second tap must not send twice. */
+      __publicField(this, "starting", false);
       __publicField(this, "refreshTimer", null);
       __publicField(this, "wakeTimer", null);
       __publicField(this, "refreshing", null);
@@ -3499,11 +3552,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             this.identity = identity;
             this.annotations = null;
             this.retranslateFailure = null;
-            const stored = await loadSong(identity);
-            const title = page.source.meta.title;
-            this.record = stored && stored.title && title && stored.title !== title ? null : stored;
+            this.record = this.acceptStored(identity, page, await loadSong(identity));
             this.fromCache = hasLines(this.record);
             this.prefaceCollapsed = this.fromCache && !this.record?.stop;
+          } else if (!this.run) {
+            this.record = this.acceptStored(identity, page, await loadSong(identity));
           }
           this.page = page;
           this.foreignLock = await this.otherLock();
@@ -3515,6 +3568,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         this.refreshing = null;
       });
       return this.refreshing;
+    }
+    /** Path identities can be stale after client-side navigation, so a title mismatch there
+     *  means another song. A numeric Genius id is authoritative even if the song was renamed. */
+    acceptStored(identity, page, stored) {
+      const title = page.source.meta.title;
+      if (stored && identity.startsWith("path:") && stored.title && title && stored.title !== title) return null;
+      return stored;
     }
     teardown() {
       this.notes.close();
@@ -3613,21 +3673,46 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       requestAnimationFrame(run);
       setTimeout(run, 120);
     }
+    /** The edition on screen: a running (non-retranslation) record, else the stored one. */
+    shown() {
+      const run = this.run;
+      return run && run.id === this.identity && !run.retranslate ? run.record : this.record;
+    }
     renderNow() {
       const page = this.page;
       if (!page) return;
+      this.syncNote(page);
       const { head, lines } = this.view(page);
+      const prefer = this.preferAnchor;
+      this.preferAnchor = null;
       this.anchored(() => {
         this.head.render(page, head);
         this.lines.render(lines);
         const open = this.notes.openIndex;
         if (open != null) this.notes.reattach(this.lines.nodeFor(open), page.texts[open]);
-      });
+      }, prefer);
       this.scheduleWake();
     }
-    /** Keeps the line the reader is looking at still while nodes above it change height. */
-    anchored(change) {
-      const ref = this.topVisibleAnchor();
+    /** An open note follows its line through re-renders, and closes or refreshes when the
+     *  edition under it changes (retranslation swap, another tab's progress, lyric edits). */
+    syncNote(page) {
+      const state = this.notes.state;
+      if (!state) return;
+      const index = page.source.lines[state.index]?.key === state.key ? state.index : page.source.lines.findIndex((l) => l.key === state.key);
+      const result = this.shown()?.lines[state.key];
+      const node = index >= 0 ? this.lines.nodeFor(index) : void 0;
+      if (index < 0 || !node || !result?.notes?.length || this.retranslateFailure) {
+        this.notes.close();
+        return;
+      }
+      if (index !== state.index || JSON.stringify(result.notes) !== JSON.stringify(state.result.notes)) {
+        this.notes.open({ index, key: state.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations }, () => void this.toggleNote(index));
+      }
+    }
+    /** Keeps a line still while nodes above it change height: by default the first English
+     *  line in view, or `prefer` (what the reader just tapped) when it is on screen. */
+    anchored(change, prefer) {
+      const ref = prefer && prefer.isConnected && prefer.getBoundingClientRect().top >= 0 ? prefer : this.topVisibleAnchor();
       const before = ref ? this.topOf(ref) : null;
       const root = document.documentElement;
       const previous = root.style.overflowAnchor;
@@ -3669,19 +3754,27 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       const settings = currentSettings();
       const run = this.run;
       const here = run && run.id === this.identity ? run : null;
-      const shown = here && !here.retranslate ? here.record : this.record;
+      const shown = this.shown();
       const total = page.source.lines.length;
       const done = page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length;
       const missing = total - done;
       const mirrored = !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity);
       const otherSong = run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null;
+      const quotaUntil = this.avail.ok ? null : this.avail.until;
+      const blocker = otherSong ? "別の曲を訳し終えると続きを訳せます" : quotaUntil != null ? `今日の無料枠は終わりました · ${quotaUntil > Date.now() ? `${formatWhen(quotaUntil)}から訳せます` : "あとで訳せます"}` : null;
       const settingsAction = { label: "設定", onClick: (b) => this.openSettings(b) };
       const hideAction = { label: settings.hideTranslation ? "訳を表示" : "訳を隠す", onClick: () => void this.toggleHidden() };
       const stopAction = { label: "止める", onClick: () => this.stop() };
-      const preface = shown?.song && (shown.song.who || shown.song.what) ? { who: shown.song.who, what: shown.song.what, collapsed: this.prefaceCollapsed, onToggle: () => {
-        this.prefaceCollapsed = !this.prefaceCollapsed;
-        this.renderNow();
-      } } : null;
+      const preface = shown?.song && (shown.song.who || shown.song.what) ? {
+        who: shown.song.who,
+        what: shown.song.what,
+        collapsed: this.prefaceCollapsed,
+        onToggle: () => {
+          this.prefaceCollapsed = !this.prefaceCollapsed;
+          this.preferAnchor = this.head.element;
+          this.renderNow();
+        }
+      } : null;
       const lines = {
         page,
         record: shown,
@@ -3710,17 +3803,18 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       if (mirrored) {
         return {
-          head: { status: "別のタブで訳しています", actions: [{ label: "止める", onClick: () => void requestAbort() }], preface },
+          head: { status: "別のタブで訳しています", actions: [{ label: "止める", onClick: () => void requestAbort() }, hideAction], preface },
           lines: { ...lines, slots: true, breathing: true }
         };
       }
       const failure = this.retranslateFailure;
       if (failure && done) {
         return {
-          head: { status: "訳し直しは途中で止まりました。今の訳はそのままです", actions: [hideAction, settingsAction], note: this.seamText(failure, null), preface },
+          head: { status: "訳し直しは途中で止まりました。今の訳はそのままです", actions: [hideAction, settingsAction], note: this.seamText(failure), preface },
           lines
         };
       }
+      const stop = this.liveStop(shown?.stop);
       if (!done) {
         if (!hasAnyKey(settings)) {
           return { head: { status: "日本語訳には無料のAPIキーが必要です", actions: [{ label: "キーを設定", primary: true, onClick: () => this.openFirstRun() }] }, lines };
@@ -3731,13 +3825,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             lines
           };
         }
-        if (!this.avail.ok) {
-          const when = this.avail.until ? `${formatWhen(this.avail.until)}から訳せます` : "あとで訳せます";
-          return { head: { status: `今日の無料枠は終わりました · ${when}`, tone: "muted", actions: [settingsAction] }, lines };
+        if (quotaUntil != null) {
+          return { head: { status: blocker ?? "", tone: "muted", actions: [settingsAction] }, lines };
         }
-        const stop2 = shown?.stop;
-        if (stop2 && stop2.reason !== "closed") {
-          const seam2 = this.seamFor(stop2, null);
+        if (stop && stop.reason !== "closed") {
+          const seam2 = this.seamFor(stop, null);
           return { head: { status: seam2.text, actions: [{ ...seam2.button, label: seam2.button.label === "続きを訳す" ? "日本語で読む" : seam2.button.label, primary: true }, settingsAction] }, lines };
         }
         return { head: { status: "", actions: [{ label: "日本語で読む", primary: true, onClick: () => void this.translate("start") }, settingsAction] }, lines };
@@ -3745,28 +3837,33 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (!missing) {
         return { head: { status: "", actions: [hideAction, settingsAction], preface }, lines };
       }
-      const resumeLabel = "訳す";
-      const stop = shown?.stop;
+      const resume = { label: "訳す", primary: true, disabled: Boolean(blocker), onClick: () => void this.translate("resume") };
       if (stop?.reason === "gaps") {
         return {
-          head: { status: `${missing}行が訳せていません`, actions: [{ label: resumeLabel, primary: true, disabled: Boolean(otherSong), onClick: () => void this.translate("resume") }, hideAction, settingsAction], preface },
+          head: { status: `${missing}行が訳せていません`, actions: [resume, hideAction, settingsAction], note: blocker ?? void 0, preface },
           lines: { ...lines, gaps: true }
         };
       }
       if (!stop) {
         return {
-          head: { status: `歌詞が更新され、まだ訳していない行が${missing}行あります`, actions: [{ label: resumeLabel, primary: true, disabled: Boolean(otherSong), onClick: () => void this.translate("resume") }, hideAction, settingsAction], preface },
+          head: { status: `歌詞が更新され、まだ訳していない行が${missing}行あります`, actions: [resume, hideAction, settingsAction], note: blocker ?? void 0, preface },
           lines: { ...lines, slots: true }
         };
       }
-      const seam = this.seamFor(stop, otherSong);
+      const seam = this.seamFor(stop, blocker);
       return {
         head: { status: `途中まで訳してあります（${done}/${total}行）`, actions: [{ ...seam.button, primary: true }, hideAction, settingsAction], preface },
         lines: { ...lines, slots: true, seam }
       };
     }
-    seamText(stop, otherSong) {
-      const when = stop.until ? formatWhen(stop.until) : "";
+    /** A stored stop whose wait is over reads as plain "ここまで訳してあります". */
+    liveStop(stop) {
+      if (!stop) return stop;
+      if ((stop.reason === "quota" || stop.reason === "rate") && stop.until && stop.until <= Date.now()) return { reason: "closed", at: stop.at };
+      return stop;
+    }
+    seamText(stop) {
+      const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : "";
       const text2 = {
         busy: "混み合っていて、ここで途切れました",
         rate: "短い時間に使いすぎました。1分ほどおいてから続きを訳せます",
@@ -3780,40 +3877,44 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         closed: "ここまで訳してあります",
         gaps: "ここまで訳してあります"
       };
-      const base = text2[stop.reason];
-      return otherSong ? `${base}。別の曲を訳し終えると続きを訳せます` : base;
+      return text2[stop.reason];
     }
-    seamFor(stop, otherSong) {
+    /** The seam's sentence and button. `blocker` (another song running, quota spent) disables
+     *  the button and is said right there, so a tap never silently does nothing. */
+    seamFor(stop, blocker) {
       const now = Date.now();
-      const text2 = this.seamText(stop, otherSong);
+      const text2 = this.seamText(stop);
       if (stop.reason === "auth") return { text: text2, button: { label: "設定を開く", onClick: () => this.openSettings(null) } };
-      let disabled = Boolean(otherSong);
+      let disabled = false;
       if (stop.reason === "rate" && stop.until && now < stop.until) disabled = true;
-      if (stop.reason === "quota" && !this.avail.ok) disabled = true;
       if (stop.reason === "network" && !navigator.onLine) disabled = true;
+      if (blocker && stop.reason !== "quota") return { text: `${text2}。${blocker}`, button: { label: "続きを訳す", disabled: true, onClick: () => {
+      } } };
+      if (blocker) disabled = true;
       return { text: text2, button: { label: "続きを訳す", disabled, onClick: () => void this.translate("resume") } };
     }
     /* ---------- notes ---------- */
     async toggleNote(index) {
       const page = this.page;
       if (!page) return;
+      const markOf = (i) => this.lines.nodeFor(i)?.querySelector(".ll-mark") ?? null;
       if (this.notes.openIndex === index) {
-        this.anchored(() => this.notes.close());
+        this.anchored(() => this.notes.close(), this.lines.nodeFor(index));
         this.renderNow();
-        this.lines.nodeFor(index)?.querySelector(".ll-mark")?.focus();
+        markOf(index)?.focus();
         return;
       }
-      const shown = this.run && this.run.id === this.identity && !this.run.retranslate ? this.run.record : this.record;
       const line = page.source.lines[index];
-      const result = line && shown?.lines[line.key];
+      const result = line && this.shown()?.lines[line.key];
       const node = this.lines.nodeFor(index);
       if (!line || !result?.notes?.length || !node) return;
       const open = () => this.anchored(() => this.notes.open(
-        { index, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
+        { index, key: line.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
         () => void this.toggleNote(index)
-      ));
+      ), node);
       open();
       this.renderNow();
+      markOf(index)?.focus();
       if (this.annotations === null && page.songId) {
         this.annotations = await fetchAnnotations(page.songId);
         if (this.notes.openIndex === index && this.annotations.length) open();
@@ -3822,81 +3923,110 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     peek(index, on) {
       const page = this.page;
       const line = page?.source.lines[index];
-      const notes = line ? this.record?.lines[line.key]?.notes ?? this.run?.record.lines[line.key]?.notes : void 0;
+      const notes = line ? this.shown()?.lines[line.key]?.notes : void 0;
       this.notes.peek(page?.texts[index], on && notes ? notes : null);
     }
     /* ---------- actions ---------- */
     async translate(kind) {
       const page = this.page;
-      if (!page || this.run) return;
-      const settings = await loadSettings();
-      if (!hasAnyKey(settings)) {
-        this.openFirstRun();
-        return;
-      }
-      this.avail = await availability(settings.providers);
-      if (!this.avail.ok) {
-        this.renderNow();
-        return;
-      }
-      const id = this.identity;
-      const { source } = page;
-      const lock = await acquireLock(id, source.meta.title || "前の曲");
-      if (!lock) {
-        this.foreignLock = await this.otherLock();
-        this.renderNow();
-        return;
-      }
-      const retranslate = kind === "retranslate" && hasLines(this.record);
-      const record = retranslate || !this.record ? emptyRecord(id, page.path, source.meta) : structuredClone(this.record);
-      record.title = source.meta.title || record.title;
-      record.artist = source.meta.artist || record.artist;
-      record.stop = { reason: "closed", at: Date.now() };
-      const run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock };
-      this.run = run;
-      this.fromCache = false;
-      this.retranslateFailure = null;
-      this.prefaceCollapsed = false;
-      lock.start(() => run.controller.abort());
-      this.renderNow();
+      if (!page || this.run || this.starting) return;
+      this.starting = true;
+      let lock = null;
+      let run = null;
       try {
-        if (page.songId && this.annotations === null) this.annotations = await fetchAnnotations(page.songId);
-        const input = this.annotations?.length ? { ...source, meta: { ...source.meta, annotations: this.annotations } } : source;
-        const outcome = await translateSong(input, record, {
-          providers: settings.providers,
-          thinking: settings.thinking,
-          signal: run.controller.signal,
-          onUpdate: () => {
-            if (!retranslate) run.saver.schedule(record);
-            this.scheduleRender();
-          }
-        });
-        if (retranslate) {
-          if (outcome.complete) {
+        const settings = await loadSettings();
+        if (!hasAnyKey(settings)) {
+          this.openFirstRun();
+          return;
+        }
+        this.avail = await availability(settings.providers);
+        if (!this.avail.ok) {
+          this.renderNow();
+          return;
+        }
+        const id = this.identity;
+        const { source } = page;
+        lock = await acquireLock(id, source.meta.title || "前の曲");
+        if (!lock) {
+          this.foreignLock = await this.otherLock();
+          this.renderNow();
+          return;
+        }
+        const stored = this.acceptStored(id, page, await loadSong(id));
+        if (stored) this.record = stored;
+        const retranslate = kind === "retranslate" && hasLines(stored);
+        if (!retranslate && stored && !missingLines(source, stored).length) {
+          await lock.release();
+          lock = null;
+          this.renderNow();
+          return;
+        }
+        const record = retranslate || !stored ? emptyRecord(id, page.path, source.meta) : structuredClone(stored);
+        record.title = source.meta.title || record.title;
+        record.artist = source.meta.artist || record.artist;
+        record.stop = { reason: "closed", at: Date.now() };
+        run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock };
+        this.run = run;
+        this.starting = false;
+        this.fromCache = false;
+        this.retranslateFailure = null;
+        this.prefaceCollapsed = false;
+        if (settings.hideTranslation) await updateSettings((s) => ({ ...s, hideTranslation: false }));
+        const current = run;
+        current.lock.start(() => current.controller.abort());
+        const bye = () => {
+          current.controller.abort();
+          void current.lock.release();
+        };
+        window.addEventListener("pagehide", bye, { once: true });
+        this.renderNow();
+        try {
+          if (page.songId && this.annotations === null) this.annotations = await fetchAnnotations(page.songId);
+          const input = this.annotations?.length ? { ...source, meta: { ...source.meta, annotations: this.annotations } } : source;
+          const outcome = await translateSong(input, record, {
+            providers: settings.providers,
+            thinking: settings.thinking,
+            signal: current.controller.signal,
+            onUpdate: () => {
+              if (!retranslate) current.saver.schedule(record);
+              this.scheduleRender();
+            }
+          });
+          if (retranslate) {
+            if (outcome.complete) {
+              await saveSong(record);
+              if (this.identity === id) {
+                this.record = record;
+                this.notes.close();
+              }
+            } else if (this.identity === id) {
+              this.retranslateFailure = outcome.stop ?? { reason: "unusable", at: Date.now() };
+            }
+          } else {
+            await current.saver.flush();
             await saveSong(record);
             if (this.identity === id) this.record = record;
-          } else if (this.identity === id) {
-            this.retranslateFailure = outcome.stop ?? { reason: "unusable", at: Date.now() };
           }
-        } else {
-          await run.saver.flush();
-          await saveSong(record);
-          if (this.identity === id) this.record = record;
-        }
-      } catch (error) {
-        console.error("[Lyric Lens]", error);
-        if (!retranslate) {
-          record.stop = { reason: "unusable", at: Date.now() };
-          await run.saver.flush();
-          if (hasLines(record)) await saveSong(record);
-          if (this.identity === id) this.record = record;
+        } catch (error) {
+          console.error("[Lyric Lens]", error);
+          if (!retranslate) {
+            record.stop = { reason: "unusable", at: Date.now() };
+            await current.saver.flush();
+            if (hasLines(record)) await saveSong(record);
+            if (this.identity === id) this.record = record;
+          }
+        } finally {
+          window.removeEventListener("pagehide", bye);
         }
       } finally {
-        await lock.release();
-        this.run = null;
-        this.foreignLock = await this.otherLock();
-        this.avail = await availability(currentSettings().providers);
-        this.renderNow();
+        this.starting = false;
+        if (lock) await lock.release();
+        if (run) {
+          this.run = null;
+          this.foreignLock = await this.otherLock();
+          this.avail = await availability(currentSettings().providers);
+          this.renderNow();
+        }
       }
     }
     stop() {
@@ -3909,6 +4039,18 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     async toggleHidden() {
       await updateSettings((s) => ({ ...s, hideTranslation: !s.hideTranslation }));
       this.renderNow();
+    }
+    /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
+     *  offer 続きを訳す / 日本語で読む again. */
+    async afterSheet(changed) {
+      await loadSettings();
+      const record = this.record;
+      if (changed && !this.run && record?.stop?.reason === "auth") {
+        if (hasLines(record)) record.stop = { reason: "closed", at: Date.now() };
+        else delete record.stop;
+        await saveSong(record);
+      }
+      await this.refresh();
     }
     openSettings(anchor) {
       const record = this.record;
@@ -3924,20 +4066,229 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.record = null;
           this.renderNow();
         },
-        onClose: () => void loadSettings().then(() => this.refresh())
+        onClose: (changed) => void this.afterSheet(changed)
       });
     }
     openFirstRun() {
       openSheet({
         mode: "first-run",
         onSaveAndTranslate: () => void this.translate("start"),
-        onClose: () => void loadSettings().then(() => this.refresh())
+        onClose: (changed) => void this.afterSheet(changed)
       });
     }
   };
 
   // src/ui/styles.css
-  var styles_default = '/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */\n\n.ll-head, .ll-line, .ll-note {\n  --ll-ink: #4A5260;\n  --ll-ink-repeat: #6B7380;\n  --ll-accent: #B0503A;\n  --ll-label: #6E7581;\n  --ll-note-bg: #F7F3EE;\n  --ll-rule: #D9DCE1;\n  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;\n}\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {\n  --ll-ink: #B8C0CB;\n  --ll-ink-repeat: #8E96A2;\n  --ll-accent: #E3876C;\n  --ll-label: #9AA1AC;\n  --ll-note-bg: #23262B;\n  --ll-rule: #3A3F46;\n}\nhtml { --ll-hl-bg: rgba(176, 80, 58, .08); }\nhtml.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }\n\n/* Japanese typesetting and link resets on every node we add. */\n.ll-head, .ll-line, .ll-note {\n  font-family: var(--ll-font);\n  font-style: normal;\n  font-weight: 400;\n  text-align: left;\n  text-transform: none;\n  line-break: strict;\n  word-break: normal;\n  word-break: auto-phrase;\n  overflow-wrap: anywhere;\n  font-feature-settings: "palt" 1;\n  letter-spacing: .02em;\n  text-spacing-trim: trim-start;\n  hanging-punctuation: none;\n  background: transparent !important;\n  text-decoration: none !important;\n  cursor: auto;\n  overflow-anchor: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }\n\n/* ---------- head row + preface ---------- */\n.ll-head {\n  display: block;\n  margin: 0 0 22px;\n  padding: 0;\n  color: var(--ll-ink) !important;\n  font-size: 14px;\n  line-height: 1.6;\n}\n.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }\n.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }\n.ll-status[data-tone="muted"] { color: var(--ll-label); }\n.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }\n.ll-btn {\n  all: unset;\n  box-sizing: border-box;\n  display: inline-flex;\n  align-items: center;\n  min-height: 28px;\n  color: var(--ll-accent) !important;\n  font: 600 14px/1.3 var(--ll-font);\n  letter-spacing: .02em;\n  cursor: pointer;\n  white-space: nowrap;\n}\n.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }\n.ll-btn[data-primary] { font-size: 15px; }\n.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }\n.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible {\n  outline: 2px solid var(--ll-accent);\n  outline-offset: 2px;\n  border-radius: 3px;\n}\n.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }\n.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }\n.ll-preface-rows { display: block; flex: 1; min-width: 0; }\n\n.ll-preface { margin-top: 6px; font-size: .78em; font-size: 14px; color: var(--ll-ink); }\n.ll-preface-toggle {\n  all: unset;\n  box-sizing: border-box;\n  display: flex;\n  gap: 8px;\n  width: 100%;\n  cursor: pointer;\n  text-align: left;\n}\n.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }\n.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; letter-spacing: .06em; }\n.ll-preface-who { font-weight: 600; }\n.ll-preface-what { margin-top: 2px; }\n.ll-preface-chev { color: var(--ll-label); font-size: 11px; margin-left: auto; }\n.ll-preface[data-collapsed="1"] .ll-preface-what { display: none; }\n\n/* ---------- lines on ruled paper ---------- */\n.ll-line {\n  display: block;\n  position: relative;\n  margin: 0;\n  padding: 2px 0 12px;\n  min-height: 1.6em;\n  color: var(--ll-ink) !important;\n  font-size: .84em;\n  line-height: 1.6;\n}\nhtml.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }\n.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }\n.ll-ja { color: inherit !important; }\n.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }\n\n.ll-line[data-state="empty"] .ll-ja,\n.ll-line[data-state="next"] .ll-ja {\n  display: block;\n  width: min(60%, 320px);\n  height: 1.6em;\n  background: linear-gradient(to right, var(--ll-rule) 1px, transparent 1px) 0 calc(100% - 4px) / 4px 1px repeat-x !important;\n  opacity: .9;\n}\n.ll-line[data-state="next"] .ll-ja { animation: ll-breathe 2.4s ease-in-out infinite; }\n.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }\n.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }\n@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }\n@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }\n\n.ll-mark {\n  all: unset;\n  box-sizing: content-box;\n  position: relative;\n  display: inline-block;\n  margin-left: .25em;\n  padding: 0 .15em;\n  color: var(--ll-accent) !important;\n  font: 600 1em/1 var(--ll-font);\n  vertical-align: baseline;\n  cursor: pointer;\n  -webkit-user-select: none;\n  user-select: none;\n}\n/* 44×44 hit area without moving the text. */\n.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }\n.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }\n\n/* The seam: the first empty slot after an interruption says what happened, right there. */\n.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; color: var(--ll-ink); }\n.ll-seam-text { color: var(--ll-ink); }\n\n/* ---------- notes ---------- */\n.ll-note {\n  display: grid;\n  grid-template-rows: 1fr;\n  margin: 4px 0 14px;\n  padding: 8px 12px;\n  border-left: 2px solid var(--ll-accent);\n  background: var(--ll-note-bg) !important;\n  color: var(--ll-ink) !important;\n  font-size: .78em;\n  line-height: 1.7;\n}\n.ll-note-body { overflow: hidden; min-height: 0; }\n.ll-note-item + .ll-note-item { margin-top: 10px; }\n.ll-note-head { display: flex; align-items: center; gap: 8px; }\n.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }\n.ll-note-conj { color: var(--ll-label); font-size: 10.5px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }\n.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }\n.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }\n.ll-note-text { display: block; margin-top: 2px; }\n.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }\n.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }\n.ll-gn-toggle { all: unset; cursor: pointer; color: var(--ll-label); font-size: 12px; }\n.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }\n.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 4px; }\n\n::highlight(ll-phrase) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n  background-color: var(--ll-hl-bg);\n}\n::highlight(ll-phrase-peek) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n}\nhtml.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }\n\n@media (max-width: 599px) {\n  .ll-line { font-size: .875em; padding-bottom: 10px; }\n  .ll-head-row { flex-direction: column; align-items: stretch; }\n  /* In a column the flex-basis would become a height. */\n  .ll-status { flex: none; }\n  .ll-actions { justify-content: flex-end; margin-left: 0; }\n  .ll-head-row[data-bare="1"] .ll-actions { justify-content: flex-start; }\n  .ll-btn { min-height: 44px; }\n  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .5; }\n  .ll-line[data-ink] .ll-ja { animation: none; }\n}\n';
+  var styles_default = `/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */
+
+.ll-head, .ll-line, .ll-note {
+  --ll-ink: #4A5260;
+  --ll-ink-repeat: #6B7380;
+  --ll-accent: #B0503A;
+  --ll-label: #6E7581;
+  --ll-note-bg: #F7F3EE;
+  --ll-rule: #D9DCE1;
+  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+}
+html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
+  --ll-ink: #B8C0CB;
+  --ll-ink-repeat: #8E96A2;
+  --ll-accent: #E3876C;
+  --ll-label: #9AA1AC;
+  --ll-note-bg: #23262B;
+  --ll-rule: #3A3F46;
+}
+html { --ll-hl-bg: rgba(176, 80, 58, .08); }
+html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
+
+/* Japanese typesetting and link resets on every node we add. */
+.ll-head, .ll-line, .ll-note {
+  font-family: var(--ll-font);
+  font-style: normal;
+  font-weight: 400;
+  text-align: left;
+  text-transform: none;
+  line-break: strict;
+  word-break: normal;
+  word-break: auto-phrase;
+  overflow-wrap: anywhere;
+  font-feature-settings: "palt" 1;
+  letter-spacing: .02em;
+  text-spacing-trim: trim-start;
+  hanging-punctuation: none;
+  background: transparent !important;
+  text-decoration: none !important;
+  cursor: auto;
+  overflow-anchor: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
+/* Marked data-exclude-from-selection for Genius' own selection tools, but readers can
+   still copy the Japanese. */
+.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
+
+/* ---------- head row + preface ---------- */
+.ll-head {
+  display: block;
+  margin: 0 0 22px;
+  padding: 0;
+  color: var(--ll-ink) !important;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
+.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
+.ll-status[data-tone="muted"] { color: var(--ll-label); }
+.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }
+.ll-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--ll-accent) !important;
+  font: 600 14px/1.3 var(--ll-font);
+  letter-spacing: .02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }
+.ll-btn[data-primary] { font-size: 15px; }
+.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
+.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible {
+  outline: 2px solid var(--ll-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }
+.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
+.ll-preface-rows { display: block; flex: 1; min-width: 0; }
+
+.ll-preface { margin-top: 6px; font-size: .78em; font-size: 14px; color: var(--ll-ink); }
+.ll-preface-toggle {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }
+.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; letter-spacing: .06em; }
+.ll-preface-who { font-weight: 600; }
+.ll-preface-what { margin-top: 2px; }
+.ll-preface-chev { color: var(--ll-label); font-size: 11px; margin-left: auto; }
+.ll-preface[data-collapsed="1"] .ll-preface-what { display: none; }
+
+/* ---------- lines on ruled paper ---------- */
+.ll-line {
+  display: block;
+  position: relative;
+  margin: 0;
+  padding: 2px 0 12px;
+  min-height: 1.6em;
+  color: var(--ll-ink) !important;
+  font-size: .84em;
+  line-height: 1.6;
+}
+html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
+.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }
+.ll-ja { color: inherit !important; }
+.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }
+
+.ll-line[data-state="empty"] .ll-ja,
+.ll-line[data-state="next"] .ll-ja {
+  display: block;
+  width: min(60%, 320px);
+  height: 1.6em;
+  background: linear-gradient(to right, var(--ll-rule) 1px, transparent 1px) 0 calc(100% - 4px) / 4px 1px repeat-x !important;
+  opacity: .9;
+}
+.ll-line[data-state="next"] .ll-ja { animation: ll-breathe 2.4s ease-in-out infinite; }
+.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }
+.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }
+@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }
+
+.ll-mark {
+  all: unset;
+  box-sizing: content-box;
+  position: relative;
+  display: inline-block;
+  margin-left: .25em;
+  padding: 0 .15em;
+  color: var(--ll-accent) !important;
+  font: 600 1em/1 var(--ll-font);
+  vertical-align: baseline;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 44×44 hit area without moving the text. */
+.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }
+.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }
+
+/* The seam: the first empty slot after an interruption says what happened, right there. */
+.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; color: var(--ll-ink); }
+.ll-seam-text { color: var(--ll-ink); }
+
+/* ---------- notes ---------- */
+.ll-note {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin: 4px 0 14px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--ll-accent);
+  background: var(--ll-note-bg) !important;
+  color: var(--ll-ink) !important;
+  font-size: .78em;
+  line-height: 1.7;
+}
+.ll-note-body { overflow: hidden; min-height: 0; }
+.ll-note-item + .ll-note-item { margin-top: 10px; }
+.ll-note-head { display: flex; align-items: center; gap: 8px; }
+.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.ll-note-conj { color: var(--ll-label); font-size: 10.5px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }
+.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }
+.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
+.ll-note-text { display: block; margin-top: 2px; }
+.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }
+.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }
+.ll-gn-toggle { all: unset; cursor: pointer; color: var(--ll-label); font-size: 12px; }
+.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
+.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 4px; }
+
+::highlight(ll-phrase) {
+  text-decoration: underline 1.5px;
+  text-decoration-color: #B0503A;
+  text-underline-offset: 3px;
+  background-color: var(--ll-hl-bg);
+}
+::highlight(ll-phrase-peek) {
+  text-decoration: underline 1.5px;
+  text-decoration-color: #B0503A;
+  text-underline-offset: 3px;
+}
+html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }
+
+@media (max-width: 599px) {
+  .ll-line { font-size: .875em; padding-bottom: 10px; }
+  .ll-head-row { flex-direction: column; align-items: stretch; }
+  /* In a column the flex-basis would become a height. */
+  .ll-status { flex: none; }
+  .ll-actions { justify-content: flex-end; margin-left: 0; }
+  .ll-head-row[data-bare="1"] .ll-actions { justify-content: flex-start; }
+  .ll-btn { min-height: 44px; }
+  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .5; }
+  .ll-line[data-ink] .ll-ja { animation: none; }
+}
+`;
 
   // src/main.ts
   function registerMenu(label, fn) {
