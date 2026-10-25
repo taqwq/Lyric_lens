@@ -23,7 +23,8 @@ export const SYSTEM_PROMPT = `あなたは、外国語（主に英語）のヒ�
 ## 注（notes）
 訳だけでは誤読する、または大事なものが抜け落ちる箇所にだけ付ける。目安は6行に1つ以下。0件でよい。
 - k の種類：slang（直訳で誤るスラング・AAVE・隠語）／wordplay（音・綴り・多義の仕掛け）／reference（知らないと意味が変わる人物・出来事・作品・文化）／idiom（慣用句）／ambiguous（現実的に二通りに読める。両方の読みを書く）
-- 付けないもの：名前が出るだけの人名やブランド、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
+- 付けないもの：名前が出るだけの人名やブランド・商品名（知らないと行の意味を取り違える場合だけ付ける）、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
+- 迷ったら付けない。指示にある上限件数を超えない。
 - q は原文の行からそのまま抜き出した語句。x は日本語で2文以内・80字程度。訳の言い直しではなく、訳から抜け落ちる情報を書く。
 - Genius の注釈は有力な手がかり。使ったときは g にその id を入れる。丸写しせず要点だけ書く。
 - 確証のない事実（特に reference）は c を true にする。Genius の注釈で裏付けられるなら false。
@@ -111,6 +112,11 @@ function annotationsBlock(source: SongSource): string {
   return ['# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）', ...lines].join('\n');
 }
 
+/** A concrete ceiling works better than "about one per six lines" on Flash-class models. */
+export function noteBudget(lines: number): number {
+  return Math.max(2, Math.round(lines / 6));
+}
+
 export interface PromptRequest {
   system: string;
   user: string;
@@ -137,7 +143,7 @@ export function buildPrompt(source: SongSource, record: SongRecord | null, targe
   const all = targets.length === source.unique.length;
   const ask = haveSong ? 'song レコードは書かずに、' : 'まず song レコードを書き、';
   const what = all ? `L1〜L${source.unique.length} をすべて訳してください。` : `次の ID だけを訳してください：${formatIdList(targets)}。`;
-  blocks.push(`# 指示\n${ask}${what}最後に {"t":"end"} を書いてください。`);
+  blocks.push(`# 指示\n${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)}件。最後に {"t":"end"} を書いてください。`);
 
   // JSON keys and quoting roughly double the bytes of the Japanese itself.
   const expectedChars = targets.reduce((sum, t) => sum + Math.min(220, t.text.length * 1.4 + 60), haveSong ? 40 : 500);
