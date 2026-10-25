@@ -60,8 +60,8 @@ export function buildSong(meta: SongMeta, rows: RawLyricRow[]): SongSource {
       unique.push(u);
       byKey.set(key, u);
     }
+    lines.push({ index: lines.length, text, key, uid: u.uid, occurrence: u.occurrences, section: current.index });
     u.occurrences += 1;
-    lines.push({ index: lines.length, text, key, uid: u.uid, section: current.index });
   }
   return { meta, sections, lines, unique };
 }
@@ -84,7 +84,23 @@ export function songStatus(source: SongSource, record: SongRecord | null | undef
   return { kind: 'partial', missing, total };
 }
 
-export function emptyRecord(path: string, meta: SongMeta): SongRecord {
+export function emptyRecord(id: string, path: string, meta: SongMeta): SongRecord {
   const now = Date.now();
-  return { v: 1, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
+  return { v: 2, id, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
+}
+
+/** Normalized words, for checking that a model's echo of a line's first words matches it. */
+export function headWords(text: string): string[] {
+  return lineKey(text).replace(/[^\p{L}\p{N}' ]+/gu, ' ').split(/\s+/).filter(Boolean);
+}
+
+/** The model echoes the first few English words of each line it translates; a mismatch
+ *  means the translation belongs to some other line and must not be shown here. */
+export function headMatches(head: string | undefined, text: string): boolean {
+  if (!head) return true;
+  const want = headWords(head).slice(0, 3);
+  if (!want.length) return true;
+  const have = headWords(text);
+  const hits = want.filter((w, i) => have[i] === w || have[i]?.replace(/in'?$/, 'ing') === w.replace(/in'?$/, 'ing')).length;
+  return hits >= Math.min(2, want.length) || have.join(' ').startsWith(want.join(' '));
 }

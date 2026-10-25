@@ -1,25 +1,27 @@
-/* Data model shared by the pipeline, storage and UI. */
+/* Data model shared by the engine, storage and the page. See docs/DESIGN.md §8. */
 
-export type NoteKind = 'slang' | 'wordplay' | 'reference' | 'idiom' | 'ambiguity';
+export type NoteKind = 'slang' | 'wordplay' | 'reference' | 'idiom' | 'ambiguous';
 
-export const NOTE_KINDS: readonly NoteKind[] = ['slang', 'wordplay', 'reference', 'idiom', 'ambiguity'];
+export const NOTE_KINDS: readonly NoteKind[] = ['slang', 'wordplay', 'reference', 'idiom', 'ambiguous'];
 
 export const NOTE_LABELS: Record<NoteKind, string> = {
   slang: 'スラング',
-  wordplay: '言葉遊び',
-  reference: '背景',
+  wordplay: '掛詞',
+  reference: '引用・元ネタ',
   idiom: '慣用句',
-  ambiguity: '二通りの読み',
+  ambiguous: '二通りに読める',
 };
 
 export interface Note {
   kind: NoteKind;
-  /** Phrase from the original line the note is about. */
-  span: string;
-  /** Explanation in Japanese. */
+  /** Exact phrase quoted from the original line. */
+  phrase: string;
+  /** Japanese explanation, at most two short sentences. */
   text: string;
-  /** The model marked the note as a conjecture rather than established fact. */
-  unsure?: boolean;
+  /** The model flagged this as conjecture. */
+  conjecture?: boolean;
+  /** Id of the Genius annotation the note drew on. */
+  genius?: string;
 }
 
 export interface LineResult {
@@ -27,11 +29,25 @@ export interface LineResult {
   notes?: Note[];
 }
 
+/** What the model grasped about the whole song before translating. */
 export interface SongContext {
-  /** What the song is doing, 2–3 sentences. */
-  about: string;
-  /** Who is speaking to whom. */
-  voice: string;
+  /** Who speaks to whom (誰が誰に). */
+  who: string;
+  /** What the song is doing (この曲は). */
+  what: string;
+  /** Kept for resume consistency; not shown. */
+  tone?: string;
+  motifs?: Array<{ en: string; ja: string }>;
+}
+
+export interface GeniusAnnotation {
+  id: string;
+  /** The annotated lyric fragment. */
+  fragment: string;
+  text: string;
+  votes: number;
+  /** Written or confirmed by the artist or a verified Genius editor. */
+  verified?: boolean;
 }
 
 export interface SongMeta {
@@ -40,25 +56,20 @@ export interface SongMeta {
   album?: string;
   /** Genius' own "About" text: background for the model, never shown verbatim. */
   about?: string;
-  /** Genius community annotations (fetched when translating): grounding for notes. */
+  /** Genius community annotations: grounding for notes, shown collapsed inside them. */
   annotations?: GeniusAnnotation[];
-}
-
-export interface GeniusAnnotation {
-  /** The annotated lyric fragment. */
-  fragment: string;
-  text: string;
-  votes: number;
 }
 
 /** One rendered lyric line on the page (every occurrence, in reading order). */
 export interface LyricLine {
   index: number;
   text: string;
-  /** Normalized text; identical keys share a translation (repeated hooks stay consistent). */
+  /** Normalized text; identical keys are exact repeats and share one translation. */
   key: string;
-  /** 1-based id of the unique line this occurrence belongs to. */
+  /** 1-based id of the distinct line this occurrence belongs to. */
   uid: number;
+  /** 0 for the first occurrence of its text, 1 for the next repeat, … */
+  occurrence: number;
   section: number;
 }
 
@@ -82,15 +93,30 @@ export interface SongSource {
   unique: UniqueLine[];
 }
 
+/** Why a song stopped before every line was translated (docs/DESIGN.md §3, seams). */
+export type StopReason =
+  | 'busy' | 'rate' | 'quota' | 'auth' | 'blocked' | 'network'
+  | 'unusable' | 'stopped' | 'length' | 'closed' | 'gaps';
+
+export interface StopInfo {
+  reason: StopReason;
+  at: number;
+  /** For rate/quota: when trying again makes sense. */
+  until?: number;
+}
+
 /** What is persisted per song. Lines are keyed by normalized text, so a Genius edit
- *  to one line invalidates only that line rather than the whole song. */
+ *  to one line leaves every other translation in place. */
 export interface SongRecord {
-  v: 1;
+  v: 2;
+  /** Song identity: Genius song id when known, else the canonical path. */
+  id: string;
   path: string;
   title: string;
   artist: string;
-  context?: SongContext;
+  song?: SongContext;
   lines: Record<string, LineResult>;
+  stop?: StopInfo;
   model?: string;
   createdAt: number;
   updatedAt: number;

@@ -22,8 +22,10 @@ export interface GenerateRequest {
   maxOutputTokens: number;
   thinking: ThinkingLevel;
   signal?: AbortSignal;
-  /** Receives visible answer text incrementally (never reasoning/thought text). */
-  onText: (chunk: string) => void;
+  /** Receives visible answer text incrementally (never reasoning/thought text). Returns
+   *  true once the text so far contains usable output (the chain then keeps this attempt
+   *  even if the stream breaks later). */
+  onText: (chunk: string) => boolean | void;
 }
 
 export interface GenerateResult {

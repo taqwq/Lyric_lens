@@ -70,8 +70,10 @@ export class GeminiProvider implements Provider {
 
   private async generateOnce(req: GenerateRequest, withThinking: boolean): Promise<GenerateResult> {
     const gemma = req.model.startsWith('gemma-');
-    const generationConfig: Record<string, unknown> = { maxOutputTokens: req.maxOutputTokens };
     const thinking = withThinking ? thinkingConfig(req.model, req.thinking) : null;
+    // Thinking tokens count against the output cap; a fixed budget must not eat the answer.
+    const budget = typeof thinking?.thinkingBudget === 'number' ? thinking.thinkingBudget : 0;
+    const generationConfig: Record<string, unknown> = { maxOutputTokens: Math.min(65_536, req.maxOutputTokens + budget) };
     if (thinking) generationConfig.thinkingConfig = thinking;
     const body: Record<string, unknown> = {
       contents: [{ role: 'user', parts: [{ text: gemma ? `${req.system}\n\n---\n\n${req.user}` : req.user }] }],

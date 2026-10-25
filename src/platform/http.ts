@@ -46,6 +46,15 @@ let forceFetch = false;
 /** Tests and the dev harness route everything through fetch. */
 export function useFetchTransport(value: boolean): void { forceFetch = value; }
 
+/** Whether answers can arrive incrementally here. Tampermonkey (stream) and Violentmonkey
+ *  (progressive responseText) do; others, such as iOS "Userscripts", deliver at the end. */
+export function transportStreams(): boolean {
+  if (forceFetch) return true;
+  const gm = pickGmXhr();
+  if (!gm) return true;
+  return /tampermonkey|violentmonkey/i.test(handlerName());
+}
+
 export function streamRequest(req: StreamRequest): Promise<HttpResult> {
   const gm = forceFetch ? null : pickGmXhr();
   return gm ? viaGm(gm.fn, req) : viaFetch(req);
@@ -102,11 +111,15 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
     };
 
     const wantsStream = handlerName() === 'Tampermonkey';
+    // Managers that deliver the body only at onload give no sign of life while the model
+    // works; there, only a generous overall timeout applies (see transportStreams()).
+    if (!transportStreams()) watchdog.clear();
     const details: GMRequestDetails = {
       method: req.method ?? 'POST',
       url: req.url,
       headers: req.headers,
       data: req.body,
+      timeout: transportStreams() ? undefined : 300_000,
       responseType: wantsStream ? 'stream' : 'text',
       onloadstart: (r) => {
         const body = r?.response as ReadableStream<Uint8Array> | undefined;
@@ -129,7 +142,11 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
           }
         })();
       },
-      onprogress: pushProgress,
+      onprogress: (r) => {
+        pushProgress(r);
+        // Bytes arrived even if responseText did not grow yet: the request is alive.
+        if (!settled && transportStreams()) watchdog.data();
+      },
       onload: (r) => {
         void streamDone.then(() => {
           if (settled) return;
@@ -141,7 +158,8 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
           resolve({ status: r.status, text, headers: r.responseHeaders ?? '' });
         });
       },
-      onerror: () => fail(new LLMError('network', 'ネットワークに接続できませんでした。')),
+      // Keep the manager's own reason (e.g. a refused @connect) for the error details.
+      onerror: (r) => fail(new LLMError('network', 'ネットワークに接続できませんでした。', { detail: String((r as GMResponse & { error?: string })?.error || r?.statusText || '') })),
       ontimeout: () => fail(new LLMError('timeout', '応答がタイムアウトしました。')),
       onabort: () => fail(new LLMError('aborted', '中止しました。')),
     };

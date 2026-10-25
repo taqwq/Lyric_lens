@@ -22,6 +22,7 @@ export function songIdFromPage(doc: Document = document): string | null {
 }
 
 interface ReferentJson {
+  id?: number | string;
   is_description?: boolean;
   fragment?: string;
   range?: { content?: string };
@@ -39,7 +40,7 @@ export function parseReferents(referents: ReferentJson[]): GeniusAnnotation[] {
     const votes = Number(ann.votes_total ?? 0);
     const trusted = ann.verified || ann.state === 'accepted';
     if (!trusted && votes < 3) continue;
-    out.push({ fragment, text, votes: votes + (ann.verified ? 100 : 0) });
+    out.push({ id: String(r.id ?? out.length), fragment, text, votes, ...(ann.verified ? { verified: true } : {}) });
   }
   return out;
 }
@@ -55,7 +56,7 @@ export async function fetchAnnotations(songId: string, opts: { origin?: string; 
   try {
     for (let page = 1; page <= 3; page += 1) {
       const res = await fetch(`${origin}/api/referents?song_id=${encodeURIComponent(songId)}&per_page=50&page=${page}&text_format=plain`, {
-        credentials: 'omit',
+        // Same origin: keep Genius' own cookies (a Cloudflare clearance may depend on them).
         signal: controller.signal,
         headers: { accept: 'application/json' },
       });

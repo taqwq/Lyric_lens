@@ -5,7 +5,7 @@
   if (!localStorage.getItem('lyric-lens-dev:ll3:settings') && !location.search.includes('fresh')) {
     localStorage.setItem('lyric-lens-dev:ll3:settings', JSON.stringify({
       providers: [{ id: 'gemini', kind: 'gemini', preset: 'gemini', baseUrl: '', apiKey: 'mock-key', model: '', enabled: true }],
-      thinking: 'low', showTranslation: true, showSummary: true, autoTranslate: false,
+      thinking: 'low', hideTranslation: false,
     }));
   }
   const realFetch = window.fetch.bind(window);
@@ -17,34 +17,36 @@
 
   function targetsFrom(prompt) {
     const lyrics = new Map();
-    for (const m of prompt.matchAll(/^L(\d+): (.+)$/gm)) if (!lyrics.has(+m[1])) lyrics.set(+m[1], m[2]);
+    for (const m of prompt.matchAll(/^L(\d+): (.+?)(?:  → .*)?$/gm)) if (!lyrics.has(+m[1])) lyrics.set(+m[1], m[2]);
     const ask = prompt.split('# 指示')[1] || '';
     let ids = [];
     const all = /L1〜L(\d+) をすべて/.exec(ask);
     if (all) ids = Array.from({ length: +all[1] }, (_, i) => i + 1);
-    else for (const part of ask.split('：')[1]?.split(',') ?? []) {
+    else for (const part of (ask.split('：')[1] || '').split('。')[0].split(',')) {
       const r = /L(\d+)(?:〜L(\d+))?/.exec(part.trim());
       if (!r) continue;
       for (let i = +r[1]; i <= +(r[2] || r[1]); i += 1) ids.push(i);
     }
-    return { ids, lyrics, wantsContext: ask.includes('最初に書き') };
+    return { ids, lyrics, wantsSong: ask.includes('まず song') };
   }
 
   function linesFor(prompt) {
-    const { ids, lyrics, wantsContext } = targetsFrom(prompt);
+    const { ids, lyrics, wantsSong } = targetsFrom(prompt);
     const out = [];
-    if (wantsContext) {
-      out.push('@about: 貧しかった過去と成功した今を、紙飛行機にして飛ばすドル札のイメージで対比する曲。浮かれた自慢に見えて、地元への義理と亡くした仲間への思いが通底している。');
-      out.push('@voice: 成功したラッパーが、昔の自分を疑った人たちとライバルに向けて語る。');
+    if (wantsSong) {
+      out.push(JSON.stringify({ t: 'song', who: '成功したラッパー → 昔の自分を疑った人たちとライバル', what: '貧しかった過去と今を、紙飛行機にして飛ばすドル札のイメージで対比する。浮かれた自慢の裏に、地元への義理と亡くした仲間への思いがある。', tone: '余裕のある自慢', motifs: [{ en: 'paper planes', ja: '紙飛行機' }] }));
     }
+    const words3 = (s) => s.split(/\s+/).slice(0, 3).join(' ');
     for (const id of ids) {
       const src = lyrics.get(id) || '';
-      out.push(`L${id}: 〔訳〕${src.replace(/'/g, '’')}`);
-      if (/Ten toes/.test(src)) out.push(`N${id}: slang | Ten toes down | 両足のつま先を地につけて踏ん張る＝ぶれずに地元や仲間に忠実でいること。`);
-      if (/cap/.test(src)) out.push(`N${id}: slang | cap | 「嘘」の意味のスラング。no cap で「マジで」。`);
-      if (/Crenshaw/.test(src)) out.push(`N${id}?: reference | Crenshaw | ロサンゼルス南部の大通り・地区。ヒップホップと縁が深い。`);
-      if (/dog/.test(src)) out.push(`N${id}: wordplay | dog | 「女たらし」の意味の dog を、皿を舐める犬の行動に掛けている。`);
+      const notes = [];
+      if (/Ten toes/.test(src)) notes.push({ q: 'Ten toes down', k: 'slang', x: '両足のつま先を地につけて踏ん張る＝ぶれずに地元や仲間に忠実でいること。' });
+      if (/\bcap\b/.test(src)) notes.push({ q: 'cap', k: 'slang', x: '「嘘」の意味のスラング。no cap で「マジで」。' });
+      if (/Crenshaw/.test(src)) notes.push({ q: 'Crenshaw', k: 'reference', x: 'ロサンゼルス南部の大通り・地区。ヒップホップと縁が深い。', c: true });
+      if (/dog/.test(src)) notes.push({ q: "I'm a dog", k: 'wordplay', x: '「女たらし」の dog と、皿を舐める犬の行動を掛けている。', g: '2' });
+      out.push(JSON.stringify({ t: 'line', id: `L${id}`, head: words3(src), ja: `〔訳〕${src.replace(/'/g, '’')}`, notes }));
     }
+    out.push(JSON.stringify({ t: 'end' }));
     return out;
   }
 
@@ -67,6 +69,13 @@
 
   window.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/referents')) {
+      await sleep(80);
+      return json(200, { response: { next_page: null, referents: [
+        { id: 2, fragment: "She said I'm a dog, so I licked the plate clean", range: { content: "She said I'm a dog, so I licked the plate clean" }, annotations: [{ body: { plain: 'A play on "dog" as slang for a womanizer, turned literal: a dog licks the plate. Placeholder annotation for testing; not real Genius content.' }, votes_total: 42, state: 'accepted' }] },
+        { id: 5, fragment: 'Paper planes, paper planes over Crenshaw', range: { content: 'Paper planes, paper planes over Crenshaw' }, annotations: [{ body: { plain: 'Crenshaw Boulevard runs through South Los Angeles. Placeholder annotation for testing.' }, votes_total: 17, state: 'accepted' }] },
+      ] } });
+    }
     if (!url.includes('generativelanguage.googleapis.com')) return realFetch(input, init);
     await sleep(120);
     if (url.includes('/v1beta/models?')) {

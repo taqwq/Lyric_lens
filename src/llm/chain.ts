@@ -33,8 +33,16 @@ export function isUsable(config: ProviderConfig): boolean {
 interface Cooldown { until: number; reason: LLMErrorKind }
 type Cooldowns = Record<string, Cooldown>;
 
-function cooldownId(config: ProviderConfig, model: string): string {
-  return `${config.preset}:${config.baseUrl}:${model}`;
+/** Short fingerprint of the API key: quotas belong to a key's project, so a second key
+ *  must not inherit the first key's exhausted models. */
+export function keyTag(config: ProviderConfig): string {
+  let h = 0;
+  for (const ch of config.apiKey.trim()) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+export function cooldownId(config: ProviderConfig, model: string): string {
+  return `${config.preset}:${config.baseUrl}:${keyTag(config)}:${model}`;
 }
 
 /** Gemini free-tier daily quotas reset at midnight Pacific time. */
@@ -76,6 +84,24 @@ async function loadCooldowns(): Promise<Cooldowns> {
 
 export async function clearCooldowns(): Promise<void> {
   await setJSON(COOLDOWN_KEY, {});
+}
+
+const BAD_KEY_PREFIX = 'll3:badkey:';
+
+export type KeyStatus = { kind: 'missing' } | { kind: 'bad' } | { kind: 'resting'; until: number } | { kind: 'ok' };
+
+/** What the settings sheet shows next to a service. Uses only what is already known. */
+export async function keyStatus(config: ProviderConfig): Promise<KeyStatus> {
+  if (!config.apiKey.trim()) return { kind: 'missing' };
+  if (await getJSON<boolean>(BAD_KEY_PREFIX + keyTag(config), false)) return { kind: 'bad' };
+  const a = await availability([config]);
+  return a.ok ? { kind: 'ok' } : { kind: 'resting', until: a.until };
+}
+
+/** Remembers (or clears) that a key was rejected, keyed by its fingerprint. */
+export async function markKey(config: ProviderConfig, bad: boolean): Promise<void> {
+  if (bad) await setJSON(BAD_KEY_PREFIX + keyTag(config), true);
+  else await setJSON(BAD_KEY_PREFIX + keyTag(config), false);
 }
 
 export interface Availability {
@@ -253,7 +279,11 @@ export async function generateWithFallback(
               ...request,
               model,
               signal,
-              onText: (chunk) => { produced = true; request.onText(chunk); },
+              onText: (chunk) => {
+                // Without a verdict from the consumer, any text counts as output.
+                const useful = request.onText(chunk);
+                if (useful === undefined || useful) produced = true;
+              },
             });
             delete cooldowns[cooldownId(config, model)];
             return { ...result, model, provider: label };
@@ -288,7 +318,11 @@ export async function generateWithFallback(
         await remember(config, model, error);
         if (error.kind === 'overloaded') busyNow.add(cooldownId(config, model));
         else busyNow.delete(cooldownId(config, model));
-        if (error.kind === 'auth') { badProviders.add(config.id); break; }
+        if (error.kind === 'auth') {
+          badProviders.add(config.id);
+          await markKey(config, true);
+          break;
+        }
         if (error.kind === 'blocked' && ++blocked >= 2) break; // other models will refuse too
         const reason = error.kind === 'overloaded' ? '混雑' : error.kind === 'quota' ? '今日の上限' : error.kind === 'rate' ? '回数制限' : 'エラー';
         onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
