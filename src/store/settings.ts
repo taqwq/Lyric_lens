@@ -32,7 +32,7 @@ export function newProvider(presetId: string, apiKey = ''): ProviderConfig {
 }
 
 export function defaultSettings(): Settings {
-  return { providers: SERVICE_ORDER.map((id) => providerFor(id)), thinking: 'medium', hideTranslation: false };
+  return { providers: SERVICE_ORDER.map((id) => providerFor(id)), thinking: 'low', hideTranslation: false };
 }
 
 function sanitize(raw: Partial<Settings> & { showTranslation?: boolean } | null): Settings {
@@ -42,7 +42,7 @@ function sanitize(raw: Partial<Settings> & { showTranslation?: boolean } | null)
   const keyFor = (preset: string) => String(stored.find((p) => p && p.preset === preset && p.apiKey)?.apiKey ?? '').trim();
   return {
     providers: SERVICE_ORDER.map((id) => providerFor(id, keyFor(id))),
-    thinking: raw.thinking === 'low' || raw.thinking === 'high' ? raw.thinking : 'medium',
+    thinking: raw.thinking === 'medium' || raw.thinking === 'high' ? raw.thinking : 'low',
     hideTranslation: typeof raw.hideTranslation === 'boolean' ? raw.hideTranslation : raw.showTranslation === false,
   };
 }

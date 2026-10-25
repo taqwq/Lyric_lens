@@ -39,7 +39,7 @@ describe('defaultSettings', () => {
     const s = defaultSettings();
     expect(s.providers.map((p) => p.preset)).toEqual(['gemini', 'groq', 'openrouter']);
     expect(s.providers.every((p) => p.enabled && p.apiKey === '' && p.model === '')).toBe(true);
-    expect(s.thinking).toBe('medium');
+    expect(s.thinking).toBe('low') // fast first lines: measured 65s → 16s on the same song;
     expect(s.hideTranslation).toBe(false);
     expect(hasAnyKey(s)).toBe(false);
   });
@@ -74,7 +74,7 @@ describe('loadSettings', () => {
   it('normalises thinking and the legacy showTranslation flag', async () => {
     await setJSON(KEY, { providers: [], thinking: 'extreme', showTranslation: false });
     const s = await loadSettings();
-    expect(s.thinking).toBe('medium');
+    expect(s.thinking).toBe('low');
     expect(s.hideTranslation).toBe(true);
     await setJSON(KEY, { providers: [], thinking: 'low', hideTranslation: false, showTranslation: false });
     expect(await loadSettings()).toMatchObject({ thinking: 'low', hideTranslation: false });
