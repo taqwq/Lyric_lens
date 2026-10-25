@@ -173,6 +173,8 @@ export interface ChainResult extends GenerateResult {
 
 export interface ChainOptions {
   onStatus?: (text: string) => void;
+  /** Called before every attempt: text from a failed attempt must not leak into the next. */
+  onAttempt?: () => void;
   signal?: AbortSignal;
 }
 
@@ -274,6 +276,7 @@ export async function generateWithFallback(
         let error: LLMError | null = null;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           onStatus?.(`${label} · ${shortModel(model)}`);
+          options.onAttempt?.();
           let produced = false;
           try {
             const result = await provider.generate({

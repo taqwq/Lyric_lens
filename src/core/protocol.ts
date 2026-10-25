@@ -126,6 +126,11 @@ export class ProtocolParser {
     return events;
   }
 
+  /** Drops a half-received line (a failed attempt's tail) before the next attempt streams. */
+  reset(): void {
+    this.buffer = '';
+  }
+
   /** The last line has no newline; a JSON record is self-delimiting, so it is safe to
    *  parse even after a cut (a truncated record simply fails to parse). */
   flush(): ProtocolEvent[] {

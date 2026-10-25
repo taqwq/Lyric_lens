@@ -34,8 +34,16 @@ export class LockHandle {
   start(onAbort: () => void): void {
     this.timer = setInterval(async () => {
       const current = await getJSON<Lock | null>(KEY, null);
-      if (current?.tab === TAB_ID && current.abort) onAbort();
-      await setJSON(KEY, { ...this.lock, beat: Date.now(), ...(current?.abort ? { abort: true } : {}) });
+      const ours = current?.tab === TAB_ID && current.id === this.lock.id;
+      if (current && !ours) {
+        // Our beat stopped long enough (frozen/throttled tab) for someone else to take the
+        // lock. Never steal it back; the request already in flight just finishes.
+        if (this.timer) clearInterval(this.timer);
+        this.timer = null;
+        return;
+      }
+      if (ours && current?.abort) onAbort();
+      await setJSON(KEY, { ...this.lock, beat: Date.now(), ...(ours && current?.abort ? { abort: true } : {}) });
     }, BEAT_MS);
   }
 
