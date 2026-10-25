@@ -78,6 +78,34 @@ export async function clearCooldowns(): Promise<void> {
   await setJSON(COOLDOWN_KEY, {});
 }
 
+export interface Availability {
+  /** Some model may answer now (busy/rate-limited models count: they recover in minutes). */
+  ok: boolean;
+  /** When !ok: the earliest moment a model is expected back (0 if unknown). */
+  until: number;
+}
+
+/** Answers "is it worth sending a request?" from what we already know, without any
+ *  network access, so an exhausted free tier never costs a wasted attempt. */
+export async function availability(configs: ProviderConfig[]): Promise<Availability> {
+  const usable = configs.filter(isUsable);
+  if (!usable.length) return { ok: false, until: 0 };
+  const cooldowns = await loadCooldowns();
+  let earliest = Infinity;
+  for (const config of usable) {
+    if (config.model) return { ok: true, until: 0 };
+    const cached = await getJSON<{ models: ModelInfo[] } | null>(MODELS_KEY + cooldownId(config, ''), null);
+    const ids = cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? (config.kind === 'gemini' ? FALLBACK_GEMINI : []);
+    if (!ids.length) return { ok: true, until: 0 };
+    for (const id of config.kind === 'gemini' ? ids.slice(0, 10) : ids.slice(0, 3)) {
+      const cd = cooldowns[cooldownId(config, id)];
+      if (!cd || cd.reason === 'overloaded' || cd.reason === 'rate') return { ok: true, until: 0 };
+      earliest = Math.min(earliest, cd.until);
+    }
+  }
+  return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
+}
+
 /* ---------- model lists ---------- */
 
 export async function modelsFor(provider: Provider, opts: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
