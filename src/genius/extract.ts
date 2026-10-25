@@ -71,10 +71,24 @@ function resolveAnchor(node: Node, container: Element): Node {
   return ref;
 }
 
+/** A text node that is part of a line, and where its text starts in the line's raw text. */
+export interface Segment {
+  node: Text;
+  offset: number;
+}
+
+/** The DOM text of one line, used to point at a phrase inside it without touching the DOM. */
+export interface LineText {
+  raw: string;
+  segments: Segment[];
+}
+
 export interface Extraction {
   rows: RawLyricRow[];
   /** anchors[i] = node after which line i's translation is inserted. */
   anchors: Node[];
+  /** texts[i] = the DOM text nodes of line i. */
+  texts: LineText[];
   containers: HTMLElement[];
 }
 
@@ -83,14 +97,18 @@ export function extractLyrics(doc: Document = document): Extraction | null {
   if (!containers.length) return null;
   const rows: RawLyricRow[] = [];
   const anchors: Node[] = [];
+  const texts: LineText[] = [];
 
   for (const container of containers) {
     let text = '';
+    let segments: Segment[] = [];
     let last: Node | null = null;
 
     const flush = (endNode: Node | null) => {
       const line = cleanText(text);
+      const lineText: LineText = { raw: text, segments };
       text = '';
+      segments = [];
       const anchorSource = endNode ?? last;
       last = null;
       if (!line || NOISE.some((re) => re.test(line))) return;
@@ -101,6 +119,7 @@ export function extractLyrics(doc: Document = document): Extraction | null {
       if (!anchorSource) return;
       rows.push({ kind: 'line', text: line });
       anchors.push(resolveAnchor(anchorSource, container));
+      texts.push(lineText);
     };
 
     const walk = (parent: Node) => {
@@ -108,6 +127,7 @@ export function extractLyrics(doc: Document = document): Extraction | null {
         if (child.nodeType === 3) {
           const t = child.textContent ?? '';
           if (t) {
+            segments.push({ node: child as Text, offset: text.length });
             text += t;
             if (t.trim()) last = child;
           }
@@ -135,7 +155,7 @@ export function extractLyrics(doc: Document = document): Extraction | null {
   }
 
   if (!rows.some((r) => r.kind === 'line')) return null;
-  return { rows, anchors, containers };
+  return { rows, anchors, texts, containers };
 }
 
 /* ---------- metadata ---------- */
@@ -185,6 +205,7 @@ export interface PageSong {
   songId: string | null;
   source: SongSource;
   anchors: Node[];
+  texts: LineText[];
   containers: HTMLElement[];
 }
 
@@ -193,5 +214,5 @@ export function readPage(doc: Document = document, loc: Location = location): Pa
   if (!extraction) return null;
   const source = buildSong(extractMeta(doc), extraction.rows);
   if (!source.lines.length) return null;
-  return { path: songPath(loc, doc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, containers: extraction.containers };
+  return { path: songPath(loc, doc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, texts: extraction.texts, containers: extraction.containers };
 }
