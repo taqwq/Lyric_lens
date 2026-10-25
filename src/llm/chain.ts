@@ -245,6 +245,7 @@ export async function generateWithFallback(
           error.provider = label;
           passErrors.push(error);
           badProviders.add(config.id);
+          if (error.kind === 'auth') await markKey(config, true);
           continue;
         }
         modelLists.set(config.id, models);

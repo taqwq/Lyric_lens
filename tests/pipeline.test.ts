@@ -1,387 +1,875 @@
 import './setup';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { generateWithFallback, type ChainResult } from '../src/llm/chain';
-import { LLMError } from '../src/llm/errors';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateWithFallback, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
+import { LLMError, type LLMErrorKind } from '../src/llm/errors';
 import type { ProviderConfig } from '../src/llm/types';
-import { RecordBuilder, placeNote, translateSong } from '../src/core/pipeline';
+import { RecordBuilder, stopFromError, translateSong } from '../src/core/pipeline';
+import type { ProtocolEvent } from '../src/core/protocol';
 import { buildSong, emptyRecord, missingLines } from '../src/core/song';
 import type { SongMeta, SongRecord, SongSource } from '../src/core/types';
 
-vi.mock('../src/llm/chain', () => ({ generateWithFallback: vi.fn() }));
+// Only the network-facing generateWithFallback is replaced; the Pacific-midnight maths is the real one.
+vi.mock('../src/llm/chain', async () => {
+  const actual = await vi.importActual<typeof import('../src/llm/chain')>('../src/llm/chain');
+  return { generateWithFallback: vi.fn(), nextPacificMidnight: actual.nextPacificMidnight };
+});
 
 const chain = vi.mocked(generateWithFallback);
 
 type ChainRequest = Parameters<typeof generateWithFallback>[1];
 
+/* ---------- a scripted model ---------- */
+
 interface Script {
-  text: string;
-  finish?: ChainResult['finish'];
-  error?: LLMError;
-  /** Text reported in the result (the real chain returns '' after a broken stream). */
-  resultText?: string;
+  /** What the model streams (JSONL). */
+  text?: string;
+  /** Exact pieces to stream instead of slicing `text` into `chunk` characters. */
+  chunks?: string[];
   chunk?: number;
+  finish?: ChainResult['finish'];
+  /** The stream broke after the text. Like the real chain: if anything useful arrived (onText
+   *  said so) the result carries `error` and the text is kept; otherwise the chain throws. */
+  breaks?: LLMError;
+  /** The chain itself throws after the text (aborted, or every model failed). */
+  throws?: unknown;
+  model?: string;
 }
 
-/** Makes the next chain call stream `text` in small chunks through request.onText. */
+/** What onText returned for each chunk, one array per chain call. */
+let returned: Array<Array<boolean | void>> = [];
+
+/** Makes the next chain calls stream the given scripts through request.onText. */
 function script(...rounds: Script[]): void {
   for (const round of rounds) {
     chain.mockImplementationOnce(async (_providers: ProviderConfig[], request: ChainRequest) => {
+      const text = round.text ?? '';
       const size = round.chunk ?? 3;
-      for (let i = 0; i < round.text.length; i += size) request.onText(round.text.slice(i, i + size));
-      const result: ChainResult = {
-        finish: round.finish ?? 'stop',
-        finishDetail: '',
-        text: round.resultText ?? round.text,
-        model: 'fake-model',
-        provider: 'Fake',
-      };
-      if (round.error) result.error = round.error;
-      return result;
+      const pieces = round.chunks ?? Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size));
+      const answers: Array<boolean | void> = [];
+      returned.push(answers);
+      let useful = false;
+      for (const piece of pieces) {
+        const verdict = request.onText(piece);
+        answers.push(verdict);
+        // The chain's own rule: no verdict, or a true verdict, counts as output.
+        if (verdict === undefined || verdict) useful = true;
+      }
+      if (round.throws) throw round.throws;
+      const model = round.model ?? 'fake-model';
+      if (round.breaks) {
+        if (!useful) throw round.breaks;
+        return { finish: 'unknown', finishDetail: round.breaks.kind, text: '', model, provider: 'Fake', error: round.breaks } satisfies ChainResult;
+      }
+      return { finish: round.finish ?? 'stop', finishDetail: '', text: pieces.join(''), model, provider: 'Fake' } satisfies ChainResult;
     });
   }
 }
 
+/* ---------- JSONL helpers ---------- */
+
+const rec = (value: unknown) => JSON.stringify(value);
+const songRec = (extra: Record<string, unknown> = {}) =>
+  rec({ t: 'song', who: '俺が聴き手に', what: '自慢の歌', tone: '強気', motifs: [{ en: 'heat', ja: '熱気' }], ...extra });
+const lineRec = (id: number | string, head: string, ja: string, notes: unknown[] = []) =>
+  rec({ t: 'line', id: typeof id === 'number' ? `L${id}` : id, head, ja, notes });
+const endRec = () => rec({ t: 'end' });
+const jsonl = (...records: string[]) => `${records.join('\n')}\n`;
+
 const meta: SongMeta = { title: 'T', artist: 'A' };
 const LYRICS = ['I woke up early', 'Brought the heat from the street', 'Yeah', 'We never fall'];
+const HEADS = ['I woke up', 'Brought the heat', 'Yeah', 'We never fall'];
+const JA = ['早起きした', '通りの熱気を持ってきた', 'イェー', '俺たちは倒れない'];
 
 function makeSource(lines: string[] = LYRICS): SongSource {
   return buildSong(meta, lines.map((text) => ({ kind: 'line' as const, text })));
 }
 
-const options = { providers: [] as ProviderConfig[], thinking: 'low' as const };
+/** A complete answer for LYRICS: song record, four lines, end. */
+const fullAnswer = () => jsonl(songRec(), ...HEADS.map((h, i) => lineRec(i + 1, h, JA[i]!)), endRec());
 
-function userOf(call: number): string {
-  return (chain.mock.calls[call]![1] as ChainRequest).user;
-}
+const newRecord = () => emptyRecord('1', '/s', meta);
+const options = { providers: [] as ProviderConfig[], thinking: 'low' as const };
+const userOf = (call: number): string => (chain.mock.calls[call]![1] as ChainRequest).user;
+const jaOf = (source: SongSource, record: SongRecord, uid: number) => record.lines[source.unique[uid - 1]!.key]?.ja;
+
+const NOW = Date.UTC(2026, 9, 26, 12, 0, 0);
 
 beforeEach(() => {
   chain.mockReset();
+  returned = [];
 });
 
-describe('translateSong: single round', () => {
-  it('applies context and every line from a streamed complete answer', async () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/* ---------- tests ---------- */
+
+describe('translateSong: a complete song', () => {
+  it('applies the song record and every line from a streamed answer', async () => {
     const source = makeSource();
-    const record = emptyRecord('/s', meta);
-    script({
-      text: '@about: 自慢の歌\n@voice: 俺が語る\nL1: 早起きした\nL2: 通りの熱気を持ってきた\nL3: イェー\nL4: 俺たちは倒れない\n',
-    });
+    const record = newRecord();
+    script({ text: fullAnswer() });
     const updates: number[] = [];
     const out = await translateSong(source, record, { ...options, onUpdate: (r) => updates.push(Object.keys(r.lines).length) });
 
     expect(chain).toHaveBeenCalledTimes(1);
     expect(out.complete).toBe(true);
+    expect(out.stop).toBeUndefined();
     expect(out.model).toBe('fake-model');
-    expect(out.provider).toBe('Fake');
     expect(out.record).toBe(record);
     expect(record.model).toBe('fake-model');
-    expect(record.context).toEqual({ about: '自慢の歌', voice: '俺が語る' });
-    expect(record.lines[source.unique[0]!.key]).toEqual({ ja: '早起きした' });
-    expect(record.lines[source.unique[3]!.key]).toEqual({ ja: '俺たちは倒れない' });
+    expect(record.stop).toBeUndefined();
+    expect(record.song).toEqual({ who: '俺が聴き手に', what: '自慢の歌', tone: '強気', motifs: [{ en: 'heat', ja: '熱気' }] });
+    for (let uid = 1; uid <= 4; uid += 1) expect(record.lines[source.unique[uid - 1]!.key]).toEqual({ ja: JA[uid - 1] });
     expect(missingLines(source, record)).toEqual([]);
-    expect(updates.length).toBeGreaterThan(0);
+
+    // every applied batch is reported, lines arrive one at a time
+    expect(updates.length).toBeGreaterThanOrEqual(5);
     expect(updates.at(-1)).toBe(4);
-    // first request asks for everything and passes thinking / abort plumbing through
-    expect(userOf(0)).toContain('L1〜L4 をすべて訳してください');
-    expect((chain.mock.calls[0]![1] as ChainRequest).thinking).toBe('low');
+    expect([...updates].sort((a, b) => a - b)).toEqual(updates);
   });
 
-  it('applies the last line even without a trailing newline when the stream finished cleanly', async () => {
+  it('sends one request that asks for the song record and every line', async () => {
+    const source = makeSource();
+    script({ text: fullAnswer() });
+    await translateSong(source, newRecord(), options);
+    expect(chain).toHaveBeenCalledTimes(1);
+    const req = chain.mock.calls[0]![1] as ChainRequest;
+    expect(req.user).toContain('まず song レコードを書き、');
+    expect(req.user).toContain('L1〜L4 をすべて訳してください');
+    expect(req.thinking).toBe('low');
+    expect(req.system.length).toBeGreaterThan(100);
+    expect(typeof req.onText).toBe('function');
+  });
+
+  it('applies a final line record that has no trailing newline', async () => {
     const source = makeSource(['one', 'two']);
-    const record = emptyRecord('/s', meta);
-    script({ text: 'L1: 一\nL2: 二', finish: 'stop' });
+    const record = newRecord();
+    script({ text: [songRec(), lineRec(1, 'one', '一'), lineRec(2, 'two', '二')].join('\n') });
     const out = await translateSong(source, record, options);
     expect(out.complete).toBe(true);
-    expect(record.lines[source.unique[1]!.key]!.ja).toBe('二');
+    expect(jaOf(source, record, 2)).toBe('二');
+  });
+
+  it('does not need an end record', async () => {
+    const source = makeSource(['one', 'two']);
+    script({ text: jsonl(songRec(), lineRec(1, 'one', '一'), lineRec(2, 'two', '二')) });
+    expect((await translateSong(source, newRecord(), options)).complete).toBe(true);
+  });
+
+  it('is not complete just because the model wrote an end record', async () => {
+    const source = makeSource(['one', 'two']);
+    const record = newRecord();
+    script({ text: jsonl(songRec(), lineRec(1, 'one', '一'), endRec()) });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(false);
+    expect(out.stop?.reason).toBe('gaps');
+  });
+
+  it('copes with fences, prose, bullets, trailing commas and numeric ids around the records', async () => {
+    const source = makeSource(['one', 'two', 'three']);
+    const record = newRecord();
+    script({
+      text: [
+        'Sure, here it is:', '```json', songRec(), `- ${lineRec(1, 'one', '一')},`, lineRec('2', 'two', '二'),
+        rec({ t: 'line', id: 3, head: 'three', ja: '三' }), '```', '',
+      ].join('\n'),
+    });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(['一', '二', '三']);
   });
 
   it('passes the signal and status callback through to the chain', async () => {
     const source = makeSource(['one']);
     const controller = new AbortController();
     const onStatus = vi.fn();
-    script({ text: 'L1: 一\n' });
-    await translateSong(source, emptyRecord('/s', meta), { ...options, signal: controller.signal, onStatus });
+    script({ text: jsonl(lineRec(1, 'one', '一')) });
+    await translateSong(source, newRecord(), { ...options, signal: controller.signal, onStatus });
     expect(chain.mock.calls[0]![2]).toEqual({ signal: controller.signal, onStatus });
   });
 
-  it('shares one translation between repeated lines', async () => {
-    const source = makeSource(['Hook', 'Verse', 'hook!', 'Verse two']);
-    expect(source.unique).toHaveLength(3);
-    const record = emptyRecord('/s', meta);
-    script({ text: 'L1: フック\nL2: ヴァース\nL3: ヴァース2\n' });
+  it('keeps and replaces the model name', async () => {
+    const source = makeSource(['one']);
+    const record = newRecord();
+    record.model = 'old-model';
+    script({ text: jsonl(lineRec(1, 'one', '一')), model: 'new-model' });
     const out = await translateSong(source, record, options);
-    expect(out.complete).toBe(true);
-    expect(userOf(0)).toContain('L1〜L3 をすべて訳してください');
-  });
-});
-
-describe('translateSong: continuation rounds', () => {
-  it('does not apply a half-written last line of a cut-off round, then asks only for the missing ids', async () => {
-    const source = makeSource();
-    const record = emptyRecord('/s', meta);
-    script(
-      { text: '@about: A\n@voice: V\nL1: 一行目\nL2: 二行目\nL3: 半分だ', finish: 'length' },
-      { text: 'L3: 三行目\nL4: 四行目\n' },
-    );
-    const onStatus = vi.fn();
-    const out = await translateSong(source, record, { ...options, onStatus });
-
-    expect(chain).toHaveBeenCalledTimes(2);
-    expect(out.complete).toBe(true);
-    // the half line never made it into the record; the follow-up supplied the real one
-    expect(record.lines[source.unique[2]!.key]!.ja).toBe('三行目');
-    expect(JSON.stringify(record)).not.toContain('半分');
-
-    const second = userOf(1);
-    expect(second).toContain('次のIDだけ');
-    expect(second).toContain('次のIDだけを訳してください：L3〜L4');
-    expect(second).not.toContain('をすべて訳してください');
-    expect(second).toContain('@about と @voice は書かずに');
-    expect(second).toContain('L1: 一行目'); // already-done lines are shown for consistency
-    expect(second).toContain('L2: 二行目');
-    // the lyrics are still all there
-    for (const text of LYRICS) expect(second).toContain(text);
-    expect(onStatus).toHaveBeenCalledWith('残り2行を続けて訳しています');
+    expect(out.model).toBe('new-model');
+    expect(record.model).toBe('new-model');
   });
 
-  it('ignores re-sent lines, notes for finished lines, and lines outside the requested ids', async () => {
-    const source = makeSource(['alpha line', 'beta line', 'gamma line']);
-    const record = emptyRecord('/s', meta);
-    script(
-      { text: '@about: A\n@voice: V\nL1: 一\nN1: slang | alpha | 古い注釈\n', finish: 'length' },
-      {
-        text: [
-          '@about: 上書きしない',
-          'L1: 上書きされてはいけない',
-          'N1: slang | alpha | 二つ目の注釈',
-          'L2: 二',
-          'L3: 三',
-          'L9: 存在しないID',
-          '',
-        ].join('\n'),
-      },
-    );
-    const out = await translateSong(source, record, options);
-    expect(out.complete).toBe(true);
-    expect(record.context).toEqual({ about: 'A', voice: 'V' });
-    expect(record.lines[source.unique[0]!.key]).toEqual({ ja: '一', notes: [{ kind: 'slang', span: 'alpha', text: '古い注釈' }] });
-    expect(record.lines[source.unique[1]!.key]!.ja).toBe('二');
-    expect(Object.keys(record.lines)).toHaveLength(3);
-  });
-
-  it('keeps lines from a round that errored after partial output, and continues', async () => {
-    const source = makeSource();
-    const record = emptyRecord('/s', meta);
-    const dropped = new LLMError('network', 'ネットワークに接続できませんでした。');
-    script(
-      // the real chain reports text '' and finish 'unknown' after a broken stream
-      { text: '@about: A\n@voice: V\nL1: 一\nL2: 二\n', finish: 'unknown', error: dropped, resultText: '' },
-      { text: 'L3: 三\nL4: 四\n' },
-    );
-    const out = await translateSong(source, record, options);
-    expect(out.complete).toBe(true);
-    expect(chain).toHaveBeenCalledTimes(2);
-    expect(userOf(1)).toContain('次のIDだけを訳してください：L3〜L4');
-    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(['一', '二', '三', '四']);
-  });
-
-  it('does not flush a dangling line after an errored stream', async () => {
-    const source = makeSource(['one', 'two']);
-    const record = emptyRecord('/s', meta);
-    script(
-      { text: 'L1: 一\nL2: 半', finish: 'unknown', error: new LLMError('timeout', 'x'), resultText: '' },
-      { text: 'L2: 二\n' },
-    );
-    await translateSong(source, record, options);
-    expect(record.lines[source.unique[1]!.key]!.ja).toBe('二');
-  });
-
-  it('throws the chain error when the song is still incomplete after an errored round', async () => {
-    const source = makeSource(['a', 'b', 'c', 'd', 'e', 'f']);
-    const record = emptyRecord('/s', meta);
-    const err = new LLMError('overloaded', '混雑');
-    // every round yields one new line, then breaks
-    script(
-      { text: 'L1: 一\n', finish: 'unknown', error: err, resultText: '' },
-      { text: 'L2: 二\n', finish: 'unknown', error: err, resultText: '' },
-      { text: 'L3: 三\n', finish: 'unknown', error: err, resultText: '' },
-    );
-    await expect(translateSong(source, record, options)).rejects.toBe(err);
-    expect(chain).toHaveBeenCalledTimes(3);
-    // nothing already received is lost
-    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(['一', '二', '三']);
-  });
-
-  it('stops after three rounds and reports incomplete (without throwing) when no round errored', async () => {
-    const source = makeSource(['a', 'b', 'c', 'd', 'e']);
-    const record = emptyRecord('/s', meta);
-    script(
-      { text: 'L1: 一\n', finish: 'length' },
-      { text: 'L2: 二\n', finish: 'length' },
-      { text: 'L3: 三\n', finish: 'length' },
-      { text: 'L4: 四\nL5: 五\n' }, // would complete, but is never requested
-    );
-    const out = await translateSong(source, record, options);
-    expect(chain).toHaveBeenCalledTimes(3);
-    expect(out.complete).toBe(false);
-    expect(missingLines(source, record).map((u) => u.uid)).toEqual([4, 5]);
-  });
-
-  it('makes no request at all when everything is already translated', async () => {
+  it('makes no request at all when everything is already translated, and clears a stale stop', async () => {
     const source = makeSource(['a', 'b']);
-    const record = emptyRecord('/s', meta);
+    const record = newRecord();
     for (const u of source.unique) record.lines[u.key] = { ja: `訳${u.uid}` };
+    record.stop = { reason: 'gaps', at: 1 };
     const out = await translateSong(source, record, options);
     expect(chain).not.toHaveBeenCalled();
     expect(out.complete).toBe(true);
+    expect(record.stop).toBeUndefined();
   });
 });
 
-describe('translateSong: failures', () => {
-  it('throws an empty-answer error when a round produces nothing usable', async () => {
-    const source = makeSource(['a', 'b']);
-    script({ text: 'Sorry, I cannot help with that.\n' });
-    const err = await translateSong(source, emptyRecord('/s', meta), options).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(LLMError);
-    expect((err as LLMError).kind).toBe('empty');
-    expect((err as LLMError).detail).toContain('Sorry, I cannot help');
+describe('translateSong: output budget', () => {
+  it('asks for at least 8192 tokens for a short song', async () => {
+    script({ text: fullAnswer() });
+    await translateSong(makeSource(), newRecord(), options);
+    const budget = (chain.mock.calls[0]![1] as ChainRequest).maxOutputTokens;
+    expect(budget).toBeGreaterThanOrEqual(8192);
+    expect(budget).toBeLessThan(65_536);
   });
 
-  it('throws the chain error instead when the round also errored', async () => {
-    const source = makeSource(['a']);
-    const err = new LLMError('network', 'down');
-    script({ text: '', finish: 'unknown', error: err, resultText: '' });
-    await expect(translateSong(source, emptyRecord('/s', meta), options)).rejects.toBe(err);
+  it('caps the budget for a very long song', async () => {
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i} ${'x'.repeat(200)}`);
+    script({ text: '' });
+    await translateSong(makeSource(lines), newRecord(), options);
+    expect((chain.mock.calls[0]![1] as ChainRequest).maxOutputTokens).toBe(65_536);
+  });
+});
+
+describe('translateSong: repeats', () => {
+  const lines = ['Hook', 'Verse', 'hook!', 'Verse two', 'HOOK'];
+
+  it('marks repeats in the lyrics and translates each distinct line once', async () => {
+    const source = makeSource(lines);
+    expect(source.unique).toHaveLength(3);
+    const record = newRecord();
+    script({ text: jsonl(songRec(), lineRec(1, 'Hook', 'フック'), lineRec(2, 'Verse', 'ヴァース'), lineRec(3, 'Verse two', 'ヴァース2'), endRec()) });
+    const out = await translateSong(source, record, options);
+
+    expect(userOf(0)).toContain('(=L1) hook!');
+    expect(userOf(0)).toContain('(=L1) HOOK');
+    expect(userOf(0)).toContain('L1〜L3 をすべて訳してください');
+    expect(out.complete).toBe(true);
+    expect(Object.keys(record.lines)).toHaveLength(3);
+    // all three occurrences of the hook share the one stored translation
+    expect(source.lines.filter((l) => l.uid === 1).map((l) => record.lines[l.key]?.ja)).toEqual(['フック', 'フック', 'フック']);
   });
 
-  it('keeps earlier lines when a follow-up round produces nothing', async () => {
-    const source = makeSource(['a', 'b', 'c']);
-    const record = emptyRecord('/s', meta);
+  it('keeps the first translation when the model repeats an id, and ignores ids that do not exist', async () => {
+    const source = makeSource(lines);
+    const record = newRecord();
+    script({
+      text: jsonl(
+        songRec(), lineRec(1, 'Hook', 'フック'), lineRec(1, 'Hook', '二度目のフック'), lineRec(4, 'hook', '存在しない'),
+        lineRec(0, 'x', 'ゼロ'), lineRec(2, 'Verse', 'ヴァース'), lineRec(3, 'Verse two', 'ヴァース2'),
+      ),
+    });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(jaOf(source, record, 1)).toBe('フック');
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(['フック', 'ヴァース', 'ヴァース2']);
+  });
+});
+
+describe('translateSong: head validation', () => {
+  it('drops a line whose head belongs to another line: it stays missing and the stop is "gaps"', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script({
+      text: jsonl(
+        songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, 'We never fall', '行がずれた訳'),
+        lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!), endRec(),
+      ),
+    });
+    const out = await translateSong(source, record, options);
+
+    expect(out.complete).toBe(false);
+    expect(out.stop).toMatchObject({ reason: 'gaps' });
+    expect(out.stop?.until).toBeUndefined();
+    expect(record.stop).toBe(out.stop);
+    expect(jaOf(source, record, 2)).toBeUndefined();
+    expect(JSON.stringify(record)).not.toContain('行がずれた');
+    expect(missingLines(source, record).map((u) => u.uid)).toEqual([2]);
+    expect(Object.keys(record.lines)).toHaveLength(3);
+  });
+
+  it('a following request asks only for the gap, shows the rest as done, and completes the song', async () => {
+    const source = makeSource();
+    const record = newRecord();
     script(
-      { text: 'L1: 一\n', finish: 'length' },
-      { text: 'no protocol here\n' },
+      { text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, 'wrong words here', 'ずれ'), lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!)) },
+      { text: jsonl(lineRec(2, HEADS[1]!, JA[1]!), endRec()) },
     );
-    await expect(translateSong(source, record, options)).rejects.toMatchObject({ kind: 'empty' });
-    expect(record.lines[source.unique[0]!.key]!.ja).toBe('一');
+    await translateSong(source, record, options);
+    expect(record.stop?.reason).toBe('gaps');
+
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(out.stop).toBeUndefined();
+    expect(record.stop).toBeUndefined();
+    expect(jaOf(source, record, 2)).toBe(JA[1]);
+
+    const second = userOf(1);
+    expect(second).toContain('次の ID だけを訳してください：L2。');
+    expect(second).toContain('song レコードは書かずに、');
+    expect(second).not.toContain('まず song レコードを書き、');
+    expect(second).toContain(`L1: ${LYRICS[0]}  → ${JA[0]}`);
+    expect(second).toContain(`L4: ${LYRICS[3]}  → ${JA[3]}`);
+    expect(second).toContain(`L2: ${LYRICS[1]}\n`);
+    expect(second).toContain(JSON.stringify({ t: 'song', ...record.song }));
   });
 
-  it('an answer consisting only of notes or context counts as nothing', async () => {
+  it('accepts a line without a head', async () => {
+    const source = makeSource(['one', 'two']);
+    const record = newRecord();
+    script({ text: jsonl(rec({ t: 'line', id: 'L1', ja: '一' }), rec({ t: 'line', id: 'L2', ja: '二' })) });
+    expect((await translateSong(source, record, options)).complete).toBe(true);
+  });
+
+  it('every head off by one line means nothing is usable', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script({ text: jsonl(songRec(), ...HEADS.map((_, i) => lineRec(i + 1, HEADS[(i + 1) % 4]!, JA[i]!))) });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(false);
+    expect(out.stop?.reason).toBe('unusable');
+    expect(record.lines).toEqual({});
+  });
+});
+
+describe('translateSong: stopping early', () => {
+  it('finish "length": keeps the lines that arrived, drops the half-written one, stop "length"', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    const cut = lineRec(3, HEADS[2]!, 'イェーの途中').slice(0, -12);
+    script({ text: `${jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!))}${cut}`, finish: 'length' });
+    const out = await translateSong(source, record, options);
+
+    expect(out.complete).toBe(false);
+    expect(out.stop).toMatchObject({ reason: 'length' });
+    expect(record.stop).toBe(out.stop);
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual([JA[0], JA[1]]);
+    expect(JSON.stringify(record)).not.toContain('途中');
+    expect(record.song?.who).toBe('俺が聴き手に');
+  });
+
+  it('finish "length" still applies a complete final record that lacks its newline', async () => {
+    const source = makeSource(['one', 'two']);
+    const record = newRecord();
+    script({ text: [songRec(), lineRec(1, 'one', '一'), lineRec(2, 'two', '二')].join('\n'), finish: 'length' });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(record.stop).toBeUndefined();
+  });
+
+  it('a song that finished by length but has every line is complete', async () => {
+    const source = makeSource(['one']);
+    script({ text: jsonl(songRec(), lineRec(1, 'one', '一')), finish: 'length' });
+    const out = await translateSong(source, newRecord(), options);
+    expect(out.complete).toBe(true);
+    expect(out.stop).toBeUndefined();
+  });
+
+  it('the next request after a "length" stop resumes where it left off', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script(
+      { text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!)), finish: 'length' },
+      { text: jsonl(lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!), endRec()) },
+    );
+    expect((await translateSong(source, record, options)).stop?.reason).toBe('length');
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(record.stop).toBeUndefined();
+    expect(userOf(1)).toContain('次の ID だけを訳してください：L3〜L4。');
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(JA);
+  });
+
+  // GenerateResult.finish can be 'blocked' (Gemini SAFETY/RECITATION after some text arrived).
+  // translateSong only maps 'length', so the reader sees "N lines could not be translated"
+  // (gaps) instead of the safety-filter seam sentence that the 'blocked' stop reason exists for
+  // (src/core/pipeline.ts:130-131; docs/DESIGN.md §3 "safety filter").
+  it('maps a stream that ended with finish "blocked" to the stop reason "blocked"', async () => {
+    const source = makeSource();
+    script({ text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!)), finish: 'blocked' });
+    const out = await translateSong(source, newRecord(), options);
+    expect(out.stop?.reason).toBe('blocked');
+  });
+
+  it('zero usable lines is "unusable" and changes nothing', async () => {
     const source = makeSource(['a', 'b']);
-    script({ text: '@about: x\nN1: slang | a | y\n' });
-    await expect(translateSong(source, emptyRecord('/s', meta), options)).rejects.toMatchObject({ kind: 'empty' });
+    const record = newRecord();
+    const onUpdate = vi.fn();
+    script({ text: 'Sorry, I cannot help with that.\n' });
+    const out = await translateSong(source, record, { ...options, onUpdate });
+    expect(out.complete).toBe(false);
+    expect(out.stop?.reason).toBe('unusable');
+    expect(record.stop).toBe(out.stop);
+    expect(record.lines).toEqual({});
+    expect(record.song).toBeUndefined();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a song record and an end record without any line is "unusable", but the song record is kept', async () => {
+    const source = makeSource(['a', 'b']);
+    const record = newRecord();
+    script({ text: jsonl(songRec(), endRec()) });
+    const out = await translateSong(source, record, options);
+    expect(out.stop?.reason).toBe('unusable');
+    expect(record.song?.what).toBe('自慢の歌');
+    expect(record.lines).toEqual({});
+  });
+
+  it('lines for ids that were not requested count as nothing', async () => {
+    const source = makeSource(['a', 'b']);
+    const record = newRecord();
+    record.lines[source.unique[0]!.key] = { ja: '一' };
+    record.song = { who: 'W', what: 'T' };
+    script({ text: jsonl(lineRec(1, 'a', '上書き'), lineRec(9, 'z', '存在しない')) });
+    const out = await translateSong(source, record, options);
+    expect(out.stop?.reason).toBe('unusable');
+    expect(jaOf(source, record, 1)).toBe('一');
+  });
+
+  it('rethrows an error that is not an LLMError', async () => {
+    const boom = new TypeError('programming mistake');
+    script({ text: '', throws: boom });
+    await expect(translateSong(makeSource(), newRecord(), options)).rejects.toBe(boom);
+  });
+});
+
+describe('translateSong: errors become a stop, never an exception', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+
+  it('a daily quota with a long retry delay: until = now + the delay, nothing thrown', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script({ text: '', throws: new LLMError('quota', '無料枠の上限', { status: 429, retryAfterMs: 57_083_000 }) });
+    const out = await translateSong(source, record, options);
+
+    expect(out.complete).toBe(false);
+    expect(out.stop).toEqual({ reason: 'quota', at: NOW, until: NOW + 57_083_000 });
+    expect(record.stop).toBe(out.stop);
+    expect(record.lines).toEqual({});
+  });
+
+  it('a daily quota without a usable delay: until = the next Pacific midnight', async () => {
+    for (const retryAfterMs of [0, 30_000, 60_000]) {
+      script({ text: '', throws: new LLMError('quota', 'x', { retryAfterMs }) });
+      const out = await translateSong(makeSource(), newRecord(), options);
+      expect(out.stop).toEqual({ reason: 'quota', at: NOW, until: nextPacificMidnight(NOW) });
+    }
+  });
+
+  it('a per-minute limit: until is at least a minute away', async () => {
+    script({ text: '', throws: new LLMError('rate', 'slow down') });
+    const out = await translateSong(makeSource(), newRecord(), options);
+    expect(out.stop?.reason).toBe('rate');
+    expect(out.stop!.until!).toBeGreaterThanOrEqual(NOW + 60_000);
+    expect(out.stop!.until!).toBe(NOW + 60_000);
+  });
+
+  it('a per-minute limit with a longer retry delay waits for that delay', async () => {
+    script({ text: '', throws: new LLMError('rate', 'slow down', { retryAfterMs: 90_000 }) });
+    const out = await translateSong(makeSource(), newRecord(), options);
+    expect(out.stop).toEqual({ reason: 'rate', at: NOW, until: NOW + 90_000 });
+  });
+
+  it('the reader stopping it: "stopped", and the lines that had arrived are kept', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script({
+      text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!)),
+      throws: new LLMError('aborted', '中止しました。'),
+    });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(false);
+    expect(out.stop).toEqual({ reason: 'stopped', at: NOW });
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual([JA[0], JA[1]]);
+    expect(record.song).toBeDefined();
+    expect(record.stop).toBe(out.stop);
+  });
+
+  it('aborting before anything arrived: "stopped" as well', async () => {
+    script({ text: '', throws: new LLMError('aborted', 'x') });
+    const out = await translateSong(makeSource(), newRecord(), options);
+    expect(out.stop).toEqual({ reason: 'stopped', at: NOW });
+  });
+
+  it('keeps the old model name when the chain gave up', async () => {
+    const record = newRecord();
+    record.model = 'old-model';
+    script({ text: '', throws: new LLMError('overloaded', 'busy') });
+    const out = await translateSong(makeSource(), record, options);
+    expect(out.model).toBe('old-model');
+    expect(record.model).toBe('old-model');
+  });
+
+  it('an error after partial output keeps the lines and maps the stop from the error', async () => {
+    const cases: Array<[LLMErrorKind, string]> = [['network', 'network'], ['overloaded', 'busy'], ['timeout', 'network'], ['blocked', 'blocked']];
+    for (const [kind, reason] of cases) {
+      const source = makeSource();
+      const record = newRecord();
+      script({
+        text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!)),
+        breaks: new LLMError(kind, 'broke'),
+        model: 'half-model',
+      });
+      const out = await translateSong(source, record, options);
+      expect(out.complete).toBe(false);
+      expect(out.stop).toEqual({ reason, at: NOW });
+      expect(out.model).toBe('half-model');
+      expect(record.model).toBe('half-model');
+      expect(Object.values(record.lines).map((l) => l.ja)).toEqual([JA[0], JA[1]]);
+    }
+  });
+
+  it('a record that was cut off by the error is not applied', async () => {
+    const source = makeSource(['one', 'two']);
+    const record = newRecord();
+    const cut = lineRec(2, 'two', '二の途中').slice(0, -8);
+    script({ text: `${jsonl(lineRec(1, 'one', '一'))}${cut}`, breaks: new LLMError('network', 'x') });
+    const out = await translateSong(source, record, options);
+    expect(out.stop?.reason).toBe('network');
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual(['一']);
+  });
+
+  it('an error that arrives with all lines in is not a stop: the song is complete', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    record.stop = { reason: 'gaps', at: 1 };
+    script({ text: fullAnswer(), breaks: new LLMError('network', 'dropped at the very end') });
+    const out = await translateSong(source, record, options);
+    expect(out.complete).toBe(true);
+    expect(out.stop).toBeUndefined();
+    expect(record.stop).toBeUndefined();
+  });
+
+  it('a stream that breaks after only the song record is not "useful": the error is thrown by the chain and mapped', async () => {
+    const record = newRecord();
+    script({ text: jsonl(songRec()), breaks: new LLMError('overloaded', 'busy') });
+    const out = await translateSong(makeSource(), record, options);
+    expect(returned[0]!.every((v) => v === false)).toBe(true);
+    expect(out.stop).toEqual({ reason: 'busy', at: NOW });
+    expect(record.song?.who).toBe('俺が聴き手に');
+  });
+
+  it.each([
+    ['overloaded', 'busy'], ['auth', 'auth'], ['blocked', 'blocked'], ['network', 'network'], ['timeout', 'network'],
+    ['bad-request', 'unusable'], ['not-found', 'unusable'], ['empty', 'unusable'], ['unknown', 'unusable'],
+  ] as Array<[LLMErrorKind, string]>)('a thrown "%s" error becomes the stop reason "%s"', async (kind, reason) => {
+    script({ text: '', throws: new LLMError(kind, 'x') });
+    const out = await translateSong(makeSource(), newRecord(), options);
+    expect(out.stop).toEqual({ reason, at: NOW });
+  });
+});
+
+describe('stopFromError', () => {
+  it('maps every kind of engine error to a reason', () => {
+    const reason = (kind: LLMErrorKind) => stopFromError(new LLMError(kind, 'x'), 1000);
+    expect(reason('overloaded')).toEqual({ reason: 'busy', at: 1000 });
+    expect(reason('auth')).toEqual({ reason: 'auth', at: 1000 });
+    expect(reason('blocked')).toEqual({ reason: 'blocked', at: 1000 });
+    expect(reason('network')).toEqual({ reason: 'network', at: 1000 });
+    expect(reason('timeout')).toEqual({ reason: 'network', at: 1000 });
+    expect(reason('aborted')).toEqual({ reason: 'stopped', at: 1000 });
+    for (const kind of ['bad-request', 'not-found', 'truncated', 'empty', 'unknown'] as const) {
+      expect(reason(kind)).toEqual({ reason: 'unusable', at: 1000 });
+    }
+  });
+
+  it('rate waits at least a minute, longer when the provider says so', () => {
+    expect(stopFromError(new LLMError('rate', 'x'), 1000)).toEqual({ reason: 'rate', at: 1000, until: 61_000 });
+    expect(stopFromError(new LLMError('rate', 'x', { retryAfterMs: 5000 }), 1000).until).toBe(61_000);
+    expect(stopFromError(new LLMError('rate', 'x', { retryAfterMs: 120_000 }), 1000).until).toBe(121_000);
+  });
+
+  it('quota uses the provider delay only when it is longer than a minute, else the Pacific midnight', () => {
+    expect(stopFromError(new LLMError('quota', 'x', { retryAfterMs: 60_001 }), NOW).until).toBe(NOW + 60_001);
+    expect(stopFromError(new LLMError('quota', 'x', { retryAfterMs: 60_000 }), NOW).until).toBe(nextPacificMidnight(NOW));
+    expect(stopFromError(new LLMError('quota', 'x'), NOW).until).toBe(nextPacificMidnight(NOW));
+    expect(stopFromError(new LLMError('quota', 'x'), NOW).until!).toBeGreaterThan(NOW);
+  });
+
+  it('defaults "at" to the current time', () => {
+    const before = Date.now();
+    const stop = stopFromError(new LLMError('auth', 'x'));
+    expect(stop.at).toBeGreaterThanOrEqual(before);
+    expect(stop.at).toBeLessThanOrEqual(Date.now());
+  });
+});
+
+describe('the song record', () => {
+  it('is kept and not overwritten when a resumed answer writes another one', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    record.song = { who: '元の語り手', what: '元の狙い', tone: '元の語調', motifs: [{ en: 'heat', ja: '元の訳' }] };
+    for (const uid of [1, 2]) record.lines[source.unique[uid - 1]!.key] = { ja: JA[uid - 1]! };
+    script({
+      text: jsonl(songRec({ who: '別の語り手', what: '別の狙い' }), lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!), endRec()),
+    });
+    const out = await translateSong(source, record, options);
+
+    expect(out.complete).toBe(true);
+    expect(record.song).toEqual({ who: '元の語り手', what: '元の狙い', tone: '元の語調', motifs: [{ en: 'heat', ja: '元の訳' }] });
+    const user = userOf(0);
+    expect(user).toContain('song レコードは書かずに、');
+    expect(user).toContain('次の ID だけを訳してください：L3〜L4。');
+    expect(user).toContain(JSON.stringify({ t: 'song', ...record.song }));
+  });
+
+  it('is requested again, and then stored, when only lines were saved before', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    record.lines[source.unique[0]!.key] = { ja: JA[0]! };
+    script({ text: jsonl(songRec(), lineRec(2, HEADS[1]!, JA[1]!), lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!)) });
+    await translateSong(source, record, options);
+    expect(userOf(0)).toContain('まず song レコードを書き、');
+    expect(record.song).toMatchObject({ who: '俺が聴き手に', what: '自慢の歌' });
+  });
+
+  it('omits tone and motifs it was not given', async () => {
+    const record = newRecord();
+    script({ text: jsonl(rec({ t: 'song', who: 'A', what: 'B' }), lineRec(1, 'one', '一')) });
+    await translateSong(makeSource(['one']), record, options);
+    expect(record.song).toEqual({ who: 'A', what: 'B' });
+  });
+
+  it('the first song record in an answer wins over later ones', () => {
+    const source = makeSource();
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, [1]);
+    builder.apply([
+      { type: 'song', who: '一つ目', what: 'A' },
+      { type: 'song', who: '二つ目', what: 'B' },
+    ]);
+    expect(record.song).toEqual({ who: '一つ目', what: 'A' });
+  });
+
+  it('an incomplete stored song record (no "what") is replaced', () => {
+    const source = makeSource();
+    const record = newRecord();
+    record.song = { who: '誰か', what: '' };
+    new RecordBuilder(source, record, [1]).apply([{ type: 'song', who: '新', what: '完全' }]);
+    expect(record.song).toEqual({ who: '新', what: '完全' });
+  });
+});
+
+describe('RecordBuilder', () => {
+  const source = makeSource();
+  const line = (uid: number, over: Partial<Extract<ProtocolEvent, { type: 'line' }>> = {}): ProtocolEvent =>
+    ({ type: 'line', uid, ja: JA[uid - 1] ?? '訳', notes: [], ...over });
+
+  it('counts accepted lines in "added" and head mismatches in "misaligned"', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, [1, 2, 3, 4]);
+    expect(builder.apply([
+      line(1, { head: HEADS[0] }),
+      line(2, { head: 'We never fall' }), // L4's head on L2
+      line(3, { head: 'nonsense words here' }),
+      line(4, { head: HEADS[3] }),
+    ])).toBe(true);
+    expect(builder.added).toBe(2);
+    expect(builder.misaligned).toBe(2);
+    expect(Object.values(record.lines).map((l) => l.ja)).toEqual([JA[0], JA[3]]);
+    expect(missingLines(source, record).map((u) => u.uid)).toEqual([2, 3]);
+  });
+
+  it('a misaligned line changes nothing and reports no change', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, [2]);
+    expect(builder.apply([line(2, { head: 'totally different words' })])).toBe(false);
+    expect(builder.misaligned).toBe(1);
+    expect(builder.added).toBe(0);
+    expect(record.lines).toEqual({});
+  });
+
+  it('a line that arrives again later can still fill the gap it left', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, [2]);
+    builder.apply([line(2, { head: 'wrong wrong wrong' })]);
+    expect(builder.apply([line(2, { head: HEADS[1] })])).toBe(true);
+    expect(builder.misaligned).toBe(1);
+    expect(builder.added).toBe(1);
+  });
+
+  it('ignores lines outside the targets, unknown ids, already translated lines, and end records', () => {
+    const record = newRecord();
+    record.lines[source.unique[0]!.key] = { ja: '既にある' };
+    const builder = new RecordBuilder(source, record, [2, 3]);
+    expect(builder.apply([
+      line(1), // translated already
+      line(4), // not requested
+      line(99), // no such line
+      line(0),
+      { type: 'end' },
+    ])).toBe(false);
+    expect(record.lines).toEqual({ [source.unique[0]!.key]: { ja: '既にある' } });
+    expect(builder.added).toBe(0);
+    expect(builder.misaligned).toBe(0);
+  });
+
+  it('keeps the first of two records for the same line inside one batch', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, [3]);
+    builder.apply([line(3, { ja: '一つ目' }), line(3, { ja: '二つ目' })]);
+    expect(jaOf(source, record, 3)).toBe('一つ目');
+    expect(builder.added).toBe(1);
+  });
+
+  it('reports a change for a song record alone, but does not count it as an added line', () => {
+    const builder = new RecordBuilder(source, newRecord(), [1]);
+    expect(builder.apply([{ type: 'song', who: 'A', what: 'B' }])).toBe(true);
+    expect(builder.added).toBe(0);
   });
 });
 
 describe('notes', () => {
-  const source = makeSource(LYRICS);
+  const source = makeSource();
+  const targets = [1, 2, 3, 4];
+  const noteOn = (raw: Array<{ phrase: string; kind: 'slang' | 'wordplay' | 'reference' | 'idiom' | 'ambiguous'; text: string; conjecture?: boolean; genius?: string }>) =>
+    raw.map((n) => ({ conjecture: false, ...n }));
 
-  it('placeNote trusts the quoted phrase over the stated id', () => {
-    expect(placeNote(source, 1, 'woke up')).toBe(1); // on the stated line
-    expect(placeNote(source, 1, 'Brought the heat')).toBe(2); // on a different line
-    expect(placeNote(source, 4, 'HEAT, from')).toBe(2); // case / punctuation insensitive
-    expect(placeNote(source, 3, 'not anywhere')).toBe(3); // nowhere: keep the stated id
-    expect(placeNote(source, 99, 'not anywhere')).toBeNull(); // nowhere and no such line
-    expect(placeNote(source, 99, 'woke up')).toBe(1); // no such line but the phrase exists
-  });
-
-  it('placeNote picks the nearest line when the phrase appears on several', () => {
-    const s = makeSource(['the gas is here', 'middle', 'more gas there', 'x', 'last gas']);
-    expect(placeNote(s, 2, 'gas')).toBe(1); // tie between 1 and 3 resolves to the first
-    expect(placeNote(s, 4, 'gas')).toBe(3);
-    expect(placeNote(s, 5, 'gas')).toBe(5);
-    expect(placeNote(s, 4, '')).toBe(4); // empty span never matches; falls back to stated id
-  });
-
-  it('moves a note whose quoted span is on a different line, even before that line arrives', async () => {
-    const record = emptyRecord('/s', meta);
+  it('arrive inside the line record with their flags and Genius id', async () => {
+    const record = newRecord();
     script({
-      text: '@about: A\n@voice: V\nL1: 一\nN1: slang | heat from the street | 熱気の意味\nL2: 二\nL3: 三\nL4: 四\n',
+      text: jsonl(
+        songRec(),
+        lineRec(1, HEADS[0]!, JA[0]!),
+        lineRec(2, HEADS[1]!, JA[1]!, [
+          { q: 'heat', k: 'slang', x: '勢い・注目', c: true, g: '123' },
+          { q: 'street', k: 'reference', x: '通りの意味', c: false },
+        ]),
+        lineRec(3, HEADS[2]!, JA[2]!),
+        lineRec(4, HEADS[3]!, JA[3]!),
+      ),
     });
     await translateSong(source, record, options);
-    expect(record.lines[source.unique[0]!.key]!.notes).toBeUndefined();
-    expect(record.lines[source.unique[1]!.key]!.notes).toEqual([
-      { kind: 'slang', span: 'heat from the street', text: '熱気の意味' },
+
+    const first = record.lines[source.unique[0]!.key]!;
+    expect(first).toEqual({ ja: JA[0] });
+    expect(first).not.toHaveProperty('notes');
+
+    const second = record.lines[source.unique[1]!.key]!;
+    expect(second.ja).toBe(JA[1]);
+    expect(second.notes).toEqual([
+      { kind: 'slang', phrase: 'heat', text: '勢い・注目', conjecture: true, genius: '123' },
+      { kind: 'reference', phrase: 'street', text: '通りの意味' },
     ]);
+    expect(second.notes![1]).not.toHaveProperty('conjecture');
+    expect(second.notes![1]).not.toHaveProperty('genius');
   });
 
-  it('attaches notes that arrive before their L line once the line arrives', async () => {
-    const record = emptyRecord('/s', meta);
-    script({
-      text: 'N2?: reference | heat | 推測の注釈\nL1: 一\nL2: 二\nL3: 三\nL4: 四\n',
-    });
-    await translateSong(source, record, options);
-    expect(record.lines[source.unique[1]!.key]).toEqual({
-      ja: '二',
-      notes: [{ kind: 'reference', span: 'heat', text: '推測の注釈', unsure: true }],
-    });
-  });
-
-  it('keeps at most three notes per line and drops duplicates of the same span and kind', () => {
-    const record = emptyRecord('/s', meta);
-    const builder = new RecordBuilder(source, record, [1, 2, 3, 4]);
-    builder.apply([{ type: 'line', uid: 2, ja: '二' }]);
-    const note = (kind: 'slang' | 'idiom' | 'reference' | 'wordplay', span: string) =>
-      ({ type: 'note', uid: 2, kind, span, text: `${kind}:${span}`, unsure: false }) as const;
-    builder.apply([
-      note('slang', 'heat'),
-      note('slang', 'Heat!'), // same span (loosely) and kind: duplicate
-      note('idiom', 'heat'),
-      note('reference', 'street'),
-      note('wordplay', 'Brought'), // fourth distinct note: over the limit
-    ]);
+  it('keeps at most three per line and drops duplicates of the same kind and phrase', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, targets);
+    builder.apply([{
+      type: 'line', uid: 2, ja: JA[1]!, notes: noteOn([
+        { phrase: 'heat', kind: 'slang', text: 'slang:heat' },
+        { phrase: 'Heat!', kind: 'slang', text: 'duplicate (loosely the same phrase)' },
+        { phrase: 'heat', kind: 'idiom', text: 'idiom:heat' },
+        { phrase: 'street', kind: 'reference', text: 'reference:street' },
+        { phrase: 'Brought', kind: 'wordplay', text: 'fourth distinct note, over the cap' },
+      ]),
+    }]);
     expect(record.lines[source.unique[1]!.key]!.notes!.map((n) => n.text)).toEqual(['slang:heat', 'idiom:heat', 'reference:street']);
   });
 
-  it('caps the notes that were queued before the line arrived', () => {
-    const record = emptyRecord('/s', meta);
-    const builder = new RecordBuilder(source, record, [2]);
-    const events = ['heat', 'street', 'brought', 'other'].map((span) => ({
-      type: 'note', uid: 2, kind: 'idiom', span, text: span, unsure: false,
-    }) as const);
-    builder.apply([...events, { type: 'line', uid: 2, ja: '二' }]);
-    expect(record.lines[source.unique[1]!.key]!.notes).toHaveLength(3);
+  it('a duplicate does not use up a slot of the cap', () => {
+    const record = newRecord();
+    new RecordBuilder(source, record, targets).apply([{
+      type: 'line', uid: 2, ja: JA[1]!, notes: noteOn([
+        { phrase: 'heat', kind: 'slang', text: 'one' },
+        { phrase: 'HEAT', kind: 'slang', text: 'dup 1' },
+        { phrase: 'heat.', kind: 'slang', text: 'dup 2' },
+        { phrase: 'street', kind: 'slang', text: 'two' },
+        { phrase: 'brought', kind: 'slang', text: 'three' },
+      ]),
+    }]);
+    expect(record.lines[source.unique[1]!.key]!.notes!.map((n) => n.text)).toEqual(['one', 'two', 'three']);
   });
 
-  // Both notes below are queued before the line arrives. The post-line path drops a note with
-  // the same span and kind (see test above) but the pre-line queue does not, so the same
-  // explanation is stored twice.
-  it('also drops duplicate notes that were queued before the line arrived', () => {
-    const record = emptyRecord('/s', meta);
-    const builder = new RecordBuilder(source, record, [2]);
-    const dup = { type: 'note', uid: 2, kind: 'slang', span: 'heat', text: 'same', unsure: false } as const;
-    builder.apply([dup, dup, { type: 'line', uid: 2, ja: '二' }]);
-    expect(record.lines[source.unique[1]!.key]!.notes).toHaveLength(1);
+  it('caps and dedupes notes that come through the whole pipeline', async () => {
+    const record = newRecord();
+    const many = [
+      { q: 'heat', k: 'slang', x: 'a' },
+      { q: 'Heat', k: 'slang', x: 'dup' },
+      { q: 'street', k: 'pun', x: 'b' },
+      { q: 'woke', k: 'nonsense', x: 'dropped by the parser' },
+      { q: 'Brought', k: 'idiom', x: 'c' },
+      { q: 'from', k: 'reference', x: 'over the cap' },
+    ];
+    script({ text: jsonl(songRec(), lineRec(2, HEADS[1]!, JA[1]!, many)) });
+    await translateSong(source, record, options);
+    expect(record.lines[source.unique[1]!.key]!.notes).toEqual([
+      { kind: 'slang', phrase: 'heat', text: 'a' },
+      { kind: 'wordplay', phrase: 'street', text: 'b' },
+      { kind: 'idiom', phrase: 'Brought', text: 'c' },
+    ]);
   });
 
-  it('ignores notes for lines that are not targets of this round', () => {
-    const record: SongRecord = emptyRecord('/s', meta);
-    const builder = new RecordBuilder(source, record, [3]);
-    expect(builder.apply([
-      { type: 'note', uid: 2, kind: 'slang', span: 'heat', text: 'x', unsure: false },
-      { type: 'line', uid: 2, ja: '二' },
-    ])).toBe(false);
-    expect(record.lines).toEqual({});
-    expect(builder.added).toBe(0);
+  it('a line whose notes are all unusable is stored without a notes field', async () => {
+    const record = newRecord();
+    script({ text: jsonl(lineRec(3, HEADS[2]!, JA[2]!, [{ q: '', k: 'slang', x: 'x' }, { q: 'a', k: 'bogus', x: 'x' }])) });
+    await translateSong(source, record, options);
+    expect(record.lines[source.unique[2]!.key]).toEqual({ ja: JA[2] });
   });
 
-  it('retarget() lets the same builder accept different ids', () => {
-    const record = emptyRecord('/s', meta);
-    const builder = new RecordBuilder(source, record, [1]);
-    expect(builder.apply([{ type: 'line', uid: 2, ja: '二' }])).toBe(false);
-    builder.retarget([2]);
-    expect(builder.apply([{ type: 'line', uid: 2, ja: '二' }])).toBe(true);
-    expect(builder.added).toBe(1);
+  it('are not added to a line that was translated earlier', () => {
+    const record = newRecord();
+    record.lines[source.unique[1]!.key] = { ja: '前の訳' };
+    new RecordBuilder(source, record, [1]).apply([{
+      type: 'line', uid: 2, ja: '新しい訳', notes: noteOn([{ phrase: 'heat', kind: 'slang', text: 'x' }]),
+    }]);
+    expect(record.lines[source.unique[1]!.key]).toEqual({ ja: '前の訳' });
   });
 });
 
-describe('request shape', () => {
-  it('sends the system prompt, an output budget and an onText sink', async () => {
-    const source = makeSource(['one']);
-    script({ text: 'L1: 一\n' });
-    await translateSong(source, emptyRecord('/s', meta), options);
-    const req = chain.mock.calls[0]![1] as ChainRequest;
-    expect(req.system.length).toBeGreaterThan(100);
-    expect(req.maxOutputTokens).toBeGreaterThanOrEqual(8192);
-    expect(typeof req.onText).toBe('function');
+describe('onText verdicts (the chain falls back to another model while they are false)', () => {
+  it('is true only once a line record has been applied', async () => {
+    const source = makeSource(['one', 'two']);
+    const l1 = lineRec(1, 'one', '一');
+    script({
+      chunks: [
+        `${songRec()}\n`, // a complete song record is not progress
+        l1.slice(0, 15), // half a line
+        `${l1.slice(15)}\n`, // the line completes
+        'prose that is not a record\n',
+        `${lineRec(2, 'two', '二')}\n`,
+      ],
+    });
+    await translateSong(source, newRecord(), options);
+    expect(returned[0]).toEqual([false, false, true, true, true]);
+  });
+
+  it('never returns undefined', async () => {
+    script({ text: fullAnswer(), chunk: 5 });
+    await translateSong(makeSource(), newRecord(), options);
+    expect(returned[0]!.length).toBeGreaterThan(10);
+    expect(returned[0]!.every((v) => typeof v === 'boolean')).toBe(true);
+    expect(returned[0]!.at(-1)).toBe(true);
+    // false up to the first complete line record, true from then on
+    const first = returned[0]!.indexOf(true);
+    expect(first).toBeGreaterThan(0);
+    expect(returned[0]!.slice(0, first).every((v) => v === false)).toBe(true);
+    expect(returned[0]!.slice(first).every((v) => v === true)).toBe(true);
+  });
+
+  it('stays false for an answer without a usable line', async () => {
+    script({ chunks: ['Sorry, ', 'I cannot ', 'help.\n', `${songRec()}\n`, `${endRec()}\n`] });
+    await translateSong(makeSource(['a']), newRecord(), options);
+    expect(returned[0]).toEqual([false, false, false, false, false]);
+  });
+
+  it('stays false when every line is misaligned, so a failing stream still falls back', async () => {
+    script({ chunks: [`${lineRec(1, 'wrong head words', '訳')}\n`, `${lineRec(2, 'also wrong', '訳')}\n`] });
+    await translateSong(makeSource(['one', 'two']), newRecord(), options);
+    expect(returned[0]).toEqual([false, false]);
+  });
+
+  it('stays false when the only lines are ones that were already translated', async () => {
+    const source = makeSource(['one', 'two']);
+    const record = newRecord();
+    record.lines[source.unique[0]!.key] = { ja: '既訳' };
+    script({ chunks: [`${lineRec(1, 'one', '重複')}\n`] });
+    await translateSong(source, record, options);
+    expect(returned[0]).toEqual([false]);
   });
 });

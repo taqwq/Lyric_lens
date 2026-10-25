@@ -5,6 +5,8 @@ import type { SongMeta, SongRecord } from '../src/core/types';
 import {
   buildSong,
   emptyRecord,
+  headMatches,
+  headWords,
   isSectionHeader,
   lineKey,
   looseText,
@@ -49,9 +51,7 @@ describe('lineKey', () => {
     expect(lineKey('well‐known')).toBe('well-known');
   });
 
-  // The doc comment says edits that "only touch punctuation" must map to the same key,
-  // but only a single trailing mark is removed, so an ellipsis / doubled mark changes the key
-  // ("wait…" NFKC-expands to "wait..." and keeps two dots).
+  // The doc comment says edits that "only touch punctuation" must map to the same key.
   it('treats a trailing ellipsis like no punctuation', () => {
     expect(lineKey('Wait…')).toBe(lineKey('Wait'));
   });
@@ -115,6 +115,36 @@ describe('buildSong', () => {
     expect(song.lines[2]!.key).toBe(song.unique[0]!.key);
   });
 
+  it('numbers the occurrences of each text from 0, in reading order', () => {
+    const song = buildSong(meta, [
+      line('Hello world'), line('Something else'), line('hello  world!'), line('HELLO WORLD'), line('Something else'),
+    ]);
+    expect(song.lines.map((l) => l.occurrence)).toEqual([0, 0, 1, 2, 1]);
+    expect(song.lines.map((l) => l.uid)).toEqual([1, 2, 1, 1, 2]);
+    expect(song.lines.filter((l) => l.occurrence === 0).map((l) => l.text)).toEqual(['Hello world', 'Something else']);
+    expect(song.unique.map((u) => u.occurrences)).toEqual([3, 2]);
+  });
+
+  it('keeps counting occurrences across sections, including punctuation-only lines', () => {
+    const song = buildSong(meta, [
+      header('[Chorus]'), line('Hook'), line('!'),
+      header('[Verse]'), line('Other'), line('!'),
+      header('[Chorus]'), line('Hook'),
+    ]);
+    expect(song.lines.map((l) => [l.text, l.section, l.occurrence])).toEqual([
+      ['Hook', 0, 0], ['!', 0, 0], ['Other', 1, 0], ['!', 1, 1], ['Hook', 2, 1],
+    ]);
+  });
+
+  it('gives every distinct line occurrences 0..n-1 in order, matching the unique line total', () => {
+    const song = buildSong(meta, [line('a'), line('b'), line('A!'), line('c'), line('b'), line('a')]);
+    for (const u of song.unique) {
+      const mine = song.lines.filter((l) => l.uid === u.uid);
+      expect(mine.map((l) => l.occurrence)).toEqual(mine.map((_, i) => i));
+      expect(mine).toHaveLength(u.occurrences);
+    }
+  });
+
   it('trims line text and skips blank rows', () => {
     const song = buildSong(meta, [line('  padded  '), line('   '), line('')]);
     expect(song.lines.map((l) => l.text)).toEqual(['padded']);
@@ -137,7 +167,7 @@ describe('buildSong', () => {
 describe('missingLines / songStatus', () => {
   const source = buildSong(meta, [line('a'), line('b'), line('a'), line('c')]);
   const record = (done: string[]): SongRecord => {
-    const r = emptyRecord('/x', meta);
+    const r = emptyRecord('1', '/x', meta);
     for (const k of done) r.lines[k] = { ja: `訳:${k}` };
     return r;
   };
@@ -167,10 +197,110 @@ describe('missingLines / songStatus', () => {
     expect(songStatus(source, r)).toEqual({ kind: 'partial', missing: 1, total: 3 });
   });
 
-  it('emptyRecord carries path/title/artist and timestamps', () => {
-    const r = emptyRecord('/songs/x', meta);
-    expect(r).toMatchObject({ v: 1, path: '/songs/x', title: 'T', artist: 'A', lines: {} });
+  it('ignores a stored song record or stop when deciding what is missing', () => {
+    const r = record(['a', 'b', 'c']);
+    r.stop = { reason: 'gaps', at: 1 };
+    expect(songStatus(source, r)).toEqual({ kind: 'complete' });
+  });
+});
+
+describe('emptyRecord', () => {
+  it('carries id, path, title and artist from the meta, and starts with no lines, song or stop', () => {
+    const r = emptyRecord('4242', '/Artist-title-lyrics', { title: 'Title', artist: 'Artist', album: 'Album', about: 'About' });
+    expect(r).toMatchObject({ v: 2, id: '4242', path: '/Artist-title-lyrics', title: 'Title', artist: 'Artist', lines: {} });
+    expect(r.song).toBeUndefined();
+    expect(r.stop).toBeUndefined();
+    expect(r.model).toBeUndefined();
+    // only persisted fields: no album / about / annotations from the meta
+    expect(Object.keys(r).sort()).toEqual(['artist', 'createdAt', 'id', 'lines', 'path', 'title', 'updatedAt', 'v']);
+  });
+
+  it('stamps createdAt and updatedAt with the same time', () => {
+    const before = Date.now();
+    const r = emptyRecord('1', '/x', meta);
     expect(r.createdAt).toBe(r.updatedAt);
-    expect(r.createdAt).toBeGreaterThan(0);
+    expect(r.createdAt).toBeGreaterThanOrEqual(before);
+    expect(r.createdAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('returns a fresh lines object each time', () => {
+    const a = emptyRecord('1', '/x', meta);
+    const b = emptyRecord('1', '/x', meta);
+    a.lines.k = { ja: 'x' };
+    expect(b.lines).toEqual({});
+  });
+});
+
+describe('headWords', () => {
+  it('lowercases, folds curly quotes, drops punctuation and keeps apostrophes', () => {
+    expect(headWords('Don’t stop, NOW!')).toEqual(["don't", 'stop', 'now']);
+    expect(headWords('(Skrrt) skrrt')).toEqual(['skrrt', 'skrrt']);
+    expect(headWords('  well—known  ')).toEqual(['well', 'known']);
+  });
+
+  it('is empty for text without letters or digits', () => {
+    expect(headWords('...')).toEqual([]);
+    expect(headWords('')).toEqual([]);
+  });
+
+  it('keeps digits and non-Latin letters', () => {
+    expect(headWords('24 karat 愛してる')).toEqual(['24', 'karat', '愛してる']);
+  });
+});
+
+describe('headMatches', () => {
+  it('accepts a missing or empty head (the line is then trusted)', () => {
+    expect(headMatches(undefined, 'I woke up early')).toBe(true);
+    expect(headMatches('', 'I woke up early')).toBe(true);
+    expect(headMatches('   ', 'I woke up early')).toBe(true);
+    expect(headMatches('...', 'I woke up early')).toBe(true); // nothing to compare
+  });
+
+  it('accepts the exact first words', () => {
+    expect(headMatches('I woke up', 'I woke up early')).toBe(true);
+    expect(headMatches('Brought the heat', 'Brought the heat from the street')).toBe(true);
+    expect(headMatches('Yeah', 'Yeah')).toBe(true);
+    expect(headMatches('I woke up early today', 'I woke up')).toBe(true); // line shorter than the head
+  });
+
+  it('ignores case, curly versus straight quotes, and punctuation', () => {
+    expect(headMatches('DON’T STOP ME', "Don't stop me now")).toBe(true);
+    expect(headMatches("don't stop me", 'Don’t Stop Me Now')).toBe(true);
+    expect(headMatches('Hello, world', 'hello world, again!')).toBe(true);
+    expect(headMatches('skrrt skrrt', '(Skrrt) skrrt')).toBe(true);
+    expect(headMatches('’Cause I', "'Cause I can't stop")).toBe(true);
+  });
+
+  // headWords() keeps a leading apostrophe ("'cause"), so an echo that drops it ("Cause I")
+  // shares only one of two words with the line and is rejected, leaving a permanent gap for
+  // short lines such as "'Cause I" (src/core/song.ts:93-95, positional compare at :104).
+  it("does not reject a head that only differs by the leading apostrophe of 'Cause", () => {
+    expect(headMatches('Cause I', "'Cause I can't stop")).toBe(true);
+  });
+
+  it("treats -ing and -in' endings as the same word", () => {
+    expect(headMatches('goin up', "Goin' up in the club")).toBe(true);
+    expect(headMatches('going up', "Goin' up in the club")).toBe(true);
+    expect(headMatches("goin' up", 'Going up in the club')).toBe(true);
+    expect(headMatches("Runnin' from the", 'Running from the cops')).toBe(true);
+    expect(headMatches('Running from the', "Runnin' from the cops")).toBe(true);
+    expect(headMatches('Livin la vida', 'Living la vida loca')).toBe(true);
+  });
+
+  it('rejects a head that belongs to another line', () => {
+    expect(headMatches('Brought the heat', 'I woke up early')).toBe(false);
+    expect(headMatches('We never fall', 'Yeah')).toBe(false);
+    expect(headMatches('Yeah', 'No')).toBe(false);
+    expect(headMatches('we never', 'we always')).toBe(false); // one of two words is not enough
+    expect(headMatches('Brought the heat', '')).toBe(false);
+  });
+
+  it('only looks at the first three words of the head', () => {
+    expect(headMatches('one two three nonsense words', 'one two three four five')).toBe(true);
+  });
+
+  it('tolerates one slipped word out of three, but not a line shifted by one word', () => {
+    expect(headMatches('I woke early', 'I woke up early')).toBe(true);
+    expect(headMatches('the heat from', 'Brought the heat from the street')).toBe(false);
   });
 });

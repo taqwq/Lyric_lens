@@ -45,10 +45,17 @@ function uidOf(value: unknown): number | null {
   return m ? Number(m[1]) : null;
 }
 
+const PAIRS: Record<string, string> = { '"': '"', '“': '”', '「': '」', '『': '』' };
+
+/** Removes one pair of quotes wrapping the whole text — but not 「待て」と「行け」,
+ *  whose first and last brackets belong to different pairs. */
 function stripWrappingQuotes(text: string): string {
   const t = text.trim();
-  if (t.length >= 2 && /^["“「『]/.test(t) && /["”」』]$/.test(t)) return t.slice(1, -1).trim();
-  return t;
+  const close = PAIRS[t[0] ?? ''];
+  if (t.length < 2 || !close || !t.endsWith(close)) return t;
+  const inner = t.slice(1, -1);
+  if (inner.includes(close) || (close !== t[0] && inner.includes(t[0]!))) return t;
+  return inner.trim();
 }
 
 function notesOf(value: unknown): RawNote[] {
