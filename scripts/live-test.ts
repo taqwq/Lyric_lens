@@ -13,7 +13,7 @@ import type { SongSource } from '../src/core/types';
 import { readPage } from '../src/genius/extract';
 import { fetchAnnotations } from '../src/genius/annotations';
 import { useFetchTransport } from '../src/platform/http';
-import { memoryStorage, setKV } from '../src/platform/storage';
+import { setKV, type KV } from '../src/platform/storage';
 import { newProvider } from '../src/store/settings';
 import type { ThinkingLevel } from '../src/llm/types';
 
@@ -52,7 +52,19 @@ if (!target) {
 }
 
 useFetchTransport(true);
-setKV(memoryStorage());
+// Cooldowns persist across runs (tmp/kv.json) so exhausted models are not retried.
+function fileKV(path: string): KV {
+  const load = (): Record<string, string> => (existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {});
+  const save = (data: Record<string, string>) => writeFileSync(path, JSON.stringify(data, null, 1));
+  return {
+    get: async (k) => load()[k],
+    set: async (k, v) => { const d = load(); d[k] = v; save(d); },
+    del: async (k) => { const d = load(); delete d[k]; save(d); },
+    keys: async () => Object.keys(load()),
+  };
+}
+mkdirSync('tmp', { recursive: true });
+setKV(fileKV('tmp/kv.json'));
 const keys = env();
 const presetId = arg('preset') ?? 'gemini';
 const keyName = `${presetId.toUpperCase()}_API_KEY`;
