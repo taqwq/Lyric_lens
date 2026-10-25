@@ -42,6 +42,9 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
   -webkit-tap-highlight-color: transparent;
 }
 .ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
+/* Marked data-exclude-from-selection for Genius' own selection tools, but readers can
+   still copy the Japanese. */
+.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
 
 /* ---------- head row + preface ---------- */
 .ll-head {

@@ -52,3 +52,15 @@ describe('phraseRange', () => {
     expect(phraseRange(ex.texts[0], 'be humble', doc)).toBeNull();
   });
 });
+
+describe('locatePhrase: ellipses and dropped g', () => {
+  it('matches an ellipsis written either way', () => {
+    expect(locatePhrase('Wait… what did you say', 'wait... what')).toEqual({ start: 0, end: 10 });
+    expect(locatePhrase('Wait... what did you say', 'Wait… what')).toEqual({ start: 0, end: 12 });
+  });
+
+  it("matches nothing / nothin' / nothin", () => {
+    expect(locatePhrase("I ain't sayin' nothin' new", 'nothing new')).toEqual({ start: 15, end: 26 });
+    expect(locatePhrase('I keep running', "keep runnin'")).toEqual({ start: 2, end: 14 });
+  });
+});

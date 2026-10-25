@@ -78,45 +78,62 @@ export class LineRenderer {
       const notes = result?.notes ?? [];
       const repeat = line.occurrence > 0;
       const open = input.openIndex === i;
-      const sig = [state, line.key, result?.ja ?? '', repeat, notes.length, notes[0]?.phrase ?? '', open,
+      // `open` is deliberately not part of the signature: rebuilding would destroy the
+      // focused ※ button. aria-expanded is synced in place below.
+      const sig = [state, line.key, result?.ja ?? '', repeat, notes.length, notes[0]?.phrase ?? '',
         state === 'seam' ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ''].join('\u0001');
 
       let el = current;
       if (!el) {
-        el = h('span', { class: 'll-line', lang: 'ja' });
+        el = h('span', { class: 'll-line', lang: 'ja', 'data-exclude-from-selection': 'true' });
         isolateClicks(el);
       }
       if (this.sigs.get(i) !== sig) {
         const wasWaiting = el.dataset.state === 'empty' || el.dataset.state === 'next';
         el.dataset.state = state;
         if (repeat) el.dataset.repeat = ''; else delete el.dataset.repeat;
-        el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, repeat, open, input));
+        el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, repeat, input));
         if (state === 'filled' && wasWaiting && input.animate) {
           el.dataset.ink = '';
           setTimeout(() => { if (el) delete el.dataset.ink; }, 260);
         }
         this.sigs.set(i, sig);
       }
+      el.querySelector('.ll-mark')?.setAttribute('aria-expanded', String(open));
+      const seamButton = state === 'seam' ? el.querySelector<HTMLButtonElement>('.ll-seam .ll-btn') : null;
+      if (seamButton) seamButton.disabled = Boolean(input.seam?.button.disabled);
       if (!el.isConnected || el.previousSibling !== anchor) {
-        if (!insertAfter(anchor, el)) {
-          this.nodes.delete(i);
-          this.sigs.delete(i);
-          return;
-        }
+        // On a stale page the anchor may be detached: keep the node, the next refresh
+        // (triggered by damaged()) moves it to the new anchor.
+        if (!insertAfter(anchor, el)) return;
       }
       this.nodes.set(i, el);
     });
+
+    // Remove our nodes that no line owns any more (Genius re-render, lyric edits).
+    const live = new Set(this.nodes.values());
+    for (const container of page.containers) {
+      container.querySelectorAll<HTMLElement>('.ll-line').forEach((n) => { if (!live.has(n)) n.remove(); });
+    }
   }
 
-  private content(state: State, index: number, ja: string, noteCount: number, repeat: boolean, open: boolean, input: LinesInput): Node[] {
+  private content(state: State, index: number, ja: string, noteCount: number, repeat: boolean, input: LinesInput): Node[] {
     if (state === 'empty' || state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
     if (state === 'gap') return [h('span', { class: 'll-ja', 'aria-label': 'まだ訳せていない行' }, '—')];
     if (state === 'seam' && input.seam) {
       const { seam } = input;
-      return [h('span', { class: 'll-seam' },
-        h('span', { class: 'll-seam-text' }, seam.text),
-        h('button', { class: 'll-btn', type: 'button', disabled: Boolean(seam.button.disabled), onclick: (e: Event) => { e.preventDefault(); seam.button.onClick(); } }, seam.button.label),
-      )];
+      const button: HTMLButtonElement = h('button', {
+        class: 'll-btn',
+        type: 'button',
+        disabled: Boolean(seam.button.disabled),
+        onclick: (e: Event) => {
+          e.preventDefault();
+          if (button.disabled) return;
+          button.disabled = true; // a tap sends at most one request
+          seam.button.onClick();
+        },
+      }, seam.button.label);
+      return [h('span', { class: 'll-seam' }, h('span', { class: 'll-seam-text' }, seam.text), button)];
     }
     const out: Node[] = [h('span', { class: 'll-ja' }, ja)];
     if (repeat) out.push(h('span', { class: 'll-repeat', 'aria-label': 'くり返し' }, '↺'));
@@ -126,12 +143,19 @@ export class LineRenderer {
       const notes = (line && record?.lines[line.key]?.notes) || [];
       const first = notes[0];
       const label = notes.length > 1 ? `注 ${notes.length}件` : first ? `注：${NOTE_LABELS[first.kind]}「${first.phrase}」` : '注';
-      const mark = h('button', {
+      const mark: HTMLButtonElement = h('button', {
         class: 'll-mark',
         type: 'button',
         'aria-label': label,
-        'aria-expanded': String(open),
+        'aria-expanded': 'false',
         onclick: (e: Event) => { e.preventDefault(); input.onMark(index); },
+        onkeydown: (e: KeyboardEvent) => {
+          if (e.key === 'Escape' && mark.getAttribute('aria-expanded') === 'true') {
+            e.preventDefault();
+            e.stopPropagation();
+            input.onMark(index);
+          }
+        },
       }, '※');
       if (input.onMarkHover && matchMedia('(pointer: fine)').matches) {
         mark.addEventListener('mouseenter', () => input.onMarkHover?.(index, true));

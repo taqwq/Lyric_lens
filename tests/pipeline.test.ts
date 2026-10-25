@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateWithFallback, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
 import { LLMError, type LLMErrorKind } from '../src/llm/errors';
 import type { ProviderConfig } from '../src/llm/types';
-import { RecordBuilder, stopFromError, translateSong } from '../src/core/pipeline';
+import { RecordBuilder, stopFromError, stripGlosses, translateSong } from '../src/core/pipeline';
 import type { ProtocolEvent } from '../src/core/protocol';
 import { buildSong, emptyRecord, missingLines } from '../src/core/song';
 import type { SongMeta, SongRecord, SongSource } from '../src/core/types';
@@ -188,7 +188,7 @@ describe('translateSong: a complete song', () => {
     const onStatus = vi.fn();
     script({ text: jsonl(lineRec(1, 'one', '一')) });
     await translateSong(source, newRecord(), { ...options, signal: controller.signal, onStatus });
-    expect(chain.mock.calls[0]![2]).toEqual({ signal: controller.signal, onStatus });
+    expect(chain.mock.calls[0]![2]).toEqual({ signal: controller.signal, onStatus, onAttempt: expect.any(Function) });
   });
 
   it('keeps and replaces the model name', async () => {
@@ -871,5 +871,19 @@ describe('onText verdicts (the chain falls back to another model while they are 
     script({ chunks: [`${lineRec(1, 'one', '重複')}\n`] });
     await translateSong(source, record, options);
     expect(returned[0]).toEqual([false]);
+  });
+});
+
+describe('stripGlosses', () => {
+  it('drops parenthetical glosses when the source line has no parentheses', () => {
+    expect(stripGlosses('会計士の家にはパルメザン（大金）が山積み', "Parmesan where my accountant lives")).toBe('会計士の家にはパルメザンが山積み');
+  });
+
+  it('keeps parentheses that mirror the source ad-libs', () => {
+    expect(stripGlosses('謙虚になれ（待てよ、ビッチ）', 'Be humble (Hold up, bitch)')).toBe('謙虚になれ（待てよ、ビッチ）');
+  });
+
+  it('never empties a line that is only a parenthesis', () => {
+    expect(stripGlosses('（イェー）', 'Yeah')).toBe('（イェー）');
   });
 });

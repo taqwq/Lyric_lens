@@ -51,6 +51,8 @@ export function geniusFor(note: Note, annotations: GeniusAnnotation[] | null, li
 
 export interface OpenNote {
   index: number;
+  /** Line key: lets the note follow its line when indexes shift. */
+  key: string;
   /** Node of the line the note belongs under. */
   lineNode: HTMLElement;
   result: LineResult;
@@ -66,11 +68,15 @@ export class NoteView {
     return this.current?.index ?? null;
   }
 
+  get state(): Readonly<OpenNote> | null {
+    return this.current;
+  }
+
   open(note: OpenNote, onClose: () => void): void {
     this.close();
     this.current = note;
     const notes = note.result.notes ?? [];
-    const el = h('div', { class: 'll-note', lang: 'ja', role: 'note' },
+    const el = h('div', { class: 'll-note', lang: 'ja', role: 'note', 'data-exclude-from-selection': 'true' },
       h('div', { class: 'll-note-body' }, notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? ''))));
     isolateClicks(el);
     el.addEventListener('keydown', (e) => {

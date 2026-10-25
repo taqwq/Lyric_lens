@@ -7,20 +7,27 @@ import type { LineText } from './extract';
 const QUOTES = "'‘’ʼ`´";
 const DQUOTES = '"“”„';
 
+/** Placeholder for a dropped-g ending (nothin' / nothing / nothin). */
+const G_ENDING = '\u0000';
+
 function escapeChar(ch: string): string {
   if (QUOTES.includes(ch)) return `[${QUOTES}]`;
   if (DQUOTES.includes(ch)) return `[${DQUOTES}]`;
+  if (ch === '…') return '(?:…|\\.{3})';
+  if (ch === G_ENDING) return `(?:g|[${QUOTES}])?`;
   if (/\s/.test(ch)) return '\\s+';
   return ch.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
 }
 
-/** Regex matching the phrase with flexible quotes, spacing and case. */
+/** Regex matching the phrase with flexible quotes, spacing, ellipses and case, treating
+ *  -ing / -in' / -in as the same ending (lyrics and quotes often disagree). */
 export function phrasePattern(phrase: string): RegExp | null {
-  const trimmed = phrase.normalize('NFKC').trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, '');
-  if (!trimmed) return null;
+  let text = phrase.trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, '').replace(/\.{3}/g, '…');
+  if (!text) return null;
+  text = text.replace(/([A-Za-z]+)in(?:g|['‘’ʼ])?(?![A-Za-z])/g, `$1in${G_ENDING}`);
   let source = '';
   let lastWasSpace = false;
-  for (const ch of trimmed) {
+  for (const ch of text) {
     const space = /\s/.test(ch);
     if (space && lastWasSpace) continue;
     source += escapeChar(ch);
@@ -33,10 +40,9 @@ export function phrasePattern(phrase: string): RegExp | null {
   }
 }
 
-/** Character offsets of the phrase within the line's raw text, or null. */
+/** Character offsets of the phrase within the line's raw DOM text, or null. */
 export function locatePhrase(raw: string, phrase: string): { start: number; end: number } | null {
-  const re = phrasePattern(phrase);
-  const m = re?.exec(raw.normalize('NFKC').length === raw.length ? raw.normalize('NFKC') : raw);
+  const m = phrasePattern(phrase)?.exec(raw);
   if (!m) return null;
   return { start: m.index, end: m.index + m[0].length };
 }

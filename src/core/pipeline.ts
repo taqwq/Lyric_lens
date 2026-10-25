@@ -47,6 +47,17 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
   }
 }
 
+const GLOSS = /[（(][^（）()]{1,24}[）)]/g;
+
+/** Flash-class models keep adding dictionary glosses in parentheses ("パルメザン（大金）")
+ *  despite the prompt. When the source line has no parentheses, no parenthesis in the
+ *  translation can be an ad-lib, so they go. */
+export function stripGlosses(ja: string, source: string): string {
+  if (/[（(]/.test(source) || !GLOSS.test(ja)) return ja;
+  const stripped = ja.replace(GLOSS, '').replace(/\s{2,}/g, ' ').replace(/\s+([、。！？!?])/g, '$1').trim();
+  return stripped || ja;
+}
+
 function sameNote(a: Note, b: Note): boolean {
   return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
 }
@@ -85,7 +96,7 @@ export class RecordBuilder {
         if (raw.genius) note.genius = raw.genius;
         if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
       }
-      const result: LineResult = { ja: ev.ja };
+      const result: LineResult = { ja: stripGlosses(ev.ja, u.text) };
       if (notes.length) result.notes = notes;
       this.record.lines[u.key] = result;
       this.added += 1;
@@ -124,7 +135,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
         // record alone lets the chain fall back to another model.
         return builder.added > 0;
       },
-    }, { signal: options.signal, onStatus: options.onStatus });
+    }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset() });
     if (builder.apply(parser.flush())) options.onUpdate?.(record);
     model = result.model;
     if (result.error) stop = stopFromError(result.error);

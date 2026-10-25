@@ -26,6 +26,10 @@ export class HeadRow {
   private el: HTMLElement | null = null;
   private sig = '';
 
+  get element(): HTMLElement | null {
+    return this.el;
+  }
+
   render(page: PageSong, view: HeadView): void {
     const first = page.containers[0];
     if (!first?.isConnected) return;
@@ -37,6 +41,9 @@ export class HeadRow {
     if (sig !== this.sig) {
       this.sig = sig;
       this.el.replaceChildren(...this.content(view));
+    } else {
+      // A tapped button was locked in place; state decides whether it stays locked.
+      this.el.querySelectorAll<HTMLButtonElement>('.ll-actions .ll-btn').forEach((b, i) => { b.disabled = Boolean(view.actions[i]?.disabled); });
     }
     // Inside the first block, after Genius' header (contributors, translations…).
     const header = Array.from(first.children).find((c) => c.hasAttribute('data-exclude-from-selection') && c !== this.el) ?? null;
@@ -59,7 +66,13 @@ export class HeadRow {
           type: 'button',
           disabled: Boolean(a.disabled),
           'data-primary': a.primary ? '' : null,
-          onclick: (e: Event) => { e.preventDefault(); a.onClick(button); },
+          onclick: (e: Event) => {
+            e.preventDefault();
+            if (button.disabled) return;
+            // Lock at once; the next render rebuilds the button from state.
+            if (a.primary) button.disabled = true;
+            a.onClick(button);
+          },
         }, a.label);
         return button;
       })),
