@@ -112,7 +112,7 @@ export class GeminiProvider implements Provider {
       headers: this.headers(),
       body: JSON.stringify(body),
       signal: req.signal,
-      firstByteTimeoutMs: 180_000,
+      firstByteTimeoutMs: 90_000,
       idleTimeoutMs: 90_000,
       onText: (chunk) => { for (const payload of sse.feed(chunk)) handle(payload); },
     });

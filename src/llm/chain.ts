@@ -246,7 +246,8 @@ export async function generateWithFallback(
               }
               continue;
             }
-            if ((error.kind === 'network' || error.kind === 'timeout') && attempt === 1) {
+            // A dropped connection is worth one retry; a model that went silent is likely overloaded.
+            if (error.kind === 'network' && attempt === 1) {
               onStatus?.(`${shortModel(model)} · 再接続しています`);
               await sleep(2000, signal);
               continue;

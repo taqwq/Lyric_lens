@@ -6,6 +6,7 @@
 import { translateSong } from './core/pipeline';
 import { emptyRecord, songStatus } from './core/song';
 import type { SongRecord } from './core/types';
+import { fetchAnnotations } from './genius/annotations';
 import { isOwnNode, readPage, type PageSong } from './genius/extract';
 import { LLMError, isAbort } from './llm/errors';
 import { currentSettings, hasAnyKey, loadSettings, onSettings, patchSettings } from './store/settings';
@@ -270,7 +271,15 @@ export class App {
     this.scheduleRender();
 
     try {
-      const outcome = await translateSong(source, record, {
+      // Community annotations sharpen slang/reference notes; skip them if Genius is slow.
+      let input = source;
+      if (page.songId) {
+        run.status = 'Genius の注釈を集めています';
+        this.scheduleRender();
+        const annotations = await fetchAnnotations(page.songId);
+        if (annotations.length) input = { ...source, meta: { ...source.meta, annotations } };
+      }
+      const outcome = await translateSong(input, record, {
         providers: settings.providers,
         thinking: settings.thinking,
         signal: run.controller.signal,

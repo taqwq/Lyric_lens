@@ -152,7 +152,10 @@ export function extractMeta(doc: Document = document): SongMeta {
   if (!title && ogTitle.length) title = ogTitle.join(' – ');
   if (!artist && ogTitle.length) artist = ogArtist ?? '';
   if (!title) title = doc.title.replace(/\s*Lyrics\s*\|.*$/i, '').trim();
-  const album = text(doc, '[class*="SongHeader"] a[href*="/albums/"]') || text(doc, 'a[href*="/albums/"]');
+  // Not just any /albums/ link: the About text and "other albums" lists link to unrelated ones.
+  const album = text(doc, 'a[class*="PrimaryAlbum__Title"]')
+    || text(doc, '[class*="AlbumCredit"] a[href*="/albums/"]')
+    || text(doc, '[class*="SongHeader"] a[href*="/albums/"]');
   const aboutEl = doc.querySelector('[class*="SongDescription__Container"]') ?? doc.querySelector('[class*="About__Container"] [class*="RichText"]');
   const about = aboutEl?.textContent?.replace(/\s+/g, ' ').replace(/\b(Expand|Read More)\b\s*$/i, '').trim() ?? '';
   const meta: SongMeta = { title, artist };
