@@ -335,8 +335,8 @@ describe('notes', () => {
   it('caps the notes that were queued before the line arrived', () => {
     const record = emptyRecord('/s', meta);
     const builder = new RecordBuilder(source, record, [2]);
-    const events = ['a', 'b', 'c', 'd'].map((span, i) => ({
-      type: 'note', uid: 2, kind: 'idiom', span: i === 0 ? 'heat' : 'street', text: span, unsure: false,
+    const events = ['heat', 'street', 'brought', 'other'].map((span) => ({
+      type: 'note', uid: 2, kind: 'idiom', span, text: span, unsure: false,
     }) as const);
     builder.apply([...events, { type: 'line', uid: 2, ja: '二' }]);
     expect(record.lines[source.unique[1]!.key]!.notes).toHaveLength(3);
@@ -345,7 +345,7 @@ describe('notes', () => {
   // Both notes below are queued before the line arrives. The post-line path drops a note with
   // the same span and kind (see test above) but the pre-line queue does not, so the same
   // explanation is stored twice.
-  it.fails('also drops duplicate notes that were queued before the line arrived', () => {
+  it('also drops duplicate notes that were queued before the line arrived', () => {
     const record = emptyRecord('/s', meta);
     const builder = new RecordBuilder(source, record, [2]);
     const dup = { type: 'note', uid: 2, kind: 'slang', span: 'heat', text: 'same', unsure: false } as const;

@@ -40,6 +40,15 @@ export interface SongMeta {
   album?: string;
   /** Genius' own "About" text: background for the model, never shown verbatim. */
   about?: string;
+  /** Genius community annotations (fetched when translating): grounding for notes. */
+  annotations?: GeniusAnnotation[];
+}
+
+export interface GeniusAnnotation {
+  /** The annotated lyric fragment. */
+  fragment: string;
+  text: string;
+  votes: number;
 }
 
 /** One rendered lyric line on the page (every occurrence, in reading order). */
