@@ -17,6 +17,7 @@
 // @grant        GM.deleteValue
 // @grant        GM.listValues
 // @grant        GM_registerMenuCommand
+// @grant        GM.registerMenuCommand
 // @grant        GM_info
 // @connect      generativelanguage.googleapis.com
 // @connect      api.groq.com
