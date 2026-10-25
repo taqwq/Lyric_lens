@@ -41,6 +41,7 @@ const header = [
   '// @grant        GM.deleteValue',
   '// @grant        GM.listValues',
   '// @grant        GM_registerMenuCommand',
+  '// @grant        GM.registerMenuCommand',
   '// @grant        GM_info',
   ...connect.map((host) => `// @connect      ${host}`),
   '// @run-at       document-idle',
