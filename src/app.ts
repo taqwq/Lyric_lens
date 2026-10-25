@@ -83,7 +83,11 @@ export class App {
         if (pathChanged) {
           this.loadedPath = page.path;
           this.panelOpen = false;
-          this.record = this.runs.get(page.path)?.record ?? await loadSong(page.path);
+          const stored = this.runs.get(page.path)?.record ?? await loadSong(page.path);
+          // Guard against a stale canonical URL after client-side navigation: never show
+          // (or later overwrite) another song's translations.
+          const title = page.source.meta.title;
+          this.record = stored && stored.title && title && stored.title !== title ? null : stored;
         }
         this.page = page;
         this.detectTheme();
