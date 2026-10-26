@@ -7,6 +7,7 @@ import {
   emptyRecord,
   headMatches,
   headWords,
+  isMostlyJapanese,
   isSectionHeader,
   lineKey,
   looseText,
@@ -161,6 +162,38 @@ describe('buildSong', () => {
     expect(new Set([song.lines[1]!.uid, song.lines[2]!.uid, song.lines[3]!.uid]).size).toBe(3);
     expect(song.lines.every((l) => l.key !== '')).toBe(true);
     expect(song.lines.every((l, i) => l.index === i)).toBe(true);
+  });
+});
+
+describe('isMostlyJapanese', () => {
+  const of = (...texts: string[]) => buildSong(meta, texts.map(line));
+
+  it('is true when most lines are kana/kanji with almost no Latin letters', () => {
+    expect(isMostlyJapanese(of('きみのこえが とおくで ひびく', '夜明け前の街を歩く', 'La la la', 'もういちど あしたへ'))).toBe(true);
+  });
+
+  it('is false for an English song with a few Japanese words', () => {
+    expect(isMostlyJapanese(of('I walk the quiet street', 'きみ (yeah)', 'Hold the light', 'Down the road we go'))).toBe(false);
+  });
+
+  it('is false below four lines', () => {
+    expect(isMostlyJapanese(of('きみのこえが', '夜明け前の街を歩く', 'もういちど あしたへ'))).toBe(false);
+    expect(isMostlyJapanese(of())).toBe(false);
+  });
+
+  it('ignores a bracketed Latin ad-lib but not Latin outside brackets', () => {
+    expect(isMostlyJapanese(of('きみの声 (oh yeah)', '夜明け前の街（yeah yeah）', '歩いていく', 'もういちど'))).toBe(true);
+    expect(isMostlyJapanese(of('きみの声 baby', '夜明け前 baby', '歩いていく', 'もういちど'))).toBe(false);
+  });
+
+  it('needs 60% of the lines: 3 of 5 passes, 2 of 5 does not', () => {
+    expect(isMostlyJapanese(of('きみの声', '夜明け前', '歩いていく', 'Hold the light', 'Down the road'))).toBe(true);
+    expect(isMostlyJapanese(of('きみの声', '夜明け前', 'Hold the light', 'Down the road', 'Run away'))).toBe(false);
+  });
+
+  it('does not count section headers (buildSong drops them)', () => {
+    const song = buildSong(meta, [header('[Verse 1]'), line('きみの声'), line('夜明け前'), header('[Chorus]'), line('歩いていく'), line('もういちど')]);
+    expect(isMostlyJapanese(song)).toBe(true);
   });
 });
 

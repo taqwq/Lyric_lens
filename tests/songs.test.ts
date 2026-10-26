@@ -180,6 +180,51 @@ describe('SaveQueue', () => {
     await vi.advanceTimersByTimeAsync(700);
     await vi.waitFor(async () => expect(await loadSong('a')).not.toBeNull());
   });
+
+  /** A store whose writes fail while `failing.on` is set. */
+  function flakyStorage(): { failing: { on: boolean } } {
+    const inner = memoryStorage();
+    const failing = { on: true };
+    setKV({ ...inner, set: async (key, value) => { if (failing.on) throw new Error('quota'); await inner.set(key, value); } });
+    return { failing };
+  }
+
+  it('keeps the record pending when the save fails, and saves it on the next flush', async () => {
+    const { failing } = flakyStorage();
+    const q = new SaveQueue(700);
+    q.schedule(rec('a'));
+    await expect(q.flush()).rejects.toThrow('quota');
+    failing.on = false;
+    expect(await loadSong('a')).toBeNull();
+    await q.flush();
+    expect(await loadSong('a')).not.toBeNull();
+  });
+
+  it('keeps a newer record scheduled during the failing save', async () => {
+    const { failing } = flakyStorage();
+    const q = new SaveQueue(700);
+    q.schedule(rec('old'));
+    const flushing = q.flush();
+    q.schedule(rec('new'));
+    await expect(flushing).rejects.toThrow('quota');
+    failing.on = false;
+    await q.flush();
+    expect(await loadSong('new')).not.toBeNull();
+    expect(await loadSong('old')).toBeNull();
+  });
+
+  it('logs a failed timer save instead of rejecting unhandled', async () => {
+    const { failing } = flakyStorage();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const q = new SaveQueue(700);
+    q.schedule(rec('a'));
+    await vi.advanceTimersByTimeAsync(700);
+    expect(log).toHaveBeenCalled();
+    failing.on = false;
+    await q.flush();
+    expect(await loadSong('a')).not.toBeNull();
+    log.mockRestore();
+  });
 });
 
 /* ---------- loadSong ---------- */

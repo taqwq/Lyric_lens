@@ -40,6 +40,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | State | Head row shows | Line nodes | The reader can |
 |---|---|---|---|
 | **S0 No lyrics** (no containers, or 0 translatable lines) | Nothing. Lyric Lens is invisible. | — | — |
+| **SJ Japanese lyrics** (≥60% of lines are kana/kanji with almost no Latin letters, and nothing is stored) | `この曲は日本語の歌詞です` (label colour) | None | Nothing: no request is offered or sent. A song with a stored edition is shown as usual. |
 | **S1 No API key** | `日本語訳には無料のAPIキーが必要です` + `キーを設定` | None | Open the first-run sheet |
 | **S2 Never read** | `日本語で読む` (primary) · `設定` | None | Start the request |
 | **S2q Quota known exhausted** (every configured model is in the engine's exhausted registry) | `今日の無料枠は終わりました。{when}から訳せます` (label colour) · `設定`. When a free service has no key yet: a second line `{service}の無料キーを足すと、今日も続けて訳せます` and `キーを足す` (opens settings at that service's row) instead of `設定`. | None | Nothing is sent. At reset the button becomes `日本語で読む` again. |
@@ -101,6 +102,8 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `{n}行が訳せていません` · `抜けた行を訳す`
 - `歌詞が更新され、まだ訳していない行が{n}行あります` · `新しい行を訳す`
 - `訳し直しています · 終わるまで今の訳を表示します`
+- `この曲は日本語の歌詞です` (SJ)
+- `保存できませんでした` with `この画面では読めますが、ページを閉じると消えます` (the edition could not be stored; it stays on screen and is not replaced by a same-song refresh)
 - `訳し直しは途中で止まりました。今の訳はそのままです`, with the reason on a second line: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `接続が切れました` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
 
 **Preface**
@@ -355,4 +358,10 @@ Amendments made during implementation:
 18. **Translation post-processing.** Half-width `(…)` become `（…）`; a note's phrase quoted in pieces (`a / b`, `a … b`) is widened to the line's own span so the underline can find it; a slang or idiom note whose first sentence only defines a meaning the translation already says is trimmed or dropped (when the translation kept the word itself, the definition stays: it is what the reader needs).
 19. **The fallback chain keeps its cooldown table honest.** A model that succeeds is un-benched; one that breaks mid-stream (503, 429) is benched. When every model is cooling down, the reader is told the real wait: a per-minute limit is not reported as today's quota.
 
-Each of these came out of three rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.
+20. **Japanese songs are left alone** (SJ): translating Japanese into Japanese would spend a request for nothing.
+21. **A storage failure never erases what is on screen.** The edition is shown first and saved second; a failed save says so (S8f) and keeps the edition until the page closes. A failed lock release or a stale page during client-side navigation can no longer leave the tab stuck or write one song's lines under another's id.
+22. **A failed Genius annotation fetch is retried** on the next tap instead of being remembered as "no annotations".
+23. **Sound-only ad-libs stay sounds** (ayy, uh, skrrt, funk → エイ, アー, スカー, ファンク): they are never given an invented meaning. The preface is held to one plain sentence for 誰が誰に (≤40 characters, no bracketed asides) and what the lyrics support for この曲は (≤80 characters); the song-wide note ceiling is enforced in code (wordplay and ambiguity may use two extra slots).
+24. **Accessibility.** The head row's status is one persistent polite live region updated in place (so streaming does not re-announce it); gap and repeat marks are labelled images; buttons dim while pressed on touch, and hover styles apply only where hover exists.
+
+Each of these came out of four rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.

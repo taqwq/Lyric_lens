@@ -66,6 +66,21 @@ export function buildSong(meta: SongMeta, rows: RawLyricRow[]): SongSource {
   return { meta, sections, lines, unique };
 }
 
+/** The lyrics are already Japanese: most lines hold kana/kanji and almost no Latin letters
+ *  (a bracketed ad-lib like "(yeah)" does not count). Kept strict so an English song with a
+ *  few Japanese words is unaffected. Header rows are already excluded by buildSong. */
+export function isMostlyJapanese(source: SongSource): boolean {
+  const lines = source.lines;
+  if (lines.length < 4) return false;
+  let ja = 0;
+  for (const l of lines) {
+    const outside = l.text.replace(/\([^)]*\)|（[^）]*）/g, '');
+    const latin = (outside.match(/[A-Za-z]/g) ?? []).length;
+    if (/[぀-ヿ一-鿿]/.test(outside) && latin < 3) ja += 1;
+  }
+  return ja / lines.length >= 0.6;
+}
+
 export function missingLines(source: SongSource, record: SongRecord | null | undefined): UniqueLine[] {
   if (!record) return source.unique.slice();
   return source.unique.filter((u) => !record.lines[u.key]?.ja);

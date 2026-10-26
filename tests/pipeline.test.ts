@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateWithFallback, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
 import { LLMError, type LLMErrorKind } from '../src/llm/errors';
 import type { ProviderConfig } from '../src/llm/types';
-import { RecordBuilder, contiguousPhrase, stopFromError, stripGlosses, translateSong, trimDefinition, widenParens } from '../src/core/pipeline';
+import { RecordBuilder, contiguousPhrase, stopFromError, stripGlosses, tidyWhat, tidyWho, translateSong, trimDefinition, widenParens } from '../src/core/pipeline';
 import type { ProtocolEvent } from '../src/core/protocol';
 import { buildSong, emptyRecord, missingLines } from '../src/core/song';
 import type { Note, NoteKind, SongMeta, SongRecord, SongSource } from '../src/core/types';
@@ -651,6 +651,45 @@ describe('the song record', () => {
     new RecordBuilder(source, record, [1]).apply([{ type: 'song', who: '新', what: '完全' }]);
     expect(record.song).toEqual({ who: '新', what: '完全' });
   });
+
+  it('stores who without its parenthetical aside and what as at most two sentences', () => {
+    const record = newRecord();
+    new RecordBuilder(makeSource(), record, [1]).apply([
+      { type: 'song', who: '俺が元恋人に（車内で）', what: '一文目。二文目。三文目。', tone: '強気' },
+    ]);
+    expect(record.song).toEqual({ who: '俺が元恋人に', what: '一文目。二文目。', tone: '強気' });
+  });
+});
+
+describe('tidyWho', () => {
+  it('drops a parenthetical aside, full-width or ASCII', () => {
+    expect(tidyWho('語り手が別れた恋人に（深夜の車内で未練を抱えつつ）')).toBe('語り手が別れた恋人に');
+    expect(tidyWho('A (B) and C')).toBe('A and C');
+    expect(tidyWho('俺が仲間に(MVの設定)語りかける')).toBe('俺が仲間に語りかける');
+  });
+
+  it('keeps the original when stripping would leave nothing', () => {
+    expect(tidyWho('（不明）')).toBe('（不明）');
+  });
+
+  it('leaves a who without parentheses as it is', () => {
+    expect(tidyWho('俺が聴き手に')).toBe('俺が聴き手に');
+  });
+});
+
+describe('tidyWhat', () => {
+  it('keeps the first two sentences', () => {
+    expect(tidyWhat('一文目。二文目。三文目。')).toBe('一文目。二文目。');
+  });
+
+  it('keeps one or two sentences as they are, with or without the final 。', () => {
+    expect(tidyWhat('一文目。')).toBe('一文目。');
+    expect(tidyWhat('一文目。二文目')).toBe('一文目。二文目');
+  });
+
+  it('returns text without any 。 unchanged', () => {
+    expect(tidyWhat('句点なし')).toBe('句点なし');
+  });
 });
 
 describe('RecordBuilder', () => {
@@ -724,7 +763,9 @@ describe('RecordBuilder', () => {
 
 describe('notes', () => {
   const source = makeSource();
-  const targets = [1, 2, 3, 4];
+  // Wider than the source on purpose: a long target list makes the song-wide ceiling
+  // (noteBudget) roomy, so these tests exercise the per-line cap and the dedupe only.
+  const targets = Array.from({ length: 30 }, (_, i) => i + 1);
   const noteOn = (raw: Array<{ phrase: string; kind: 'slang' | 'wordplay' | 'reference' | 'idiom' | 'ambiguous'; text: string; conjecture?: boolean; genius?: string }>) =>
     raw.map((n) => ({ conjecture: false, ...n }));
 
@@ -789,6 +830,8 @@ describe('notes', () => {
 
   it('caps and dedupes notes that come through the whole pipeline', async () => {
     const record = newRecord();
+    // 15 lines: the song-wide ceiling is then 3, as many as one line may keep.
+    const wide = makeSource([...LYRICS, ...Array.from({ length: 11 }, (_, i) => `Filler line ${i + 1}`)]);
     const many = [
       { q: 'heat', k: 'slang', x: 'a' },
       { q: 'Heat', k: 'slang', x: 'dup' },
@@ -798,8 +841,8 @@ describe('notes', () => {
       { q: 'from', k: 'reference', x: 'over the cap' },
     ];
     script({ text: jsonl(songRec(), lineRec(2, HEADS[1]!, JA[1]!, many)) });
-    await translateSong(source, record, options);
-    expect(record.lines[source.unique[1]!.key]!.notes).toEqual([
+    await translateSong(wide, record, options);
+    expect(record.lines[wide.unique[1]!.key]!.notes).toEqual([
       { kind: 'slang', phrase: 'heat', text: 'a' },
       { kind: 'wordplay', phrase: 'street', text: 'b' },
       { kind: 'idiom', phrase: 'Brought', text: 'c' },
@@ -820,6 +863,88 @@ describe('notes', () => {
       type: 'line', uid: 2, ja: '新しい訳', notes: noteOn([{ phrase: 'heat', kind: 'slang', text: 'x' }]),
     }]);
     expect(record.lines[source.unique[1]!.key]).toEqual({ ja: '前の訳' });
+  });
+});
+
+describe('the song-wide note ceiling', () => {
+  // invented lines; 12 unique lines make the ceiling 2 (noteBudget)
+  const TWELVE = [
+    'Velvet Motors on my wrist', 'Cold Brew in the morning', 'Uncle Ray pulled up', 'Nothing left to say',
+    'Stacking bread all day', 'Moving through the night', 'Told them hit the bricks', 'Home by the sunrise',
+    'Counting every dime', 'Lights stay on', 'Never looking back', 'Keep it going',
+  ];
+  const source = makeSource(TWELVE);
+  const all = TWELVE.map((_, i) => i + 1);
+  const note = (phrase: string, kind: NoteKind, text: string) => ({ phrase, kind, text, conjecture: false });
+  const line = (uid: number, notes: ReturnType<typeof note>[], ja = `訳${uid}`): ProtocolEvent => ({ type: 'line', uid, ja, notes });
+  const notesOf = (record: SongRecord, uid: number) => record.lines[source.unique[uid - 1]!.key]?.notes;
+
+  it('lets the first notes through up to the ceiling, then only wordplay and ambiguous ones', () => {
+    const record = newRecord();
+    new RecordBuilder(source, record, all).apply([
+      line(1, [note('Velvet Motors', 'reference', '腕時計の話。')]),
+      line(2, [note('Cold Brew', 'reference', '飲み物の話。')]),
+      line(3, [note('Uncle Ray', 'reference', '親戚を指す呼び名。')]),
+      line(5, [note('bread', 'wordplay', '金と食べ物の二重の意味。')]),
+      line(7, [note('hit the bricks', 'idiom', '出ていくという慣用句。')]),
+    ]);
+    expect(notesOf(record, 1)).toHaveLength(1);
+    expect(notesOf(record, 2)).toHaveLength(1);
+    expect(notesOf(record, 3)).toBeUndefined();
+    expect(notesOf(record, 5)).toEqual([{ kind: 'wordplay', phrase: 'bread', text: '金と食べ物の二重の意味。' }]);
+    expect(notesOf(record, 7)).toBeUndefined();
+    // the lines themselves are stored whether or not their notes got in
+    expect(record.lines[source.unique[2]!.key]).toEqual({ ja: '訳3' });
+    expect(record.lines[source.unique[6]!.key]).toEqual({ ja: '訳7' });
+  });
+
+  it('allows only two bonus notes beyond the ceiling', () => {
+    const record = newRecord();
+    new RecordBuilder(source, record, all).apply([
+      line(1, [note('Velvet Motors', 'reference', 'a')]),
+      line(2, [note('Cold Brew', 'reference', 'b')]),
+      line(5, [note('bread', 'wordplay', 'c')]),
+      line(6, [note('night', 'ambiguous', 'd')]),
+      line(9, [note('dime', 'wordplay', 'e')]),
+    ]);
+    expect([1, 2, 5, 6, 9].map((uid) => notesOf(record, uid)?.length ?? 0)).toEqual([1, 1, 1, 1, 0]);
+  });
+
+  it('counts across batches, and a note rejected on one line does not stop the line\'s other notes', () => {
+    const record = newRecord();
+    const builder = new RecordBuilder(source, record, all);
+    builder.apply([line(1, [note('Velvet Motors', 'reference', 'a')])]);
+    builder.apply([line(2, [note('Cold Brew', 'reference', 'b'), note('Cold', 'slang', 'over the ceiling')])]);
+    builder.apply([line(3, [note('Uncle Ray', 'reference', 'c'), note('Uncle', 'ambiguous', 'bonus')])]);
+    expect(notesOf(record, 2)!.map((n) => n.text)).toEqual(['b']);
+    expect(notesOf(record, 3)!.map((n) => n.text)).toEqual(['bonus']);
+  });
+
+  it('is not used up by a duplicate within a line, nor by a definition that gets trimmed away', () => {
+    const record = newRecord();
+    new RecordBuilder(source, record, all).apply([
+      line(1, [note('Velvet', 'reference', 'a'), note('velvet', 'reference', 'dup'), note('Motors', 'slang', '腕時計のこと')], '腕時計をはめてる'),
+      line(2, [note('Cold Brew', 'reference', 'b')]),
+      line(3, [note('Uncle Ray', 'reference', 'c')]),
+    ]);
+    // L1 keeps 'a' (the duplicate and the pure definition do not count); L2 takes the second slot
+    expect(notesOf(record, 1)!.map((n) => n.text)).toEqual(['a']);
+    expect(notesOf(record, 2)!.map((n) => n.text)).toEqual(['b']);
+    expect(notesOf(record, 3)).toBeUndefined();
+  });
+
+  it('counts only this run\'s targets: notes already stored are not part of the ceiling', () => {
+    const record = newRecord();
+    for (const uid of [1, 2, 3, 4]) record.lines[source.unique[uid - 1]!.key] = { ja: `前${uid}`, notes: [{ kind: 'reference', phrase: 'x', text: 'earlier' }] };
+    // 8 lines left to translate: the ceiling for this run is 2 regardless of the stored notes
+    new RecordBuilder(source, record, [5, 6, 7, 8, 9, 10, 11, 12]).apply([
+      line(5, [note('bread', 'reference', 'a')]),
+      line(6, [note('night', 'reference', 'b')]),
+      line(7, [note('bricks', 'reference', 'c')]),
+    ]);
+    expect(notesOf(record, 5)).toHaveLength(1);
+    expect(notesOf(record, 6)).toHaveLength(1);
+    expect(notesOf(record, 7)).toBeUndefined();
   });
 });
 
@@ -987,7 +1112,8 @@ describe('trimDefinition', () => {
   it('runs inside the RecordBuilder: a dropped definition does not use up a slot of the cap', () => {
     const source = makeSource();
     const record = newRecord();
-    new RecordBuilder(source, record, [2]).apply([{
+    // a long target list keeps the song-wide note ceiling out of this per-line test
+    new RecordBuilder(source, record, Array.from({ length: 30 }, (_, i) => i + 1)).apply([{
       type: 'line', uid: 2, ja: JA[1]!, notes: [
         { phrase: 'heat', kind: 'slang', text: '熱気のこと。', conjecture: false },
         { phrase: 'street', kind: 'slang', text: '通りを指すスラング。ここでは育った場所への誇りを示している。', conjecture: false },

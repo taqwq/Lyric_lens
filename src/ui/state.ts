@@ -22,7 +22,7 @@ export interface SeamSpec {
   button: ActionSpec;
 }
 
-export type StateName = 'S1' | 'S2' | 'S2b' | 'S2q' | 'S2f' | 'S3' | 'S4' | 'S4m' | 'S5' | 'S5g' | 'S6' | 'S7' | 'S8' | 'S8f';
+export type StateName = 'S1' | 'SJ' | 'S2' | 'S2b' | 'S2q' | 'S2f' | 'S3' | 'S4' | 'S4m' | 'S5' | 'S5g' | 'S6' | 'S7' | 'S8' | 'S8f';
 
 export interface ViewInput {
   now: number;
@@ -44,6 +44,8 @@ export interface ViewInput {
   /** Stop recorded on the edition on screen. */
   stop: StopInfo | undefined;
   hasPreface: boolean;
+  /** The lyrics are already Japanese (isMostlyJapanese): nothing to translate, no request. */
+  japanese?: boolean;
   running: 'none' | 'here' | 'here-retranslate';
   /** Another tab is writing this song. */
   mirrored: boolean;
@@ -197,6 +199,8 @@ export function decide(i: ViewInput): Decision {
 
   const stop = liveStop(i.stop, i);
   if (!i.done) {
+    // SJ: Japanese lyrics need no translation; say so quietly instead of offering the start button.
+    if (i.japanese) return { state: 'SJ', status: 'この曲は日本語の歌詞です', tone: 'muted', actions: [], preface: false, lines: none };
     if (!i.hasKey) {
       return { state: 'S1', status: '日本語訳には無料のAPIキーが必要です', actions: [{ id: 'firstRun', label: 'キーを設定', primary: true }], preface: false, lines: none };
     }

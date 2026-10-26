@@ -8,7 +8,7 @@ import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
 import { LLMError } from '../llm/errors';
 import type { ProviderConfig, ThinkingLevel } from '../llm/types';
-import { buildPrompt } from './prompt';
+import { buildPrompt, noteBudget } from './prompt';
 import { ProtocolParser, type ProtocolEvent } from './protocol';
 import { headMatches, looseText, missingLines } from './song';
 import type { LineResult, Note, SongRecord, SongSource, StopInfo } from './types';
@@ -143,8 +143,23 @@ function sameNote(a: Note, b: Note): boolean {
   return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
 }
 
+/** The preface's who is one short sentence: a parenthetical aside (setting, MV, career) is
+ *  the model over-explaining, so it goes. If that would leave nothing, the original stays. */
+export function tidyWho(who: string): string {
+  return who.replace(/\s*[（(][^（）()]*[）)]/g, '').trim() || who;
+}
+
+/** The preface's what is at most two sentences. Without a 。 the text is one sentence. */
+export function tidyWhat(what: string): string {
+  return (what.match(/[^。]+。?/g) ?? [what]).slice(0, 2).join('');
+}
+
 export class RecordBuilder {
   private readonly targets: Set<number>;
+  /** Notes this request may still add song-wide (the prompt states the same ceiling). */
+  private notesLeft: number;
+  /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only. */
+  private bonusLeft = 2;
   /** Distinct lines accepted in this request. */
   added = 0;
   /** Line records dropped because their echoed first words did not match the line. */
@@ -154,6 +169,7 @@ export class RecordBuilder {
 
   constructor(private readonly source: SongSource, readonly record: SongRecord, targets: number[]) {
     this.targets = new Set(targets);
+    this.notesLeft = noteBudget(targets.length);
   }
 
   apply(events: ProtocolEvent[]): boolean {
@@ -161,7 +177,7 @@ export class RecordBuilder {
     for (const ev of events) {
       if (ev.type === 'song') {
         if (this.record.song?.who && this.record.song.what) continue;
-        this.record.song = { who: ev.who, what: ev.what, ...(ev.tone ? { tone: ev.tone } : {}), ...(ev.motifs ? { motifs: ev.motifs } : {}) };
+        this.record.song = { who: tidyWho(ev.who), what: tidyWhat(ev.what), ...(ev.tone ? { tone: ev.tone } : {}), ...(ev.motifs ? { motifs: ev.motifs } : {}) };
         changed = true;
         continue;
       }
@@ -184,7 +200,13 @@ export class RecordBuilder {
         // A dropped definition does not use up a slot of the cap.
         const note = trimDefinition(built, ev.ja);
         if (!note) continue;
-        if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
+        if (notes.length >= MAX_NOTES_PER_LINE || notes.some((n) => sameNote(n, note))) continue;
+        // Over the song-wide ceiling only wordplay and ambiguous notes (the prompt's top
+        // priorities) still get in, a few of them.
+        if (this.notesLeft > 0) this.notesLeft -= 1;
+        else if ((note.kind === 'wordplay' || note.kind === 'ambiguous') && this.bonusLeft > 0) this.bonusLeft -= 1;
+        else continue;
+        notes.push(note);
       }
       const result: LineResult = { ja: widenParens(stripGlosses(ev.ja, u.text)) };
       if (notes.length) result.notes = notes;
