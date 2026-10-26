@@ -63,6 +63,10 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
 .ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
 .ll-status[data-tone="muted"] { color: var(--ll-label); }
+/* An empty live region stays in the accessibility tree (never `hidden`) so that its next text is
+   announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap
+   and its 14em basis would push the actions to the right edge. */
+.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }
 .ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }
 .ll-btn {
   all: unset;
@@ -76,9 +80,12 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
   cursor: pointer;
   white-space: nowrap;
 }
-.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }
+/* Hover only where a pointer can hover: on touch the underline would stick to the last tapped button. */
+@media (hover: hover) { .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; } }
 .ll-btn[data-primary] { font-size: 15px; }
 .ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
+/* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
+.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }
 .ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {
   outline: 2px solid var(--ll-accent);
   outline-offset: 2px;

@@ -32,6 +32,9 @@ let prefaceSeq = 0;
 export class HeadRow {
   private el: HTMLElement | null = null;
   private sig = '';
+  /** The live region outlives every rebuild of the row: a region inserted already holding its
+   *  text is not announced, one whose text changes in place is. */
+  private statusEl: HTMLSpanElement | null = null;
   private readonly whatId = `ll-preface-what-${(prefaceSeq += 1)}`;
 
   get element(): HTMLElement | null {
@@ -73,6 +76,7 @@ export class HeadRow {
     this.el?.remove();
     this.el = null;
     this.sig = '';
+    this.statusEl = null;
   }
 
   private focusedSlot(): { kind: 'action'; index: number } | { kind: 'preface' } | null {
@@ -93,9 +97,20 @@ export class HeadRow {
     (target ?? el.querySelector<HTMLElement>('.ll-actions .ll-btn'))?.focus({ preventScroll: true });
   }
 
+  /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
+   *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
+  private statusNode(view: HeadView): HTMLSpanElement {
+    const el = this.statusEl ?? (this.statusEl = h('span', { class: 'll-status', role: 'status', 'aria-live': 'polite' }));
+    el.dataset.tone = view.tone ?? 'normal';
+    if (el.textContent !== view.status) el.textContent = view.status;
+    if (view.status) delete el.dataset.empty;
+    else el.dataset.empty = '1';
+    return el;
+  }
+
   private content(view: HeadView): Node[] {
     const row = h('div', { class: 'll-head-row', dataset: { bare: view.status ? '' : '1' } },
-      h('span', { class: 'll-status', dataset: { tone: view.tone ?? 'normal' }, role: 'status', 'aria-live': 'polite', hidden: !view.status }, view.status),
+      this.statusNode(view),
       h('span', { class: 'll-actions' }, view.actions.map((a) => {
         const button: HTMLButtonElement = h('button', {
           class: 'll-btn',

@@ -113,6 +113,10 @@ describe('states', () => {
     const gap = r.nodeFor(1)!.querySelector('.ll-ja')!;
     expect(gap.textContent).toBe('—');
     expect(gap.getAttribute('aria-label')).toBe('まだ訳せていない行');
+    // aria-label on a generic span is ignored by VoiceOver/TalkBack: the span is an image.
+    expect(gap.getAttribute('role')).toBe('img');
+    // A translated line's text is plain text, not an image.
+    expect(r.nodeFor(0)!.querySelector('.ll-ja')!.hasAttribute('role')).toBe(false);
   });
 
   it('gaps beat slots', () => {
@@ -259,7 +263,9 @@ describe('repeats', () => {
     const mark = repeat.querySelector('.ll-repeat')!;
     expect(mark.textContent).toBe('↺');
     expect(mark.getAttribute('aria-label')).toBe('くり返し');
+    expect(mark.getAttribute('role')).toBe('img');
     expect(repeat.querySelector('.ll-ja')!.textContent).toBe('ひとり歩く');
+    expect(repeat.querySelector('.ll-ja')!.hasAttribute('role')).toBe(false);
   });
 
   it('an empty slot for a repeat has data-repeat but no ↺', () => {

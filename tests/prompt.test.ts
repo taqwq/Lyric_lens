@@ -64,6 +64,24 @@ describe('SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toContain('原文の語も落とさない');
   });
 
+  it('writes sound ad-libs as katakana sounds, not as words, and keeps address terms translated', () => {
+    expect(SYSTEM_PROMPT).toContain('音のままのカタカナ');
+    expect(SYSTEM_PROMPT).toContain('エイ');
+    expect(SYSTEM_PROMPT).toContain('motifs に入れるときも ja はそのカタカナにする');
+    expect(SYSTEM_PROMPT).toContain('音のまま（エイ／アー）訳に残し、「なあ」「だろ」のような同意を求める語にしない');
+    expect(SYSTEM_PROMPT).not.toContain('ayy／uh などのアドリブも訳に残す。');
+    // address terms stay in the keep-the-word bullet, translated as address terms
+    expect(SYSTEM_PROMPT).toContain('行頭・行末の呼びかけ（nigga／motherfucker／homie／girl など）');
+    // the katakana rule names only the sounds, never words that carry meaning
+    expect(SYSTEM_PROMPT).not.toMatch(/(?:hold up|bitch|homie)[^。]*音のままのカタカナ/);
+  });
+
+  it('limits the preface to one short who and a plain, short what', () => {
+    expect(SYSTEM_PROMPT).toContain('「誰が誰に」の1文（40字以内。括弧書きやMV・経歴の情報は書かない）');
+    expect(SYSTEM_PROMPT).toContain('歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）');
+    expect(SYSTEM_PROMPT).not.toContain('あらすじではなく狙いや構図');
+  });
+
   it('asks for one contiguous quoted phrase and no dictionary definitions in notes', () => {
     expect(SYSTEM_PROMPT).toContain('q は原文の行の連続した一部をそのまま1つ');
     expect(SYSTEM_PROMPT).toContain('文頭でも文末でも');

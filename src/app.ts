@@ -4,7 +4,7 @@
  * States follow docs/DESIGN.md §3 (S0–S8f).
  */
 import { translateSong } from './core/pipeline';
-import { emptyRecord, missingLines } from './core/song';
+import { emptyRecord, isMostlyJapanese, missingLines } from './core/song';
 import type { GeniusAnnotation, SongRecord } from './core/types';
 import { fetchAnnotations } from './genius/annotations';
 import { isOwnNode, readPage, type PageSong } from './genius/extract';
@@ -43,6 +43,20 @@ function hasLines(record: SongRecord | null | undefined): boolean {
   return Boolean(record && Object.keys(record.lines).length);
 }
 
+/** viewInput runs on every render; the language of a page's lyrics does not change. */
+const japaneseCache = new WeakMap<PageSong['source'], boolean>();
+function isJapanese(page: PageSong): boolean {
+  let known = japaneseCache.get(page.source);
+  if (known === undefined) {
+    known = isMostlyJapanese(page.source);
+    japaneseCache.set(page.source, known);
+  }
+  return known;
+}
+
+/** Head-row notice when the finished edition could not be stored. */
+const SAVE_FAILED = { status: '保存できませんでした', detail: 'この画面では読めますが、ページを閉じると消えます' };
+
 export class App {
   private page: PageSong | null = null;
   private identity = '';
@@ -59,6 +73,8 @@ export class App {
   /** Transient head-row message (S8f, or a retranslation that could not start). Any
    *  pointer or key interaction dismisses it. */
   private notice: { status: string; detail: string } | null = null;
+  /** The edition on screen could not be stored: storage must not replace it until it is. */
+  private unsaved = false;
 
   private readonly head = new HeadRow();
   private readonly lines = new LineRenderer();
@@ -105,13 +121,15 @@ export class App {
           this.identity = identity;
           this.annotations = null;
           this.notice = null;
+          this.unsaved = false;
           this.record = this.acceptStored(identity, page, await loadSong(identity));
           this.fromCache = hasLines(this.record);
           this.prefaceCollapsed = this.fromCache && !this.record?.stop;
           // Reading a saved edition counts as use: LRU keeps what the reader returns to.
           if (this.fromCache) void touchSong(identity);
-        } else if (!this.run) {
+        } else if (!this.run && !this.unsaved) {
           // Same song: pick up what other tabs wrote, or deletions made in settings.
+          // (Not while the edition on screen exists only here: that would erase it.)
           this.record = this.acceptStored(identity, page, await loadSong(identity));
         }
         this.page = page;
@@ -401,6 +419,7 @@ export class App {
       done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
       stop: shown?.stop,
       hasPreface: Boolean(shown?.song && (shown.song.who || shown.song.what)),
+      japanese: isJapanese(page),
       running: here ? (here.retranslate ? 'here-retranslate' : 'here') : 'none',
       mirrored: !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity),
       otherSong: run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null,
@@ -443,8 +462,8 @@ export class App {
   /** Runs an action named by the state machine. */
   private act(id: ActionId, el: HTMLElement | null, input: ViewInput): void {
     switch (id) {
-      case 'start': void this.translate('start'); break;
-      case 'resume': void this.translate('resume'); break;
+      case 'start': void this.translate('start').catch((e) => console.error('[Lyric Lens]', e)); break;
+      case 'resume': void this.translate('resume').catch((e) => console.error('[Lyric Lens]', e)); break;
       case 'stop': this.stop(); break;
       case 'stopMirror': void requestAbort(); break;
       case 'stopOther': this.stopOther(); break;
@@ -487,11 +506,15 @@ export class App {
   private async loadAnnotations(page: PageSong): Promise<GeniusAnnotation[]> {
     const songId = page.songId;
     if (!songId) return [];
-    if (this.annotations !== null) return this.annotations;
+    // An empty list is not cached here: a failed fetch (timeout, 403) also returns [] and
+    // must be retried; fetchAnnotations itself remembers songs Genius answered for.
+    if (this.annotations?.length) return this.annotations;
     const list = await fetchAnnotations(songId);
     if (this.page?.songId !== songId) return list;
-    this.annotations = list;
-    if (this.notes.state) this.renderNow();
+    if (list.length) {
+      this.annotations = list;
+      if (this.notes.state) this.renderNow();
+    }
     return list;
   }
 
@@ -509,6 +532,11 @@ export class App {
     // A button locks the moment it is pressed: a second tap during the awaits below must
     // not send a second request.
     if (!page || this.run || this.starting) return;
+    // Between a client-side navigation and the page swap (refresh) the old page's lyrics must
+    // not be written under the new song's id.
+    if (identityOf(page) !== this.identity) return;
+    // Japanese lyrics are not translated: a stray seam or resume call must not spend a request.
+    if (isJapanese(page) && !hasLines(this.record)) return;
     this.starting = true;
     let lock: LockHandle | null = null;
     let run: Run | null = null;
@@ -605,8 +633,18 @@ export class App {
             landed = true;
           }
           if (landed) {
-            await saveSong(record);
+            // The new edition stays on screen even when it could not be stored.
             if (this.identity === id) this.record = record;
+            try {
+              await saveSong(record);
+              if (this.identity === id) this.unsaved = false;
+            } catch (error) {
+              console.error('[Lyric Lens]', error);
+              if (this.identity === id) {
+                this.notice = SAVE_FAILED;
+                this.unsaved = true;
+              }
+            }
           } else if (this.identity === id) {
             const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
             this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: failureText(stop, Date.now()) };
@@ -629,12 +667,24 @@ export class App {
       }
     } finally {
       this.starting = false;
-      if (lock) await lock.release();
-      if (run) {
-        this.run = null;
-        this.foreignLock = await this.otherLock();
-        await this.refreshKeys();
-        this.renderNow();
+      // A storage failure while releasing must not leave this.run set (the tab would stay
+      // stuck until reload). run is cleared only after release, so a new translate cannot
+      // take the same-id lock and then have it removed by this release.
+      try {
+        if (lock) await lock.release();
+      } catch (error) {
+        console.error('[Lyric Lens]', error);
+      } finally {
+        if (run) {
+          this.run = null;
+          try {
+            this.foreignLock = await this.otherLock();
+            await this.refreshKeys();
+          } catch (error) {
+            console.error('[Lyric Lens]', error);
+          }
+          this.renderNow();
+        }
       }
     }
   }
@@ -643,10 +693,20 @@ export class App {
    *  on this page (to say why) but is not stored — except an invalid key, which explains
    *  on later visits why 日本語で読む needs a new key. */
   private async persist(run: Run, record: SongRecord): Promise<void> {
-    await run.saver.flush();
-    if (hasLines(record) || record.stop?.reason === 'auth') await saveSong(record);
-    else await deleteSong(record.id);
+    // Shown first: a storage failure (quota) must not erase what the reader already has.
     if (this.identity === record.id) this.record = record;
+    try {
+      await run.saver.flush();
+      if (hasLines(record) || record.stop?.reason === 'auth') await saveSong(record);
+      else await deleteSong(record.id);
+      if (this.identity === record.id) this.unsaved = false;
+    } catch (error) {
+      console.error('[Lyric Lens]', error);
+      if (this.identity === record.id && hasLines(record)) {
+        this.notice = SAVE_FAILED;
+        this.unsaved = true;
+      }
+    }
   }
 
   stop(): void {
@@ -684,11 +744,12 @@ export class App {
       ...(focusService ? { focusService: focusService as SheetService } : {}),
       busySongId: busy ? id : null,
       song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
-      onRetranslate: () => { if (this.identity === id) void this.translate('retranslate'); },
+      onRetranslate: () => { if (this.identity === id) void this.translate('retranslate').catch((e) => console.error('[Lyric Lens]', e)); },
       onDeleteSong: async () => {
         if (!record || this.identity !== id || this.run) return;
         await deleteSong(record.id);
         this.record = null;
+        this.unsaved = false;
         this.renderNow();
       },
       onClose: () => void this.afterSheet(),
@@ -698,7 +759,7 @@ export class App {
   private openFirstRun(): void {
     openSheet({
       mode: 'first-run',
-      onSaveAndTranslate: () => void this.translate('start'),
+      onSaveAndTranslate: () => void this.translate('start').catch((e) => console.error('[Lyric Lens]', e)),
       onClose: () => void this.afterSheet(),
     });
   }

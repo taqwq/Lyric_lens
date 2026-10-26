@@ -1115,7 +1115,7 @@ ${req.user}` : req.user }] }],
 
 ## 進め方
 1. 歌詞を最後まで読み、誰が誰に語っているか、何が起きているか、語調と温度感をつかむ。前半の言葉が後半で回収・反転されていないか、語り手が途中で替わらないか（客演のヴァースなど）も確かめる。
-2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy、bitch／lil' bitch など）も入れ、全行でその訳語を使う。罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。
+2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy、bitch／lil' bitch など）も入れ、全行でその訳語を使う。罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。ayy／yeah／uh／skrrt／funk のような意味の薄い発声は、意味のある語（なあ・クソくらえ・行くぜ等）に置き換えず、音のままのカタカナ（エイ／イェー／アー／スカー）で書く。motifs に入れるときも ja はそのカタカナにする。
 3. 各行を訳す前に、その英文の主語と時制を確かめる（主語があれば命令形にしない）。
 
 ## 訳（ja）
@@ -1129,7 +1129,7 @@ ${req.user}` : req.user }] }],
 - 1つの文が複数行にまたがるときは、各行に対応する部分を訳し、続けて読むと自然な日本語になるようにする。
 - 原文の ( ) は、中身が直前の語のこだまや相づちの繰り返しでも省かず、同じ数・同じ位置に（）で訳す。
 - 原文に無い人物関係・出来事・感情・因果を足さない。原文に無い語で解釈を補わない：感嘆詞・地名・名前を、それが暗に指すかもしれない人物・神仏・称号・品質の語に置き換えたり書き足したりしない（その読みは notes の reference か ambiguous に書く）。
-- 原文の語も落とさない：行頭・行末の呼びかけ（nigga／motherfucker／homie／girl など）、I know／I swear／I bet のような行の中身をくくる枠の語、ayy／uh などのアドリブも訳に残す。曖昧な箇所は曖昧なまま訳し、読みが割れるなら notes の ambiguous に書く。
+- 原文の語も落とさない：行頭・行末の呼びかけ（nigga／motherfucker／homie／girl など）、I know／I swear／I bet のような行の中身をくくる枠の語、ayy／uh などのアドリブも音のまま（エイ／アー）訳に残し、「なあ」「だろ」のような同意を求める語にしない。曖昧な箇所は曖昧なまま訳し、読みが割れるなら notes の ambiguous に書く。
 - 訳には訳文だけを書く。説明や補足を混ぜない。訳文に（）を書くのは、原文の同じ位置に ( ) があるときだけ。語の意味の補足は notes に書く。
 - 長さの目安はスマホで1行（およそ24字）。ただし語調や二重の意味を削ってまで縮めない。
 - 人名・ブランド・商品名・地名は、訳文でもその名前のまま書く（カタカナ。定着した表記があればそれ。例：Hennessy→ヘネシー）。商品名の一部の英単語（色・数・形容詞など）を名前から切り離して普通の語として訳さない。名前を説明や一般名詞（値段・格・種類の言い換え）に置き換えたり、名前の横に説明を並べたりしない。名前を知らないと行の意味を取り違えるときだけ notes の reference に書く。
@@ -1149,7 +1149,7 @@ ${req.user}` : req.user }] }],
 ## 出力形式（厳守）
 1行に1つの JSON オブジェクトだけを出力する。前置き・Markdown・コードブロック・配列は書かない。
 
-{"t":"song","who":"誰が誰に（1文）","what":"この曲が何をしている曲か（1〜2文。あらすじではなく狙いや構図）","tone":"語調","motifs":[{"en":"繰り返しの語句","ja":"決めた訳語"}]}
+{"t":"song","who":"「誰が誰に」の1文（40字以内。括弧書きやMV・経歴の情報は書かない）","what":"歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）","tone":"語調","motifs":[{"en":"繰り返しの語句","ja":"決めた訳語"}]}
 {"t":"line","id":"L1","head":"原文の最初の3語","ja":"訳","notes":[]}
 {"t":"line","id":"L2","head":"原文の最初の3語","ja":"訳","notes":[{"q":"原文の語句","k":"slang","x":"説明","c":false,"g":"Genius注釈のid"}]}
 {"t":"end"}
@@ -1415,6 +1415,17 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     return { meta, sections, lines, unique };
   }
+  function isMostlyJapanese(source) {
+    const lines = source.lines;
+    if (lines.length < 4) return false;
+    let ja = 0;
+    for (const l of lines) {
+      const outside = l.text.replace(/\([^)]*\)|（[^）]*）/g, "");
+      const latin = (outside.match(/[A-Za-z]/g) ?? []).length;
+      if (/[぀-ヿ一-鿿]/.test(outside) && latin < 3) ja += 1;
+    }
+    return ja / lines.length >= 0.6;
+  }
   function missingLines(source, record) {
     if (!record) return source.unique.slice();
     return source.unique.filter((u) => !record.lines[u.key]?.ja);
@@ -1521,11 +1532,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function sameNote(a, b) {
     return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
   }
+  function tidyWho(who) {
+    return who.replace(/\s*[（(][^（）()]*[）)]/g, "").trim() || who;
+  }
+  function tidyWhat(what) {
+    return (what.match(/[^。]+。?/g) ?? [what]).slice(0, 2).join("");
+  }
   var RecordBuilder = class {
     constructor(source, record, targets) {
       __publicField(this, "source", source);
       __publicField(this, "record", record);
       __publicField(this, "targets");
+      /** Notes this request may still add song-wide (the prompt states the same ceiling). */
+      __publicField(this, "notesLeft");
+      /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only. */
+      __publicField(this, "bonusLeft", 2);
       /** Distinct lines accepted in this request. */
       __publicField(this, "added", 0);
       /** Line records dropped because their echoed first words did not match the line. */
@@ -1533,13 +1554,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       /** The model wrote its {"t":"end"} record. */
       __publicField(this, "ended", false);
       this.targets = new Set(targets);
+      this.notesLeft = noteBudget(targets.length);
     }
     apply(events) {
       let changed = false;
       for (const ev of events) {
         if (ev.type === "song") {
           if (this.record.song?.who && this.record.song.what) continue;
-          this.record.song = { who: ev.who, what: ev.what, ...ev.tone ? { tone: ev.tone } : {}, ...ev.motifs ? { motifs: ev.motifs } : {} };
+          this.record.song = { who: tidyWho(ev.who), what: tidyWhat(ev.what), ...ev.tone ? { tone: ev.tone } : {}, ...ev.motifs ? { motifs: ev.motifs } : {} };
           changed = true;
           continue;
         }
@@ -1561,7 +1583,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           if (raw.genius) built.genius = raw.genius;
           const note = trimDefinition(built, ev.ja);
           if (!note) continue;
-          if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
+          if (notes.length >= MAX_NOTES_PER_LINE || notes.some((n) => sameNote(n, note))) continue;
+          if (this.notesLeft > 0) this.notesLeft -= 1;
+          else if ((note.kind === "wordplay" || note.kind === "ambiguous") && this.bonusLeft > 0) this.bonusLeft -= 1;
+          else continue;
+          notes.push(note);
         }
         const result = { ja: widenParens(stripGlosses(ev.ja, u.text)) };
         if (notes.length) result.notes = notes;
@@ -2116,14 +2142,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     schedule(record) {
       this.pending = record;
-      if (!this.timer) this.timer = setTimeout(() => void this.flush(), this.delayMs);
+      if (!this.timer) this.timer = setTimeout(() => void this.flush().catch((e) => console.error("[Lyric Lens]", e)), this.delayMs);
     }
+    /** A failed save keeps the record pending, so the next flush (or schedule) retries it. */
     async flush() {
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       const record = this.pending;
       this.pending = null;
-      if (record) await saveSong(record);
+      if (record) {
+        try {
+          await saveSong(record);
+        } catch (e) {
+          this.pending ?? (this.pending = record);
+          throw e;
+        }
+      }
     }
   };
 
@@ -2177,6 +2211,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     constructor() {
       __publicField(this, "el", null);
       __publicField(this, "sig", "");
+      /** The live region outlives every rebuild of the row: a region inserted already holding its
+       *  text is not announced, one whose text changes in place is. */
+      __publicField(this, "statusEl", null);
       __publicField(this, "whatId", `ll-preface-what-${prefaceSeq += 1}`);
     }
     get element() {
@@ -2213,6 +2250,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       this.el?.remove();
       this.el = null;
       this.sig = "";
+      this.statusEl = null;
     }
     focusedSlot() {
       const active2 = document.activeElement;
@@ -2228,11 +2266,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       const target = slot.kind === "preface" ? el.querySelector(".ll-preface-toggle") : el.querySelectorAll(".ll-actions .ll-btn")[slot.index] ?? null;
       (target ?? el.querySelector(".ll-actions .ll-btn"))?.focus({ preventScroll: true });
     }
+    /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
+     *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
+    statusNode(view) {
+      const el = this.statusEl ?? (this.statusEl = h("span", { class: "ll-status", role: "status", "aria-live": "polite" }));
+      el.dataset.tone = view.tone ?? "normal";
+      if (el.textContent !== view.status) el.textContent = view.status;
+      if (view.status) delete el.dataset.empty;
+      else el.dataset.empty = "1";
+      return el;
+    }
     content(view) {
       const row = h(
         "div",
         { class: "ll-head-row", dataset: { bare: view.status ? "" : "1" } },
-        h("span", { class: "ll-status", dataset: { tone: view.tone ?? "normal" }, role: "status", "aria-live": "polite", hidden: !view.status }, view.status),
+        this.statusNode(view),
         h("span", { class: "ll-actions" }, view.actions.map((a) => {
           const button = h("button", {
             class: "ll-btn",
@@ -2385,7 +2433,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     content(state, index, ja, noteCount, repeat, input) {
       if (state === "empty" || state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
-      if (state === "gap") return [h("span", { class: "ll-ja", "aria-label": "まだ訳せていない行" }, "—")];
+      if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "まだ訳せていない行" }, "—")];
       if (state === "seam" && input.seam) {
         const { seam } = input;
         const button = h("button", {
@@ -2403,7 +2451,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
       const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
-      if (repeat) out.push(h("span", { class: "ll-repeat", "aria-label": "くり返し" }, "↺"));
+      if (repeat) out.push(h("span", { class: "ll-repeat", role: "img", "aria-label": "くり返し" }, "↺"));
       if (noteCount) {
         const record = input.record;
         const line = input.page.source.lines[index];
@@ -4016,6 +4064,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     const stop = liveStop(i.stop, i);
     if (!i.done) {
+      if (i.japanese) return { state: "SJ", status: "この曲は日本語の歌詞です", tone: "muted", actions: [], preface: false, lines: none };
       if (!i.hasKey) {
         return { state: "S1", status: "日本語訳には無料のAPIキーが必要です", actions: [{ id: "firstRun", label: "キーを設定", primary: true }], preface: false, lines: none };
       }
@@ -4083,6 +4132,16 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function hasLines(record) {
     return Boolean(record && Object.keys(record.lines).length);
   }
+  var japaneseCache = /* @__PURE__ */ new WeakMap();
+  function isJapanese(page) {
+    let known = japaneseCache.get(page.source);
+    if (known === void 0) {
+      known = isMostlyJapanese(page.source);
+      japaneseCache.set(page.source, known);
+    }
+    return known;
+  }
+  var SAVE_FAILED = { status: "保存できませんでした", detail: "この画面では読めますが、ページを閉じると消えます" };
   var App = class {
     constructor() {
       __publicField(this, "page", null);
@@ -4100,6 +4159,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       /** Transient head-row message (S8f, or a retranslation that could not start). Any
        *  pointer or key interaction dismisses it. */
       __publicField(this, "notice", null);
+      /** The edition on screen could not be stored: storage must not replace it until it is. */
+      __publicField(this, "unsaved", false);
       __publicField(this, "head", new HeadRow());
       __publicField(this, "lines", new LineRenderer());
       __publicField(this, "notes", new NoteView());
@@ -4146,11 +4207,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             this.identity = identity;
             this.annotations = null;
             this.notice = null;
+            this.unsaved = false;
             this.record = this.acceptStored(identity, page, await loadSong(identity));
             this.fromCache = hasLines(this.record);
             this.prefaceCollapsed = this.fromCache && !this.record?.stop;
             if (this.fromCache) void touchSong(identity);
-          } else if (!this.run) {
+          } else if (!this.run && !this.unsaved) {
             this.record = this.acceptStored(identity, page, await loadSong(identity));
           }
           this.page = page;
@@ -4410,6 +4472,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
         stop: shown?.stop,
         hasPreface: Boolean(shown?.song && (shown.song.who || shown.song.what)),
+        japanese: isJapanese(page),
         running: here ? here.retranslate ? "here-retranslate" : "here" : "none",
         mirrored: !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity),
         otherSong: run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null,
@@ -4453,10 +4516,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     act(id, el, input) {
       switch (id) {
         case "start":
-          void this.translate("start");
+          void this.translate("start").catch((e) => console.error("[Lyric Lens]", e));
           break;
         case "resume":
-          void this.translate("resume");
+          void this.translate("resume").catch((e) => console.error("[Lyric Lens]", e));
           break;
         case "stop":
           this.stop();
@@ -4512,11 +4575,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     async loadAnnotations(page) {
       const songId = page.songId;
       if (!songId) return [];
-      if (this.annotations !== null) return this.annotations;
+      if (this.annotations?.length) return this.annotations;
       const list = await fetchAnnotations(songId);
       if (this.page?.songId !== songId) return list;
-      this.annotations = list;
-      if (this.notes.state) this.renderNow();
+      if (list.length) {
+        this.annotations = list;
+        if (this.notes.state) this.renderNow();
+      }
       return list;
     }
     peek(index, on) {
@@ -4529,6 +4594,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     async translate(kind) {
       const page = this.page;
       if (!page || this.run || this.starting) return;
+      if (identityOf(page) !== this.identity) return;
+      if (isJapanese(page) && !hasLines(this.record)) return;
       this.starting = true;
       let lock = null;
       let run = null;
@@ -4614,8 +4681,17 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
               landed = true;
             }
             if (landed) {
-              await saveSong(record);
               if (this.identity === id) this.record = record;
+              try {
+                await saveSong(record);
+                if (this.identity === id) this.unsaved = false;
+              } catch (error) {
+                console.error("[Lyric Lens]", error);
+                if (this.identity === id) {
+                  this.notice = SAVE_FAILED;
+                  this.unsaved = true;
+                }
+              }
             } else if (this.identity === id) {
               const stop = outcome.stop ?? { reason: "unusable", at: Date.now() };
               this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: failureText(stop, Date.now()) };
@@ -4638,12 +4714,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         }
       } finally {
         this.starting = false;
-        if (lock) await lock.release();
-        if (run) {
-          this.run = null;
-          this.foreignLock = await this.otherLock();
-          await this.refreshKeys();
-          this.renderNow();
+        try {
+          if (lock) await lock.release();
+        } catch (error) {
+          console.error("[Lyric Lens]", error);
+        } finally {
+          if (run) {
+            this.run = null;
+            try {
+              this.foreignLock = await this.otherLock();
+              await this.refreshKeys();
+            } catch (error) {
+              console.error("[Lyric Lens]", error);
+            }
+            this.renderNow();
+          }
         }
       }
     }
@@ -4651,10 +4736,19 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
      *  on this page (to say why) but is not stored — except an invalid key, which explains
      *  on later visits why 日本語で読む needs a new key. */
     async persist(run, record) {
-      await run.saver.flush();
-      if (hasLines(record) || record.stop?.reason === "auth") await saveSong(record);
-      else await deleteSong(record.id);
       if (this.identity === record.id) this.record = record;
+      try {
+        await run.saver.flush();
+        if (hasLines(record) || record.stop?.reason === "auth") await saveSong(record);
+        else await deleteSong(record.id);
+        if (this.identity === record.id) this.unsaved = false;
+      } catch (error) {
+        console.error("[Lyric Lens]", error);
+        if (this.identity === record.id && hasLines(record)) {
+          this.notice = SAVE_FAILED;
+          this.unsaved = true;
+        }
+      }
     }
     stop() {
       this.run?.controller.abort();
@@ -4686,12 +4780,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         busySongId: busy ? id : null,
         song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
         onRetranslate: () => {
-          if (this.identity === id) void this.translate("retranslate");
+          if (this.identity === id) void this.translate("retranslate").catch((e) => console.error("[Lyric Lens]", e));
         },
         onDeleteSong: async () => {
           if (!record || this.identity !== id || this.run) return;
           await deleteSong(record.id);
           this.record = null;
+          this.unsaved = false;
           this.renderNow();
         },
         onClose: () => void this.afterSheet()
@@ -4700,14 +4795,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     openFirstRun() {
       openSheet({
         mode: "first-run",
-        onSaveAndTranslate: () => void this.translate("start"),
+        onSaveAndTranslate: () => void this.translate("start").catch((e) => console.error("[Lyric Lens]", e)),
         onClose: () => void this.afterSheet()
       });
     }
   };
 
   // src/ui/styles.css
-  var styles_default = '/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */\n\n.ll-head, .ll-line, .ll-note {\n  --ll-ink: #4A5260;\n  --ll-ink-repeat: #6B7380;\n  --ll-accent: #B0503A;\n  --ll-label: #6E7581;\n  --ll-note-bg: #F7F3EE;\n  --ll-rule: #D9DCE1;\n  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;\n}\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {\n  --ll-ink: #B8C0CB;\n  --ll-ink-repeat: #8E96A2;\n  --ll-accent: #E3876C;\n  --ll-label: #9AA1AC;\n  --ll-note-bg: #23262B;\n  --ll-rule: #3A3F46;\n}\n/* `slot` (the dotted empty-slot rule) is a separate token from `rule` (hairlines): it has to be seen. */\n.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }\nhtml { --ll-hl-bg: rgba(176, 80, 58, .08); }\nhtml.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }\n\n/* Japanese typesetting and link resets on every node we add. */\n.ll-head, .ll-line, .ll-note {\n  font-family: var(--ll-font);\n  font-style: normal;\n  font-weight: 400;\n  text-align: left;\n  text-transform: none;\n  line-break: strict;\n  word-break: normal;\n  word-break: auto-phrase;\n  overflow-wrap: anywhere;\n  font-feature-settings: "palt" 1;\n  letter-spacing: .02em;\n  text-spacing-trim: trim-start;\n  hanging-punctuation: none;\n  background: transparent !important;\n  text-decoration: none !important;\n  cursor: auto;\n  overflow-anchor: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }\n/* Marked data-exclude-from-selection for Genius\' own selection tools, but readers can\n   still copy the Japanese. */\n.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }\n\n/* ---------- head row + preface ---------- */\n.ll-head {\n  display: block;\n  margin: 0 0 22px;\n  padding: 0;\n  color: var(--ll-ink) !important;\n  font-size: 14px;\n  line-height: 1.6;\n}\n/* a quiet ruled-paper edge between the front matter and the lyrics */\n.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }\n.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }\n.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }\n.ll-status[data-tone="muted"] { color: var(--ll-label); }\n.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }\n.ll-btn {\n  all: unset;\n  box-sizing: border-box;\n  display: inline-flex;\n  align-items: center;\n  min-height: 28px;\n  color: var(--ll-accent) !important;\n  font: 600 14px/1.3 var(--ll-font);\n  letter-spacing: .02em;\n  cursor: pointer;\n  white-space: nowrap;\n}\n.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }\n.ll-btn[data-primary] { font-size: 15px; }\n.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }\n.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {\n  outline: 2px solid var(--ll-accent);\n  outline-offset: 2px;\n  border-radius: 3px;\n}\n/* Keep keyboard-focused controls clear of Genius\' sticky nav. Not on .ll-mark: app.ts focuses it\n   without preventScroll and a margin would make the page jump after anchoring. */\n.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }\n.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }\n.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }\n.ll-preface-rows { display: block; flex: 1; min-width: 0; }\n\n.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }\n.ll-preface-toggle {\n  all: unset;\n  box-sizing: border-box;\n  position: relative;\n  flex: none;\n  padding: 0 4px;\n  color: var(--ll-label) !important;\n  font-size: 12px;\n  line-height: 1.8;\n  cursor: pointer;\n}\n.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }\n.ll-preface-row[hidden] { display: none; }\n.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }\n.ll-preface-who { font-weight: 600; }\n.ll-preface-what { margin-top: 2px; }\n\n/* ---------- lines on ruled paper ---------- */\n.ll-line {\n  display: block;\n  position: relative;\n  margin: 0;\n  padding: 2px 0 12px;\n  min-height: 1.6em;\n  color: var(--ll-ink) !important;\n  font-size: .84em;\n  line-height: 1.6;\n}\nhtml.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }\n.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }\n.ll-ja { color: inherit !important; }\n.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }\n\n.ll-line[data-state="empty"] .ll-ja,\n.ll-line[data-state="next"] .ll-ja {\n  display: block;\n  width: min(60%, 320px);\n  height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;\n}\n/* the red pen\'s frontier: the slot being written now is drawn in the accent ink */\n.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }\n.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }\n.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }\n@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }\n@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }\n\n.ll-mark {\n  all: unset;\n  box-sizing: content-box;\n  position: relative;\n  display: inline-block;\n  margin-left: .25em;\n  padding: 0 .15em;\n  color: var(--ll-accent) !important;\n  font: 600 1em/1 var(--ll-font);\n  vertical-align: baseline;\n  cursor: pointer;\n  -webkit-user-select: none;\n  user-select: none;\n}\n/* 44×44 hit area without moving the text. */\n.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }\n.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }\n\n/* The seam: the first empty slot after an interruption says what happened, right there. */\n.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }\n/* keep the empty slot visible: the line is still untranslated; the sentence below says why */\n.ll-line[data-state="seam"]::before {\n  content: ""; display: block; width: min(60%, 320px); height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;\n}\n.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }\n.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }\n/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */\n.ll-adlib { color: var(--ll-label) !important; }\n\n/* ---------- notes ---------- */\n.ll-note {\n  display: grid;\n  grid-template-rows: 1fr;\n  margin: 2px 0 16px;\n  padding: 8px 12px;\n  border-left: 2px solid var(--ll-accent);\n  background: var(--ll-note-bg) !important;\n  color: var(--ll-ink) !important;\n  font-size: .78em;\n  line-height: 1.7;\n}\n/* an open note hangs from its own line: 6px under it, 16px before the next lyric */\n.ll-line:has(+ .ll-note) { padding-bottom: 4px; }\n/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */\n.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }\n@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }\n.ll-note-body { overflow: hidden; min-height: 0; }\n.ll-note-item + .ll-note-item { margin-top: 10px; }\n.ll-note-head { display: flex; align-items: center; gap: 8px; }\n.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }\n.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }\n.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }\n.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }\n.ll-note-text { display: block; margin-top: 2px; }\n.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }\n.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }\n.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }\n.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }\n.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }\n@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n\n::highlight(ll-phrase) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n  background-color: var(--ll-hl-bg);\n}\n::highlight(ll-phrase-peek) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n}\nhtml.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }\n\n@media (max-width: 599px) {\n  .ll-line { font-size: .875em; padding-bottom: 10px; }\n  /* 13px on Genius\' 16px phone lyrics */\n  .ll-note { font-size: .8125em; }\n  .ll-head-row { flex-direction: column; align-items: stretch; }\n  /* In a column the flex-basis would become a height. */\n  .ll-status { flex: none; }\n  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */\n  .ll-actions { justify-content: flex-start; margin-left: 0; }\n  .ll-btn, .ll-gn-toggle { min-height: 44px; }\n  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }\n  .ll-note[data-enter] { animation: none; }\n  .ll-line[data-ink] .ll-ja { animation: none; }\n}\n';
+  var styles_default = '/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */\n\n.ll-head, .ll-line, .ll-note {\n  --ll-ink: #4A5260;\n  --ll-ink-repeat: #6B7380;\n  --ll-accent: #B0503A;\n  --ll-label: #6E7581;\n  --ll-note-bg: #F7F3EE;\n  --ll-rule: #D9DCE1;\n  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;\n}\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {\n  --ll-ink: #B8C0CB;\n  --ll-ink-repeat: #8E96A2;\n  --ll-accent: #E3876C;\n  --ll-label: #9AA1AC;\n  --ll-note-bg: #23262B;\n  --ll-rule: #3A3F46;\n}\n/* `slot` (the dotted empty-slot rule) is a separate token from `rule` (hairlines): it has to be seen. */\n.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }\nhtml { --ll-hl-bg: rgba(176, 80, 58, .08); }\nhtml.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }\n\n/* Japanese typesetting and link resets on every node we add. */\n.ll-head, .ll-line, .ll-note {\n  font-family: var(--ll-font);\n  font-style: normal;\n  font-weight: 400;\n  text-align: left;\n  text-transform: none;\n  line-break: strict;\n  word-break: normal;\n  word-break: auto-phrase;\n  overflow-wrap: anywhere;\n  font-feature-settings: "palt" 1;\n  letter-spacing: .02em;\n  text-spacing-trim: trim-start;\n  hanging-punctuation: none;\n  background: transparent !important;\n  text-decoration: none !important;\n  cursor: auto;\n  overflow-anchor: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }\n/* Marked data-exclude-from-selection for Genius\' own selection tools, but readers can\n   still copy the Japanese. */\n.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }\n\n/* ---------- head row + preface ---------- */\n.ll-head {\n  display: block;\n  margin: 0 0 22px;\n  padding: 0;\n  color: var(--ll-ink) !important;\n  font-size: 14px;\n  line-height: 1.6;\n}\n/* a quiet ruled-paper edge between the front matter and the lyrics */\n.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }\n.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }\n.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }\n.ll-status[data-tone="muted"] { color: var(--ll-label); }\n/* An empty live region stays in the accessibility tree (never `hidden`) so that its next text is\n   announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap\n   and its 14em basis would push the actions to the right edge. */\n.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }\n.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }\n.ll-btn {\n  all: unset;\n  box-sizing: border-box;\n  display: inline-flex;\n  align-items: center;\n  min-height: 28px;\n  color: var(--ll-accent) !important;\n  font: 600 14px/1.3 var(--ll-font);\n  letter-spacing: .02em;\n  cursor: pointer;\n  white-space: nowrap;\n}\n/* Hover only where a pointer can hover: on touch the underline would stick to the last tapped button. */\n@media (hover: hover) { .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n.ll-btn[data-primary] { font-size: 15px; }\n.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }\n/* Pressed feedback on touch (the tap highlight is off), instant: no transition. */\n.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }\n.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {\n  outline: 2px solid var(--ll-accent);\n  outline-offset: 2px;\n  border-radius: 3px;\n}\n/* Keep keyboard-focused controls clear of Genius\' sticky nav. Not on .ll-mark: app.ts focuses it\n   without preventScroll and a margin would make the page jump after anchoring. */\n.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }\n.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }\n.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }\n.ll-preface-rows { display: block; flex: 1; min-width: 0; }\n\n.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }\n.ll-preface-toggle {\n  all: unset;\n  box-sizing: border-box;\n  position: relative;\n  flex: none;\n  padding: 0 4px;\n  color: var(--ll-label) !important;\n  font-size: 12px;\n  line-height: 1.8;\n  cursor: pointer;\n}\n.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }\n.ll-preface-row[hidden] { display: none; }\n.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }\n.ll-preface-who { font-weight: 600; }\n.ll-preface-what { margin-top: 2px; }\n\n/* ---------- lines on ruled paper ---------- */\n.ll-line {\n  display: block;\n  position: relative;\n  margin: 0;\n  padding: 2px 0 12px;\n  min-height: 1.6em;\n  color: var(--ll-ink) !important;\n  font-size: .84em;\n  line-height: 1.6;\n}\nhtml.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }\n.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }\n.ll-ja { color: inherit !important; }\n.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }\n\n.ll-line[data-state="empty"] .ll-ja,\n.ll-line[data-state="next"] .ll-ja {\n  display: block;\n  width: min(60%, 320px);\n  height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;\n}\n/* the red pen\'s frontier: the slot being written now is drawn in the accent ink */\n.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }\n.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }\n.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }\n@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }\n@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }\n\n.ll-mark {\n  all: unset;\n  box-sizing: content-box;\n  position: relative;\n  display: inline-block;\n  margin-left: .25em;\n  padding: 0 .15em;\n  color: var(--ll-accent) !important;\n  font: 600 1em/1 var(--ll-font);\n  vertical-align: baseline;\n  cursor: pointer;\n  -webkit-user-select: none;\n  user-select: none;\n}\n/* 44×44 hit area without moving the text. */\n.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }\n.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }\n\n/* The seam: the first empty slot after an interruption says what happened, right there. */\n.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }\n/* keep the empty slot visible: the line is still untranslated; the sentence below says why */\n.ll-line[data-state="seam"]::before {\n  content: ""; display: block; width: min(60%, 320px); height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;\n}\n.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }\n.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }\n/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */\n.ll-adlib { color: var(--ll-label) !important; }\n\n/* ---------- notes ---------- */\n.ll-note {\n  display: grid;\n  grid-template-rows: 1fr;\n  margin: 2px 0 16px;\n  padding: 8px 12px;\n  border-left: 2px solid var(--ll-accent);\n  background: var(--ll-note-bg) !important;\n  color: var(--ll-ink) !important;\n  font-size: .78em;\n  line-height: 1.7;\n}\n/* an open note hangs from its own line: 6px under it, 16px before the next lyric */\n.ll-line:has(+ .ll-note) { padding-bottom: 4px; }\n/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */\n.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }\n@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }\n.ll-note-body { overflow: hidden; min-height: 0; }\n.ll-note-item + .ll-note-item { margin-top: 10px; }\n.ll-note-head { display: flex; align-items: center; gap: 8px; }\n.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }\n.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }\n.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }\n.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }\n.ll-note-text { display: block; margin-top: 2px; }\n.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }\n.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }\n.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }\n.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }\n.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }\n@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n\n::highlight(ll-phrase) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n  background-color: var(--ll-hl-bg);\n}\n::highlight(ll-phrase-peek) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n}\nhtml.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }\n\n@media (max-width: 599px) {\n  .ll-line { font-size: .875em; padding-bottom: 10px; }\n  /* 13px on Genius\' 16px phone lyrics */\n  .ll-note { font-size: .8125em; }\n  .ll-head-row { flex-direction: column; align-items: stretch; }\n  /* In a column the flex-basis would become a height. */\n  .ll-status { flex: none; }\n  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */\n  .ll-actions { justify-content: flex-start; margin-left: 0; }\n  .ll-btn, .ll-gn-toggle { min-height: 44px; }\n  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }\n  .ll-note[data-enter] { animation: none; }\n  .ll-line[data-ink] .ll-ja { animation: none; }\n}\n';
 
   // src/main.ts
   function registerMenu(label, fn) {

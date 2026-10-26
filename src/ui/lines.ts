@@ -128,7 +128,7 @@ export class LineRenderer {
 
   private content(state: State, index: number, ja: string, noteCount: number, repeat: boolean, input: LinesInput): Node[] {
     if (state === 'empty' || state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
-    if (state === 'gap') return [h('span', { class: 'll-ja', 'aria-label': 'まだ訳せていない行' }, '—')];
+    if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'まだ訳せていない行' }, '—')];
     if (state === 'seam' && input.seam) {
       const { seam } = input;
       const button: HTMLButtonElement = h('button', {
@@ -147,7 +147,7 @@ export class LineRenderer {
     // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
     const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');
     const out: Node[] = [h('span', { class: 'll-ja' }, main, tail ? h('span', { class: 'll-adlib' }, tail) : null)];
-    if (repeat) out.push(h('span', { class: 'll-repeat', 'aria-label': 'くり返し' }, '↺'));
+    if (repeat) out.push(h('span', { class: 'll-repeat', role: 'img', 'aria-label': 'くり返し' }, '↺'));
     if (noteCount) {
       const record = input.record;
       const line = input.page.source.lines[index];

@@ -116,6 +116,43 @@ describe('S2 ready', () => {
   });
 });
 
+describe('SJ Japanese lyrics', () => {
+  const japanese = view({ japanese: true });
+
+  it('says so quietly and offers no way to start a request', () => {
+    expectDecision(decide(japanese), {
+      state: 'SJ',
+      status: 'この曲は日本語の歌詞です',
+      tone: 'muted',
+      actions: [],
+      preface: false,
+      lines: NONE,
+    });
+    const ids = decide(japanese).actions.map((a) => a.id);
+    expect(ids).not.toContain('start');
+    expect(ids).not.toContain('firstRun');
+  });
+
+  it('beats the no-key, other-song, quota and stored-stop states', () => {
+    expect(decide(view({ japanese: true, hasKey: false })).state).toBe('SJ');
+    expect(decide(view({ japanese: true, otherSong: 'X' })).state).toBe('SJ');
+    expect(decide(view({ japanese: true, avail: { ok: false, until: SOON } })).state).toBe('SJ');
+    expect(decide(view({ japanese: true, stop: stopOf('busy') })).state).toBe('SJ');
+  });
+
+  it('yields to a running request, another tab and a saved edition', () => {
+    expect(decide(view({ japanese: true, running: 'here' })).state).toBe('S3');
+    expect(decide(view({ japanese: true, mirrored: true })).state).toBe('S4m');
+    expect(decide(view({ japanese: true, done: 40 })).state).toBe('S5');
+    expect(decide(view({ japanese: true, done: 10, stop: stopOf('busy') })).state).toBe('S6');
+  });
+
+  it('is off by default and when false', () => {
+    expect(decide(base).state).toBe('S2');
+    expect(decide(view({ japanese: false })).state).toBe('S2');
+  });
+});
+
 describe('S2b another song is being written', () => {
   it('names the other song and offers to stop it', () => {
     expectDecision(decide(view({ otherSong: 'Hello' })), {

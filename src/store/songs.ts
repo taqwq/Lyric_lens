@@ -216,14 +216,22 @@ export class SaveQueue {
 
   schedule(record: SongRecord): void {
     this.pending = record;
-    if (!this.timer) this.timer = setTimeout(() => void this.flush(), this.delayMs);
+    if (!this.timer) this.timer = setTimeout(() => void this.flush().catch((e) => console.error('[Lyric Lens]', e)), this.delayMs);
   }
 
+  /** A failed save keeps the record pending, so the next flush (or schedule) retries it. */
   async flush(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const record = this.pending;
     this.pending = null;
-    if (record) await saveSong(record);
+    if (record) {
+      try {
+        await saveSong(record);
+      } catch (e) {
+        this.pending ??= record;
+        throw e;
+      }
+    }
   }
 }
