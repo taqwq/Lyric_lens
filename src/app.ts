@@ -16,7 +16,7 @@ import { SaveQueue, deleteSong, loadSong, saveSong } from './store/songs';
 import { HeadRow, type HeadAction, type HeadView } from './ui/head';
 import { LineRenderer, type LinesInput, type SeamView } from './ui/lines';
 import { NoteView } from './ui/notes';
-import { openSheet } from './ui/sheet';
+import { closeSheet, openSheet } from './ui/sheet';
 import { formatWhen } from './ui/time';
 
 interface Run {
@@ -51,7 +51,9 @@ export class App {
   /** The record was already saved when this page opened: render without motion. */
   private fromCache = false;
   private prefaceCollapsed = false;
-  private retranslateFailure: StopInfo | null = null;
+  /** Transient head-row message (S8f, or a retranslation that could not start). Any
+   *  pointer or key interaction dismisses it. */
+  private notice: { status: string; detail: string } | null = null;
 
   private readonly head = new HeadRow();
   private readonly lines = new LineRenderer();
@@ -96,7 +98,7 @@ export class App {
           this.teardown();
           this.identity = identity;
           this.annotations = null;
-          this.retranslateFailure = null;
+          this.notice = null;
           this.record = this.acceptStored(identity, page, await loadSong(identity));
           this.fromCache = hasLines(this.record);
           this.prefaceCollapsed = this.fromCache && !this.record?.stop;
@@ -119,10 +121,14 @@ export class App {
   private acceptStored(identity: string, page: PageSong, stored: SongRecord | null): SongRecord | null {
     const title = page.source.meta.title;
     if (stored && identity.startsWith('path:') && stored.title && title && stored.title !== title) return null;
+    // A first request that produced nothing leaves no edition behind (an invalid key is
+    // the exception: it explains why 日本語で読む needs a new key first).
+    if (stored && !hasLines(stored) && stored.stop?.reason !== 'auth') return null;
     return stored;
   }
 
   private teardown(): void {
+    closeSheet();
     this.notes.close();
     this.lines.clear();
     this.head.clear();
@@ -145,12 +151,17 @@ export class App {
     window.addEventListener('online', () => this.scheduleRender());
     window.addEventListener('offline', () => this.scheduleRender());
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') void loadSettings().then(() => this.refresh());
+      if (document.visibilityState !== 'visible') return;
+      // Another tab may have changed 訳を隠す: apply it before the label is rebuilt from it.
+      void loadSettings().then(() => {
+        this.anchored(() => this.applyDisplay());
+        return this.refresh();
+      });
     });
-    // Any interaction dismisses the transient "retranslation failed" line.
-    document.addEventListener('pointerdown', () => {
-      if (this.retranslateFailure) { this.retranslateFailure = null; this.scheduleRender(); }
-    }, true);
+    // Any interaction dismisses the transient notice (S8f).
+    const dismiss = () => { if (this.notice) { this.notice = null; this.scheduleRender(); } };
+    document.addEventListener('pointerdown', dismiss, true);
+    document.addEventListener('keydown', dismiss, true);
 
     new MutationObserver((mutations) => {
       if (this.lines.damaged() || mutations.some((m) => this.affectsLyrics(m))) this.scheduleRefresh();
@@ -231,47 +242,75 @@ export class App {
   private renderNow(): void {
     const page = this.page;
     if (!page) return;
-    this.syncNote(page);
-    const { head, lines } = this.view(page);
     const prefer = this.preferAnchor;
     this.preferAnchor = null;
+    const focusedHere = this.focusInsideOurUi();
     this.anchored(() => {
+      // Closing or refreshing a note above the viewport is compensated like everything else.
+      this.syncNote(page);
+      const { head, lines } = this.view(page);
       this.head.render(page, head);
       this.lines.render(lines);
-      const open = this.notes.openIndex;
-      if (open != null) this.notes.reattach(this.lines.nodeFor(open), page.texts[open]);
+      this.syncNote(page);
     }, prefer);
+    // A rebuilt control must not drop keyboard focus to <body>.
+    if (focusedHere && !this.focusInsideOurUi()) this.head.focusFirst();
     this.scheduleWake();
   }
 
+  private focusInsideOurUi(): boolean {
+    const active = document.activeElement;
+    return Boolean(active && active !== document.body && active.closest?.('.ll-head, .ll-line, .ll-note'));
+  }
+
   /** An open note follows its line through re-renders, and closes or refreshes when the
-   *  edition under it changes (retranslation swap, another tab's progress, lyric edits). */
+   *  edition under it changes (retranslation swap, another tab's progress, lyric edits,
+   *  Genius annotations arriving, Genius re-rendering the text under it). */
   private syncNote(page: PageSong): void {
     const state = this.notes.state;
     if (!state) return;
     const index = page.source.lines[state.index]?.key === state.key ? state.index : page.source.lines.findIndex((l) => l.key === state.key);
     const result = this.shown()?.lines[state.key];
     const node = index >= 0 ? this.lines.nodeFor(index) : undefined;
-    if (index < 0 || !node || !result?.notes?.length || this.retranslateFailure) {
+    if (index < 0 || !node || !result?.notes?.length) {
       this.notes.close();
       return;
     }
-    if (index !== state.index || JSON.stringify(result.notes) !== JSON.stringify(state.result.notes)) {
+    const changed = index !== state.index || JSON.stringify(result.notes) !== JSON.stringify(state.result.notes)
+      || state.annotations !== this.annotations || state.lineText !== page.texts[index];
+    if (changed) {
       this.notes.open({ index, key: state.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations }, () => void this.toggleNote(index));
+    } else if (node.nextSibling !== this.notes.element) {
+      this.notes.reattach(node, page.texts[index]);
     }
   }
 
   /** Keeps a line still while nodes above it change height: by default the first English
    *  line in view, or `prefer` (what the reader just tapped) when it is on screen. */
   private anchored(change: () => void, prefer?: Element | null): void {
-    const ref = prefer && prefer.isConnected && prefer.getBoundingClientRect().top >= 0 ? prefer : this.topVisibleAnchor();
-    const before = ref ? this.topOf(ref) : null;
+    const inView = (top: number) => top >= 0 && top < window.innerHeight;
+    // What to hold still: the control just used, else the first lyric line in view. If the
+    // lyrics are entirely below the viewport nothing above the reader changes; if they are
+    // entirely above it (reading comments), hold the end of the lyrics instead.
+    let measure: (() => number) | null = null;
+    if (prefer?.isConnected && inView(prefer.getBoundingClientRect().top)) {
+      measure = () => prefer.getBoundingClientRect().top;
+    } else {
+      const anchor = this.firstAnchorBelowTop();
+      if (anchor === 'none') {
+        const last = this.page?.containers.at(-1);
+        if (last?.isConnected) measure = () => last.getBoundingClientRect().bottom;
+      } else if (anchor && inView(this.topOf(anchor))) {
+        measure = () => this.topOf(anchor);
+      }
+    }
+    const before = measure?.() ?? null;
     const root = document.documentElement;
     const previous = root.style.overflowAnchor;
     root.style.overflowAnchor = 'none';
     change();
-    if (ref && before != null && ref.isConnected) {
-      const delta = this.topOf(ref) - before;
+    if (measure && before != null) {
+      const delta = measure() - before;
       if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
     }
     root.style.overflowAnchor = previous;
@@ -284,12 +323,15 @@ export class App {
     return range.getBoundingClientRect().top;
   }
 
-  private topVisibleAnchor(): Node | null {
+  /** The first lyric anchor at or below the viewport top, or 'none' if all are above it. */
+  private firstAnchorBelowTop(): Node | 'none' | null {
+    let any = false;
     for (const anchor of this.page?.anchors ?? []) {
       if (!anchor.isConnected) continue;
+      any = true;
       if (this.topOf(anchor) >= 0) return anchor;
     }
-    return null;
+    return any ? 'none' : null;
   }
 
   /** Re-render when a disabled "続きを訳す" becomes possible again. */
@@ -347,10 +389,12 @@ export class App {
     }
     // S3 / S4: this tab is writing this song.
     if (here) {
+      // Arriving (S4) once the preface or any line is in, even if the song record was unusable.
+      const arriving = Boolean(preface) || done > 0;
       return {
         head: {
-          status: preface ? '' : '曲全体を読んでいます',
-          actions: preface ? [stopAction, hideAction, settingsAction] : [stopAction],
+          status: arriving ? '' : '曲全体を読んでいます',
+          actions: arriving ? [stopAction, hideAction, settingsAction] : [stopAction],
           note: transportStreams() ? undefined : 'この環境では訳がまとめて届きます',
           preface,
         },
@@ -365,13 +409,9 @@ export class App {
       };
     }
 
-    // S8f: a retranslation failed; the old edition is untouched.
-    const failure = this.retranslateFailure;
-    if (failure && done) {
-      return {
-        head: { status: '訳し直しは途中で止まりました。今の訳はそのままです', actions: [hideAction, settingsAction], note: this.seamText(failure), preface },
-        lines,
-      };
+    // S8f: a retranslation failed or could not start; the old edition is untouched.
+    if (this.notice && done) {
+      return { head: { status: this.notice.status, actions: [hideAction, settingsAction], note: this.notice.detail || undefined, preface }, lines };
     }
 
     const stop = this.liveStop(shown?.stop);
@@ -430,6 +470,23 @@ export class App {
     return stop;
   }
 
+  /** Why a retranslation did not finish, without promising a 続き that S8f does not offer. */
+  private failureText(stop: StopInfo): string {
+    const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : '';
+    const text: Partial<Record<StopInfo['reason'], string>> = {
+      busy: '混み合っていました',
+      rate: '短い時間に使いすぎました。1分ほどおいてから試せます',
+      quota: `今日の無料枠が終わりました${when ? `（${when}に戻ります）` : ''}`,
+      auth: 'APIキーが使えません。設定で確かめてください',
+      blocked: 'AIの安全フィルタで止められました',
+      network: '接続が切れました',
+      unusable: 'うまく受け取れない返事が来ました',
+      stopped: '止めました',
+      length: '長い曲なので、一度では訳し切れませんでした',
+    };
+    return text[stop.reason] ?? '';
+  }
+
   private seamText(stop: StopInfo): string {
     const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : '';
     const text: Record<StopInfo['reason'], string> = {
@@ -478,17 +535,26 @@ export class App {
     const result = line && this.shown()?.lines[line.key];
     const node = this.lines.nodeFor(index);
     if (!line || !result?.notes?.length || !node) return;
-    const open = () => this.anchored(() => this.notes.open(
+    this.anchored(() => this.notes.open(
       { index, key: line.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
       () => void this.toggleNote(index),
     ), node);
-    open();
     this.renderNow();
     markOf(index)?.focus();
-    if (this.annotations === null && page.songId) {
-      this.annotations = await fetchAnnotations(page.songId);
-      if (this.notes.openIndex === index && this.annotations.length) open();
-    }
+    await this.loadAnnotations(page);
+  }
+
+  /** Genius annotations for the open song, fetched once; a result that arrives after the
+   *  reader moved to another song is dropped. syncNote re-renders an open note with them. */
+  private async loadAnnotations(page: PageSong): Promise<GeniusAnnotation[]> {
+    const songId = page.songId;
+    if (!songId) return [];
+    if (this.annotations !== null) return this.annotations;
+    const list = await fetchAnnotations(songId);
+    if (this.page?.songId !== songId) return list;
+    this.annotations = list;
+    if (this.notes.state) this.renderNow();
+    return list;
   }
 
   private peek(index: number, on: boolean): void {
@@ -508,6 +574,12 @@ export class App {
     this.starting = true;
     let lock: LockHandle | null = null;
     let run: Run | null = null;
+    const id = this.identity;
+    // A retranslation is confirmed in the settings sheet, away from the page: if it cannot
+    // start, say so in the head row instead of silently doing nothing.
+    const cannotRetranslate = (detail: string) => {
+      if (kind === 'retranslate' && this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのままです', detail };
+    };
     try {
       const settings = await loadSettings();
       if (!hasAnyKey(settings)) {
@@ -516,21 +588,22 @@ export class App {
       }
       this.avail = await availability(settings.providers);
       if (!this.avail.ok) {
+        cannotRetranslate(`今日の無料枠は終わりました${this.avail.until > Date.now() ? `（${formatWhen(this.avail.until)}に戻ります）` : ''}`);
         this.renderNow();
         return;
       }
-      const id = this.identity;
       const { source } = page;
       lock = await acquireLock(id, source.meta.title || '前の曲');
       if (!lock) {
         this.foreignLock = await this.otherLock();
+        cannotRetranslate('別の曲を訳しています。終わってからもう一度');
         this.renderNow();
         return;
       }
       // Start from what storage has now: another tab may have finished this song while
       // this one sat in the background.
       const stored = this.acceptStored(id, page, await loadSong(id));
-      if (stored) this.record = stored;
+      if (stored && this.identity === id) this.record = stored;
       const retranslate = kind === 'retranslate' && hasLines(stored);
       if (!retranslate && stored && !missingLines(source, stored).length) {
         await lock.release();
@@ -538,7 +611,7 @@ export class App {
         this.renderNow();
         return;
       }
-      const record: SongRecord = retranslate || !stored ? emptyRecord(id, page.path, source.meta) : structuredClone(stored);
+      const record: SongRecord = retranslate || !stored || !hasLines(stored) ? emptyRecord(id, page.path, source.meta) : structuredClone(stored);
       record.title = source.meta.title || record.title;
       record.artist = source.meta.artist || record.artist;
       // Saved progress says "closed" until the request ends, so a tab that dies mid-stream
@@ -549,20 +622,22 @@ export class App {
       this.run = run;
       this.starting = false;
       this.fromCache = false;
-      this.retranslateFailure = null;
+      this.notice = null;
       this.prefaceCollapsed = false;
       // Asking for Japanese means wanting to see it.
       if (settings.hideTranslation) await updateSettings((s) => ({ ...s, hideTranslation: false }));
       const current = run;
       current.lock.start(() => current.controller.abort());
-      // A reload or closed tab should not leave a live-looking lock for 10 s.
-      const bye = () => { current.controller.abort(); void current.lock.release(); };
+      // A reload or closed tab should not leave a live-looking lock for 10 s, and what it
+      // leaves behind reads "ここまで訳してあります", not "ここで止めました".
+      let leaving = false;
+      const bye = () => { leaving = true; current.controller.abort(); void current.lock.release(); };
       window.addEventListener('pagehide', bye, { once: true });
       this.renderNow();
 
       try {
-        if (page.songId && this.annotations === null) this.annotations = await fetchAnnotations(page.songId);
-        const input = this.annotations?.length ? { ...source, meta: { ...source.meta, annotations: this.annotations } } : source;
+        const annotations = await this.loadAnnotations(page);
+        const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
         const outcome = await translateSong(input, record, {
           providers: settings.providers,
           thinking: settings.thinking,
@@ -573,27 +648,35 @@ export class App {
           },
         });
         if (retranslate) {
-          if (outcome.complete) {
-            await saveSong(record);
-            if (this.identity === id) {
-              this.record = record;
-              this.notes.close();
+          // Lines the new edition skipped (or a long song cut short) keep their previous
+          // translation, so a retranslation that got most of the way still lands.
+          let complete = outcome.complete;
+          if (!complete && stored && outcome.stop && ['gaps', 'length'].includes(outcome.stop.reason)) {
+            for (const u of missingLines(source, record)) {
+              const old = stored.lines[u.key];
+              if (old) record.lines[u.key] = old;
             }
+            complete = !missingLines(source, record).length;
+            if (complete) delete record.stop;
+          }
+          if (complete) {
+            await saveSong(record);
+            if (this.identity === id) this.record = record;
           } else if (this.identity === id) {
-            this.retranslateFailure = outcome.stop ?? { reason: 'unusable', at: Date.now() };
+            const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
+            this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: this.failureText(stop) };
           }
         } else {
-          await current.saver.flush();
-          await saveSong(record);
-          if (this.identity === id) this.record = record;
+          if (leaving && record.stop?.reason === 'stopped') record.stop = { reason: 'closed', at: Date.now() };
+          await this.persist(current, record);
         }
       } catch (error) {
         console.error('[Lyric Lens]', error);
-        if (!retranslate) {
+        if (retranslate) {
+          if (this.identity === id) this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: this.failureText({ reason: 'unusable', at: Date.now() }) };
+        } else {
           record.stop = { reason: 'unusable', at: Date.now() };
-          await current.saver.flush();
-          if (hasLines(record)) await saveSong(record);
-          if (this.identity === id) this.record = record;
+          await this.persist(current, record);
         }
       } finally {
         window.removeEventListener('pagehide', bye);
@@ -608,6 +691,16 @@ export class App {
         this.renderNow();
       }
     }
+  }
+
+  /** Saves a finished request. A request that produced nothing is not an edition: it stays
+   *  on this page (to say why) but is not stored — except an invalid key, which explains
+   *  on later visits why 日本語で読む needs a new key. */
+  private async persist(run: Run, record: SongRecord): Promise<void> {
+    await run.saver.flush();
+    if (hasLines(record) || record.stop?.reason === 'auth') await saveSong(record);
+    else await deleteSong(record.id);
+    if (this.identity === record.id) this.record = record;
   }
 
   stop(): void {
@@ -639,15 +732,18 @@ export class App {
 
   openSettings(anchor: HTMLElement | null): void {
     const record = this.record;
+    const id = this.identity;
+    // While a request is writing (here or in another tab) there is nothing to retranslate
+    // or delete yet: a delete would be written back by the stream.
+    const busy = Boolean(this.run || (this.foreignLock && this.foreignLock.id === id));
     openSheet({
       mode: 'settings',
       anchor,
-      song: this.page && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
-      onRetranslate: () => void this.translate('retranslate'),
+      song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
+      onRetranslate: () => { if (this.identity === id) void this.translate('retranslate'); },
       onDeleteSong: async () => {
-        if (!record) return;
+        if (!record || this.identity !== id || this.run) return;
         await deleteSong(record.id);
-        this.notes.close();
         this.record = null;
         this.renderNow();
       },

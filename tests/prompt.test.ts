@@ -236,8 +236,8 @@ describe('buildPrompt: Genius annotations', () => {
     });
     const { user } = buildPrompt(source, null, source.unique);
     expect(user).toContain('# Genius の注釈');
-    expect(user).toContain('- [id:77] 「line number 2」: Second line explained');
-    expect(user).toContain('- [id:5] 「line number 9」: Ninth line explained');
+    expect(user).toContain('- [id:77] ▲12 「line number 2」: Second line explained');
+    expect(user).toContain('- [id:5] ▲40 公認 「line number 9」: Ninth line explained'); // votes and verification guide the model
     expect(user.indexOf('[id:77]')).toBeLessThan(user.indexOf('[id:5]'));
     // reference material sits between the lyrics and the instruction
     expect(user.indexOf('# 歌詞')).toBeLessThan(user.indexOf('# Genius の注釈'));

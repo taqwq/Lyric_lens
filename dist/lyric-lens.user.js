@@ -843,7 +843,7 @@ ${req.user}` : req.user }] }],
     if (config.kind === "gemini") return FALLBACK_GEMINI;
     throw new LLMError("not-found", "使えるモデルが見つからない。設定でモデルを指定して。");
   }
-  var PRIORITY = ["auth", "quota", "rate", "overloaded", "blocked", "timeout", "network", "bad-request", "not-found", "empty", "unknown"];
+  var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unknown"];
   var BUSY_PASS_WAITS_MS = [1e4, 25e3];
   function pickReportedError(errors) {
     return errors.slice().sort((a, b) => PRIORITY.indexOf(a.kind) - PRIORITY.indexOf(b.kind))[0] ?? new LLMError("auth", "APIキーが設定されていません。");
@@ -1003,16 +1003,16 @@ ${req.user}` : req.user }] }],
 
 ## 進め方
 1. 歌詞を最後まで読み、誰が誰に語っているか、何が起きているか、語調と温度感をつかむ。前半の言葉が後半で回収・反転されていないか、語り手が途中で替わらないか（客演のヴァースなど）も確かめる。
-2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy など）も入れ、全行でその訳語を使う。呼びかけ語の訳は who と矛盾させない。
+2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy、bitch／lil' bitch など）も入れ、全行でその訳語を使う。罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。
 
 ## 訳（ja）
 - 何より先に、語調と温度感を写す：自慢、挑発、脅し、皮肉、自嘲、色気、甘さ、ユーモア。意味はその次。かしこまった書き言葉に丸めない。
 - 一人称と語尾は語り手の人物像と相手との関係で決め、同じ語り手の間は保つ（俺／僕／あたし／私、〜だぜ／〜じゃねえ／〜だよ）。
-- 卑語・性的な語・乱暴な表現は、同じ強さの口語で訳す。遠回しな言い換えや、医学・役所で使う硬い語に置き換えない。誇張もしない。
+- 卑語・性的な語・乱暴な表現は、同じ強さの口語で訳す。fuck／shit／fuckin' の強調は「クソ」「クソみてえな」「マジで」などで残し、落とさない。性器・性行為の語を「体」「女」「抱く」のような穏やかな語に丸めない。遠回しな言い換え・硬い語・誇張はしない。
 - スラング・AAVE・隠語は意味で訳す。直訳して意味が通らない訳にしない。
-- AAVE の文法はそのまま読む：三単現の -s や be 動詞の省略は普通の平叙文で、命令文ではない（例：Nobody love her は「誰も彼女を愛さない」、She don't care は「あいつは気にしない」）。習慣の be、ain't、無変化の過去形（put / hit / quit など）に注意する。lil' baby や shorty は多くの場合女性を指し、聞き手の you と取り違えない。
+- AAVE の文法はそのまま読む：三単現の -s や be 動詞の省略は普通の平叙文で、命令文ではない（例：Nobody love her は「誰も彼女を愛さない」、She don't care は「あいつは気にしない」）。習慣の be、ain't、無変化の過去形（put / hit / quit など）に注意する。恋愛・性的な文脈の lil' baby や shorty は多くの場合女性を指し、聞き手の you と取り違えない。
 - 1つの文が複数行にまたがるときは、各行に対応する部分を訳し、続けて読むと自然な日本語になるようにする。
-- 括弧内の掛け合い・コーラス・アドリブも省かず、括弧付きで訳に残す。
+- 原文の ( ) は、中身が直前の語のこだまや相づちの繰り返しでも省かず、同じ数・同じ位置に（）で訳す。
 - 原文にない人物関係・出来事・感情・因果を足さない。曖昧な箇所は曖昧なまま訳す。
 - 訳には訳文だけを書く。説明や補足を混ぜない。訳文に（）を書くのは、原文の同じ位置に ( ) があるときだけ。語の意味の補足は notes に書く。
 - 長さの目安はスマホで1行（およそ24字）。ただし語調や二重の意味を削ってまで縮めない。
@@ -1020,13 +1020,13 @@ ${req.user}` : req.user }] }],
 
 ## 注（notes）
 訳だけでは誤読する、または大事なものが抜け落ちる箇所にだけ付ける。目安は6行に1つ以下。0件でよい。
-- k の種類：slang（直訳で誤るスラング・AAVE・隠語）／wordplay（音・綴り・多義の仕掛け）／reference（知らないと意味が変わる人物・出来事・作品・文化）／idiom（慣用句）／ambiguous（現実的に二通りに読める。両方の読みを書く）
-- 付けないもの：名前が出るだけの人名やブランド・商品名（知らないと行の意味を取り違える場合だけ付ける）、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
+- k の種類：slang（直訳で誤るスラング・AAVE・隠語）／wordplay（音・綴り・多義の仕掛け）／reference（知らないと意味が変わる人物・出来事・作品・文化）／idiom（慣用句）／ambiguous（現実的に二通りに読める。両方の読みを書く）。人名・愛称・ブランド・食べ物・地名は、隠語として別の意味で使われていない限り slang ではなく reference。
+- 付けないもの：名前が出るだけの人名やブランド・商品名（知らないと行の意味を取り違える場合だけ付ける）、酒・食べ物・服などのブランドを「高級〜」と説明するだけの注、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
 - 迷ったら付けない。指示にある上限件数を超えない。
 - 優先順：訳で消えてしまう掛詞・音遊び ＞ 裏の意味があるスラング ＞ 知らないと意味が変わる reference。
 - x を「〜の一種」「〜のこと」のような辞書の定義で始めない。この行で何が起きているかを書く。
 - q は原文の行からそのまま抜き出した語句。x は日本語で2文以内・80字程度。訳の言い直しではなく、訳から抜け落ちる情報を書く。
-- Genius の注釈は有力な手がかり。使ったときは g にその id を入れる。丸写しせず要点だけ書く。
+- Genius の注釈は有力な手がかり（▲は支持の数、公認は本人・編集部の確認済み）。▲の多い注釈がある箇所を優先する。使ったときは g にその id を入れる。丸写しせず要点だけ書く。
 - 確証のない事実（特に reference）は c を true にする。Genius の注釈で裏付けられるなら false。
 - 曲解説や注釈は誤りや憶測を含みうる。歌詞と食い違うときは歌詞を優先し、解釈が割れるなら ambiguous にする。
 
@@ -1098,7 +1098,7 @@ ${req.user}` : req.user }] }],
     }
     const lines = list.filter((a) => kept.has(a.order)).map((a) => {
       const text2 = a.text.length > ANNOTATION_EACH ? `${a.text.slice(0, ANNOTATION_EACH)}…` : a.text;
-      return `- [id:${a.id}] 「${a.fragment}」: ${text2}`;
+      return `- [id:${a.id}] ▲${a.votes}${a.verified ? " 公認" : ""} 「${a.fragment}」: ${text2}`;
     });
     return ["# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）", ...lines].join("\n");
   }
@@ -1342,11 +1342,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return { reason: "unusable", at: now };
     }
   }
-  var GLOSS = /[（(][^（）()]{1,24}[）)]/g;
+  var GROUP = "[（(][^（）()]{1,24}[）)]";
+  var HAS_GROUP = new RegExp(GROUP);
+  var TRAILING_GROUPS = new RegExp(`(?:\\s*${GROUP})+\\s*$`);
+  var SOURCE_TRAILING_ONLY = /^[^(（]*(?:[(（][^()（）]*[)）]\s*)+$/;
+  function dropGroups(text2) {
+    return text2.replace(new RegExp(GROUP, "g"), "").replace(/\s{2,}/g, " ").replace(/\s+([、。！？!?])/g, "$1").trim();
+  }
   function stripGlosses(ja, source) {
-    if (/[（(]/.test(source) || !GLOSS.test(ja)) return ja;
-    const stripped = ja.replace(GLOSS, "").replace(/\s{2,}/g, " ").replace(/\s+([、。！？!?])/g, "$1").trim();
-    return stripped || ja;
+    if (!HAS_GROUP.test(ja)) return ja;
+    if (!/[（(]/.test(source)) return dropGroups(ja) || ja;
+    if (!SOURCE_TRAILING_ONLY.test(source.trim())) return ja;
+    const tail = TRAILING_GROUPS.exec(ja);
+    const head = tail ? ja.slice(0, tail.index) : ja;
+    if (!HAS_GROUP.test(head)) return ja;
+    const cleaned = dropGroups(head);
+    return cleaned ? cleaned + (tail ? tail[0].trimStart() : "") : ja;
   }
   function sameNote(a, b) {
     return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
@@ -1360,6 +1371,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "added", 0);
       /** Line records dropped because their echoed first words did not match the line. */
       __publicField(this, "misaligned", 0);
+      /** The model wrote its {"t":"end"} record. */
+      __publicField(this, "ended", false);
       this.targets = new Set(targets);
     }
     apply(events) {
@@ -1369,6 +1382,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           if (this.record.song?.who && this.record.song.what) continue;
           this.record.song = { who: ev.who, what: ev.what, ...ev.tone ? { tone: ev.tone } : {}, ...ev.motifs ? { motifs: ev.motifs } : {} };
           changed = true;
+          continue;
+        }
+        if (ev.type === "end") {
+          this.ended = true;
           continue;
         }
         if (ev.type !== "line") continue;
@@ -1408,6 +1425,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     const parser = new ProtocolParser();
     let model = record.model ?? "";
     let stop;
+    let finished = false;
     try {
       const result = await generateWithFallback(options.providers, {
         system: prompt.system,
@@ -1424,6 +1442,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (result.error) stop = stopFromError(result.error);
       else if (result.finish === "length") stop = { reason: "length", at: Date.now() };
       else if (result.finish === "blocked") stop = { reason: "blocked", at: Date.now() };
+      finished = result.finish === "stop";
     } catch (error) {
       if (!(error instanceof LLMError)) throw error;
       stop = stopFromError(error);
@@ -1433,7 +1452,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       delete record.stop;
       return { record, complete: true, model };
     }
-    record.stop = stop ?? { reason: builder.added ? "gaps" : "unusable", at: Date.now() };
+    const reason = !builder.added ? "unusable" : finished || builder.ended ? "gaps" : "closed";
+    record.stop = stop ?? { reason, at: Date.now() };
     return { record, complete: false, stop: record.stop, model };
   }
 
@@ -1521,7 +1541,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function lyricsContainers(doc = document) {
     let nodes = Array.from(doc.querySelectorAll('[data-lyrics-container="true"]'));
     if (!nodes.length) nodes = Array.from(doc.querySelectorAll("[data-lyrics-container]"));
-    return nodes.filter((n) => !n.closest('[class^="ll-"], [class*=" ll-"]'));
+    return nodes.filter((n) => !n.closest(".ll-head, .ll-line, .ll-note, .ll-sheet-host"));
   }
   function cleanText(text2) {
     return text2.replace(/ /g, " ").replace(/\s*\d[\d,.]*[KM]?\s*Embed$/i, "").replace(/[ \t]+/g, " ").trim();
@@ -1608,6 +1628,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function text(doc, selector) {
     return doc.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+  function aboutText(el) {
+    if (!el) return "";
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('button, svg, [class*="Attribution"], [class*="ExpandableContent__Button"], [class*="Contributors"]').forEach((n) => n.remove());
+    return (clone.textContent ?? "").replace(/\s+/g, " ").replace(/^\s*(?:Verified\s+|Song\s+)?Bio\s*[\d,.]*[KM]?\s*contributors?\s*/i, "").replace(/\s*\b(?:Expand|Read More)\b[\s\S]{0,40}$/i, "").replace(/\s*\+?[\d,.]+[KM]?\s*Share\s*$/i, "").trim();
+  }
   function extractMeta(doc = document) {
     const og = doc.querySelector('meta[property="og:title"]')?.getAttribute("content")?.trim() ?? "";
     const [ogArtist, ...ogTitle] = og.split(/\s+[–—]\s+/);
@@ -1617,8 +1643,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     if (!artist && ogTitle.length) artist = ogArtist ?? "";
     if (!title) title = doc.title.replace(/\s*Lyrics\s*\|.*$/i, "").trim();
     const album = text(doc, 'a[class*="PrimaryAlbum__Title"]') || text(doc, '[class*="AlbumCredit"] a[href*="/albums/"]') || text(doc, '[class*="SongHeader"] a[href*="/albums/"]');
-    const aboutEl = doc.querySelector('[class*="SongDescription__Container"]') ?? doc.querySelector('[class*="About__Container"] [class*="RichText"]');
-    const about = aboutEl?.textContent?.replace(/\s+/g, " ").replace(/\b(Expand|Read More)\b\s*$/i, "").trim() ?? "";
+    const about = aboutText(doc.querySelector('[class*="SongDescription__Container"]') ?? doc.querySelector('[class*="About__Container"] [class*="RichText"]'));
     const meta = { title, artist };
     if (album) meta.album = album;
     if (about.length > 40) meta.about = about;
@@ -1866,10 +1891,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   }
 
   // src/ui/head.ts
+  var prefaceSeq = 0;
   var HeadRow = class {
     constructor() {
       __publicField(this, "el", null);
       __publicField(this, "sig", "");
+      __publicField(this, "whatId", `ll-preface-what-${prefaceSeq += 1}`);
     }
     get element() {
       return this.el;
@@ -1883,21 +1910,41 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
       if (sig !== this.sig) {
+        const focus = this.focusedSlot();
         this.sig = sig;
         this.el.replaceChildren(...this.content(view));
+        if (focus) this.restoreFocus(focus);
       } else {
         this.el.querySelectorAll(".ll-actions .ll-btn").forEach((b, i) => {
           b.disabled = Boolean(view.actions[i]?.disabled);
         });
       }
-      const header = Array.from(first.children).find((c) => c.hasAttribute("data-exclude-from-selection") && c !== this.el) ?? null;
+      const header = Array.from(first.children).find((c) => c !== this.el && !isOwnNode(c) && c.hasAttribute("data-exclude-from-selection")) ?? null;
       const placed = this.el.parentNode === first && (header ? this.el.previousElementSibling === header : first.firstChild === this.el);
       if (!placed) first.insertBefore(this.el, header ? header.nextSibling : first.firstChild);
+    }
+    /** Puts keyboard focus on the first control (used when a line control vanished). */
+    focusFirst() {
+      this.el?.querySelector(".ll-actions .ll-btn:not(:disabled), .ll-preface-toggle")?.focus({ preventScroll: true });
     }
     clear() {
       this.el?.remove();
       this.el = null;
       this.sig = "";
+    }
+    focusedSlot() {
+      const active2 = document.activeElement;
+      if (!this.el || !active2 || !this.el.contains(active2)) return null;
+      if (active2.classList.contains("ll-preface-toggle")) return { kind: "preface" };
+      const buttons = Array.from(this.el.querySelectorAll(".ll-actions .ll-btn"));
+      const index = buttons.indexOf(active2);
+      return index >= 0 ? { kind: "action", index } : null;
+    }
+    restoreFocus(slot) {
+      const el = this.el;
+      if (!el) return;
+      const target = slot.kind === "preface" ? el.querySelector(".ll-preface-toggle") : el.querySelectorAll(".ll-actions .ll-btn")[slot.index] ?? null;
+      (target ?? el.querySelector(".ll-actions .ll-btn"))?.focus({ preventScroll: true });
     }
     content(view) {
       const row = h(
@@ -1928,25 +1975,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           "div",
           { class: "ll-preface", dataset: { collapsed: p.collapsed ? "1" : "" } },
           h(
-            "button",
-            {
-              class: "ll-preface-toggle",
-              type: "button",
-              "aria-expanded": String(!p.collapsed),
-              "aria-label": p.collapsed ? "この曲についてを開く" : "この曲についてを閉じる",
-              onclick: (e) => {
-                e.preventDefault();
-                p.onToggle();
-              }
-            },
-            h(
-              "span",
-              { class: "ll-preface-rows" },
-              h("span", { class: "ll-preface-row ll-preface-who" }, h("span", { class: "ll-preface-label" }, "誰が誰に"), h("span", null, p.who)),
-              h("span", { class: "ll-preface-row ll-preface-what" }, h("span", { class: "ll-preface-label" }, "この曲は"), h("span", null, p.what))
-            ),
-            h("span", { class: "ll-preface-chev", "aria-hidden": "true" }, p.collapsed ? "▸" : "▾")
-          )
+            "div",
+            { class: "ll-preface-rows" },
+            h("div", { class: "ll-preface-row ll-preface-who" }, h("span", { class: "ll-preface-label" }, "誰が誰に"), h("span", null, p.who)),
+            h("div", { class: "ll-preface-row ll-preface-what", id: this.whatId, hidden: p.collapsed }, h("span", { class: "ll-preface-label" }, "この曲は"), h("span", null, p.what))
+          ),
+          h("button", {
+            class: "ll-preface-toggle",
+            type: "button",
+            "aria-expanded": String(!p.collapsed),
+            "aria-controls": this.whatId,
+            "aria-label": p.collapsed ? "この曲についてを開く" : "この曲についてを閉じる",
+            onclick: (e) => {
+              e.preventDefault();
+              p.onToggle();
+            }
+          }, p.collapsed ? "▸" : "▾")
         ));
       }
       return out;
@@ -1978,15 +2022,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         this.nodes.delete(i);
         this.sigs.delete(i);
       }
-      const firstMissing = page.source.lines.findIndex((l) => !record?.lines[l.key]?.ja);
+      const filled = (i) => Boolean(record?.lines[page.source.lines[i].key]?.ja);
+      let lastFilled = -1;
+      page.source.lines.forEach((_, i) => {
+        if (filled(i)) lastFilled = i;
+      });
+      let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
+      if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
       page.source.lines.forEach((line, i) => {
         const anchor = page.anchors[i];
         const result = record?.lines[line.key];
         let state = null;
         if (result?.ja) state = "filled";
-        else if (input.seam && i === firstMissing) state = "seam";
+        else if (input.seam && i === frontier) state = "seam";
         else if (input.gaps) state = "gap";
-        else if (input.slots) state = input.breathing && i === firstMissing ? "next" : "empty";
+        else if (input.slots) state = i < frontier && lastFilled > i ? "gap" : input.breathing && i === frontier ? "next" : "empty";
         const current = this.nodes.get(i);
         if (!state || !anchor) {
           current?.remove();
@@ -2138,8 +2188,17 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       return null;
     }
   }
+  function boundedPattern(re) {
+    try {
+      return new RegExp(`(?<![\\p{L}\\p{N}])(?:${re.source})(?![\\p{L}\\p{N}])`, "iu");
+    } catch {
+      return null;
+    }
+  }
   function locatePhrase(raw, phrase) {
-    const m = phrasePattern(phrase)?.exec(raw);
+    const re = phrasePattern(phrase);
+    if (!re) return null;
+    const m = boundedPattern(re)?.exec(raw) ?? re.exec(raw);
     if (!m) return null;
     return { start: m.index, end: m.index + m[0].length };
   }
@@ -2207,6 +2266,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     get state() {
       return this.current;
+    }
+    get element() {
+      return this.el;
     }
     open(note, onClose) {
       this.close();
@@ -2860,6 +2922,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   }
   var active = null;
   var idSeq = 0;
+  function closeSheet() {
+    active?.close();
+  }
   function openSheet(options) {
     active?.close();
     active = mount(options);
@@ -3506,7 +3571,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       /** The record was already saved when this page opened: render without motion. */
       __publicField(this, "fromCache", false);
       __publicField(this, "prefaceCollapsed", false);
-      __publicField(this, "retranslateFailure", null);
+      /** Transient head-row message (S8f, or a retranslation that could not start). Any
+       *  pointer or key interaction dismisses it. */
+      __publicField(this, "notice", null);
       __publicField(this, "head", new HeadRow());
       __publicField(this, "lines", new LineRenderer());
       __publicField(this, "notes", new NoteView());
@@ -3551,7 +3618,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             this.teardown();
             this.identity = identity;
             this.annotations = null;
-            this.retranslateFailure = null;
+            this.notice = null;
             this.record = this.acceptStored(identity, page, await loadSong(identity));
             this.fromCache = hasLines(this.record);
             this.prefaceCollapsed = this.fromCache && !this.record?.stop;
@@ -3574,9 +3641,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     acceptStored(identity, page, stored) {
       const title = page.source.meta.title;
       if (stored && identity.startsWith("path:") && stored.title && title && stored.title !== title) return null;
+      if (stored && !hasLines(stored) && stored.stop?.reason !== "auth") return null;
       return stored;
     }
     teardown() {
+      closeSheet();
       this.notes.close();
       this.lines.clear();
       this.head.clear();
@@ -3600,14 +3669,20 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       window.addEventListener("online", () => this.scheduleRender());
       window.addEventListener("offline", () => this.scheduleRender());
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") void loadSettings().then(() => this.refresh());
+        if (document.visibilityState !== "visible") return;
+        void loadSettings().then(() => {
+          this.anchored(() => this.applyDisplay());
+          return this.refresh();
+        });
       });
-      document.addEventListener("pointerdown", () => {
-        if (this.retranslateFailure) {
-          this.retranslateFailure = null;
+      const dismiss = () => {
+        if (this.notice) {
+          this.notice = null;
           this.scheduleRender();
         }
-      }, true);
+      };
+      document.addEventListener("pointerdown", dismiss, true);
+      document.addEventListener("keydown", dismiss, true);
       new MutationObserver((mutations) => {
         if (this.lines.damaged() || mutations.some((m) => this.affectsLyrics(m))) this.scheduleRefresh();
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -3681,45 +3756,66 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     renderNow() {
       const page = this.page;
       if (!page) return;
-      this.syncNote(page);
-      const { head, lines } = this.view(page);
       const prefer = this.preferAnchor;
       this.preferAnchor = null;
+      const focusedHere = this.focusInsideOurUi();
       this.anchored(() => {
+        this.syncNote(page);
+        const { head, lines } = this.view(page);
         this.head.render(page, head);
         this.lines.render(lines);
-        const open = this.notes.openIndex;
-        if (open != null) this.notes.reattach(this.lines.nodeFor(open), page.texts[open]);
+        this.syncNote(page);
       }, prefer);
+      if (focusedHere && !this.focusInsideOurUi()) this.head.focusFirst();
       this.scheduleWake();
     }
+    focusInsideOurUi() {
+      const active2 = document.activeElement;
+      return Boolean(active2 && active2 !== document.body && active2.closest?.(".ll-head, .ll-line, .ll-note"));
+    }
     /** An open note follows its line through re-renders, and closes or refreshes when the
-     *  edition under it changes (retranslation swap, another tab's progress, lyric edits). */
+     *  edition under it changes (retranslation swap, another tab's progress, lyric edits,
+     *  Genius annotations arriving, Genius re-rendering the text under it). */
     syncNote(page) {
       const state = this.notes.state;
       if (!state) return;
       const index = page.source.lines[state.index]?.key === state.key ? state.index : page.source.lines.findIndex((l) => l.key === state.key);
       const result = this.shown()?.lines[state.key];
       const node = index >= 0 ? this.lines.nodeFor(index) : void 0;
-      if (index < 0 || !node || !result?.notes?.length || this.retranslateFailure) {
+      if (index < 0 || !node || !result?.notes?.length) {
         this.notes.close();
         return;
       }
-      if (index !== state.index || JSON.stringify(result.notes) !== JSON.stringify(state.result.notes)) {
+      const changed = index !== state.index || JSON.stringify(result.notes) !== JSON.stringify(state.result.notes) || state.annotations !== this.annotations || state.lineText !== page.texts[index];
+      if (changed) {
         this.notes.open({ index, key: state.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations }, () => void this.toggleNote(index));
+      } else if (node.nextSibling !== this.notes.element) {
+        this.notes.reattach(node, page.texts[index]);
       }
     }
     /** Keeps a line still while nodes above it change height: by default the first English
      *  line in view, or `prefer` (what the reader just tapped) when it is on screen. */
     anchored(change, prefer) {
-      const ref = prefer && prefer.isConnected && prefer.getBoundingClientRect().top >= 0 ? prefer : this.topVisibleAnchor();
-      const before = ref ? this.topOf(ref) : null;
+      const inView = (top) => top >= 0 && top < window.innerHeight;
+      let measure = null;
+      if (prefer?.isConnected && inView(prefer.getBoundingClientRect().top)) {
+        measure = () => prefer.getBoundingClientRect().top;
+      } else {
+        const anchor = this.firstAnchorBelowTop();
+        if (anchor === "none") {
+          const last = this.page?.containers.at(-1);
+          if (last?.isConnected) measure = () => last.getBoundingClientRect().bottom;
+        } else if (anchor && inView(this.topOf(anchor))) {
+          measure = () => this.topOf(anchor);
+        }
+      }
+      const before = measure?.() ?? null;
       const root = document.documentElement;
       const previous = root.style.overflowAnchor;
       root.style.overflowAnchor = "none";
       change();
-      if (ref && before != null && ref.isConnected) {
-        const delta = this.topOf(ref) - before;
+      if (measure && before != null) {
+        const delta = measure() - before;
         if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
       }
       root.style.overflowAnchor = previous;
@@ -3730,12 +3826,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       range.selectNode(node);
       return range.getBoundingClientRect().top;
     }
-    topVisibleAnchor() {
+    /** The first lyric anchor at or below the viewport top, or 'none' if all are above it. */
+    firstAnchorBelowTop() {
+      let any = false;
       for (const anchor of this.page?.anchors ?? []) {
         if (!anchor.isConnected) continue;
+        any = true;
         if (this.topOf(anchor) >= 0) return anchor;
       }
-      return null;
+      return any ? "none" : null;
     }
     /** Re-render when a disabled "続きを訳す" becomes possible again. */
     scheduleWake() {
@@ -3791,10 +3890,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return { head: { status: "訳し直しています · 終わるまで今の訳を表示します", actions: [stopAction], preface }, lines };
       }
       if (here) {
+        const arriving = Boolean(preface) || done > 0;
         return {
           head: {
-            status: preface ? "" : "曲全体を読んでいます",
-            actions: preface ? [stopAction, hideAction, settingsAction] : [stopAction],
+            status: arriving ? "" : "曲全体を読んでいます",
+            actions: arriving ? [stopAction, hideAction, settingsAction] : [stopAction],
             note: transportStreams() ? void 0 : "この環境では訳がまとめて届きます",
             preface
           },
@@ -3807,12 +3907,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           lines: { ...lines, slots: true, breathing: true }
         };
       }
-      const failure = this.retranslateFailure;
-      if (failure && done) {
-        return {
-          head: { status: "訳し直しは途中で止まりました。今の訳はそのままです", actions: [hideAction, settingsAction], note: this.seamText(failure), preface },
-          lines
-        };
+      if (this.notice && done) {
+        return { head: { status: this.notice.status, actions: [hideAction, settingsAction], note: this.notice.detail || void 0, preface }, lines };
       }
       const stop = this.liveStop(shown?.stop);
       if (!done) {
@@ -3862,6 +3958,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if ((stop.reason === "quota" || stop.reason === "rate") && stop.until && stop.until <= Date.now()) return { reason: "closed", at: stop.at };
       return stop;
     }
+    /** Why a retranslation did not finish, without promising a 続き that S8f does not offer. */
+    failureText(stop) {
+      const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : "";
+      const text2 = {
+        busy: "混み合っていました",
+        rate: "短い時間に使いすぎました。1分ほどおいてから試せます",
+        quota: `今日の無料枠が終わりました${when ? `（${when}に戻ります）` : ""}`,
+        auth: "APIキーが使えません。設定で確かめてください",
+        blocked: "AIの安全フィルタで止められました",
+        network: "接続が切れました",
+        unusable: "うまく受け取れない返事が来ました",
+        stopped: "止めました",
+        length: "長い曲なので、一度では訳し切れませんでした"
+      };
+      return text2[stop.reason] ?? "";
+    }
     seamText(stop) {
       const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : "";
       const text2 = {
@@ -3908,17 +4020,25 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       const result = line && this.shown()?.lines[line.key];
       const node = this.lines.nodeFor(index);
       if (!line || !result?.notes?.length || !node) return;
-      const open = () => this.anchored(() => this.notes.open(
+      this.anchored(() => this.notes.open(
         { index, key: line.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
         () => void this.toggleNote(index)
       ), node);
-      open();
       this.renderNow();
       markOf(index)?.focus();
-      if (this.annotations === null && page.songId) {
-        this.annotations = await fetchAnnotations(page.songId);
-        if (this.notes.openIndex === index && this.annotations.length) open();
-      }
+      await this.loadAnnotations(page);
+    }
+    /** Genius annotations for the open song, fetched once; a result that arrives after the
+     *  reader moved to another song is dropped. syncNote re-renders an open note with them. */
+    async loadAnnotations(page) {
+      const songId = page.songId;
+      if (!songId) return [];
+      if (this.annotations !== null) return this.annotations;
+      const list = await fetchAnnotations(songId);
+      if (this.page?.songId !== songId) return list;
+      this.annotations = list;
+      if (this.notes.state) this.renderNow();
+      return list;
     }
     peek(index, on) {
       const page = this.page;
@@ -3933,6 +4053,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       this.starting = true;
       let lock = null;
       let run = null;
+      const id = this.identity;
+      const cannotRetranslate = (detail) => {
+        if (kind === "retranslate" && this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのままです", detail };
+      };
       try {
         const settings = await loadSettings();
         if (!hasAnyKey(settings)) {
@@ -3941,19 +4065,20 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         }
         this.avail = await availability(settings.providers);
         if (!this.avail.ok) {
+          cannotRetranslate(`今日の無料枠は終わりました${this.avail.until > Date.now() ? `（${formatWhen(this.avail.until)}に戻ります）` : ""}`);
           this.renderNow();
           return;
         }
-        const id = this.identity;
         const { source } = page;
         lock = await acquireLock(id, source.meta.title || "前の曲");
         if (!lock) {
           this.foreignLock = await this.otherLock();
+          cannotRetranslate("別の曲を訳しています。終わってからもう一度");
           this.renderNow();
           return;
         }
         const stored = this.acceptStored(id, page, await loadSong(id));
-        if (stored) this.record = stored;
+        if (stored && this.identity === id) this.record = stored;
         const retranslate = kind === "retranslate" && hasLines(stored);
         if (!retranslate && stored && !missingLines(source, stored).length) {
           await lock.release();
@@ -3961,7 +4086,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.renderNow();
           return;
         }
-        const record = retranslate || !stored ? emptyRecord(id, page.path, source.meta) : structuredClone(stored);
+        const record = retranslate || !stored || !hasLines(stored) ? emptyRecord(id, page.path, source.meta) : structuredClone(stored);
         record.title = source.meta.title || record.title;
         record.artist = source.meta.artist || record.artist;
         record.stop = { reason: "closed", at: Date.now() };
@@ -3969,20 +4094,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         this.run = run;
         this.starting = false;
         this.fromCache = false;
-        this.retranslateFailure = null;
+        this.notice = null;
         this.prefaceCollapsed = false;
         if (settings.hideTranslation) await updateSettings((s) => ({ ...s, hideTranslation: false }));
         const current = run;
         current.lock.start(() => current.controller.abort());
+        let leaving = false;
         const bye = () => {
+          leaving = true;
           current.controller.abort();
           void current.lock.release();
         };
         window.addEventListener("pagehide", bye, { once: true });
         this.renderNow();
         try {
-          if (page.songId && this.annotations === null) this.annotations = await fetchAnnotations(page.songId);
-          const input = this.annotations?.length ? { ...source, meta: { ...source.meta, annotations: this.annotations } } : source;
+          const annotations = await this.loadAnnotations(page);
+          const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
           const outcome = await translateSong(input, record, {
             providers: settings.providers,
             thinking: settings.thinking,
@@ -3993,27 +4120,33 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             }
           });
           if (retranslate) {
-            if (outcome.complete) {
-              await saveSong(record);
-              if (this.identity === id) {
-                this.record = record;
-                this.notes.close();
+            let complete = outcome.complete;
+            if (!complete && stored && outcome.stop && ["gaps", "length"].includes(outcome.stop.reason)) {
+              for (const u of missingLines(source, record)) {
+                const old = stored.lines[u.key];
+                if (old) record.lines[u.key] = old;
               }
+              complete = !missingLines(source, record).length;
+              if (complete) delete record.stop;
+            }
+            if (complete) {
+              await saveSong(record);
+              if (this.identity === id) this.record = record;
             } else if (this.identity === id) {
-              this.retranslateFailure = outcome.stop ?? { reason: "unusable", at: Date.now() };
+              const stop = outcome.stop ?? { reason: "unusable", at: Date.now() };
+              this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: this.failureText(stop) };
             }
           } else {
-            await current.saver.flush();
-            await saveSong(record);
-            if (this.identity === id) this.record = record;
+            if (leaving && record.stop?.reason === "stopped") record.stop = { reason: "closed", at: Date.now() };
+            await this.persist(current, record);
           }
         } catch (error) {
           console.error("[Lyric Lens]", error);
-          if (!retranslate) {
+          if (retranslate) {
+            if (this.identity === id) this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: this.failureText({ reason: "unusable", at: Date.now() }) };
+          } else {
             record.stop = { reason: "unusable", at: Date.now() };
-            await current.saver.flush();
-            if (hasLines(record)) await saveSong(record);
-            if (this.identity === id) this.record = record;
+            await this.persist(current, record);
           }
         } finally {
           window.removeEventListener("pagehide", bye);
@@ -4028,6 +4161,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.renderNow();
         }
       }
+    }
+    /** Saves a finished request. A request that produced nothing is not an edition: it stays
+     *  on this page (to say why) but is not stored — except an invalid key, which explains
+     *  on later visits why 日本語で読む needs a new key. */
+    async persist(run, record) {
+      await run.saver.flush();
+      if (hasLines(record) || record.stop?.reason === "auth") await saveSong(record);
+      else await deleteSong(record.id);
+      if (this.identity === record.id) this.record = record;
     }
     stop() {
       this.run?.controller.abort();
@@ -4054,15 +4196,18 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     openSettings(anchor) {
       const record = this.record;
+      const id = this.identity;
+      const busy = Boolean(this.run || this.foreignLock && this.foreignLock.id === id);
       openSheet({
         mode: "settings",
         anchor,
-        song: this.page && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
-        onRetranslate: () => void this.translate("retranslate"),
+        song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
+        onRetranslate: () => {
+          if (this.identity === id) void this.translate("retranslate");
+        },
         onDeleteSong: async () => {
-          if (!record) return;
+          if (!record || this.identity !== id || this.run) return;
           await deleteSong(record.id);
-          this.notes.close();
           this.record = null;
           this.renderNow();
         },
@@ -4164,22 +4309,24 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
 .ll-preface-rows { display: block; flex: 1; min-width: 0; }
 
-.ll-preface { margin-top: 6px; font-size: .78em; font-size: 14px; color: var(--ll-ink); }
+.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
 .ll-preface-toggle {
   all: unset;
   box-sizing: border-box;
-  display: flex;
-  gap: 8px;
-  width: 100%;
+  position: relative;
+  flex: none;
+  padding: 0 4px;
+  color: var(--ll-label) !important;
+  font-size: 12px;
+  line-height: 1.8;
   cursor: pointer;
-  text-align: left;
 }
+.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
 .ll-preface-row { display: flex; gap: 10px; align-items: baseline; }
+.ll-preface-row[hidden] { display: none; }
 .ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; letter-spacing: .06em; }
 .ll-preface-who { font-weight: 600; }
 .ll-preface-what { margin-top: 2px; }
-.ll-preface-chev { color: var(--ll-label); font-size: 11px; margin-left: auto; }
-.ll-preface[data-collapsed="1"] .ll-preface-what { display: none; }
 
 /* ---------- lines on ruled paper ---------- */
 .ll-line {
@@ -4301,6 +4448,7 @@ html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { 
   function boot() {
     injectStyle("ll-style", styles_default);
     const app = new App();
+    if (false) window.__ll = app;
     registerMenu("Lyric Lens の設定", () => app.openSettings(null));
     app.start().catch((error) => console.error("[Lyric Lens] failed to start", error));
     console.info(`[Lyric Lens] v${"3.0.0"}`);

@@ -72,6 +72,10 @@ export class NoteView {
     return this.current;
   }
 
+  get element(): HTMLElement | null {
+    return this.el;
+  }
+
   open(note: OpenNote, onClose: () => void): void {
     this.close();
     this.current = note;

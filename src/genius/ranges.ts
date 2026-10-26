@@ -40,9 +40,21 @@ export function phrasePattern(phrase: string): RegExp | null {
   }
 }
 
+/** Same pattern, but not inside a longer word ("cap" must not hit "Escaped"). Built lazily:
+ *  engines without lookbehind (old iOS) fall back to the unbounded pattern. */
+function boundedPattern(re: RegExp): RegExp | null {
+  try {
+    return new RegExp(`(?<![\\p{L}\\p{N}])(?:${re.source})(?![\\p{L}\\p{N}])`, 'iu');
+  } catch {
+    return null;
+  }
+}
+
 /** Character offsets of the phrase within the line's raw DOM text, or null. */
 export function locatePhrase(raw: string, phrase: string): { start: number; end: number } | null {
-  const m = phrasePattern(phrase)?.exec(raw);
+  const re = phrasePattern(phrase);
+  if (!re) return null;
+  const m = boundedPattern(re)?.exec(raw) ?? re.exec(raw);
   if (!m) return null;
   return { start: m.index, end: m.index + m[0].length };
 }

@@ -2,7 +2,7 @@ import './setup';
 
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { extractLyrics, extractMeta, lyricsContainers, readPage, songPath } from '../src/genius/extract';
+import { aboutText, extractLyrics, extractMeta, lyricsContainers, readPage, songPath } from '../src/genius/extract';
 
 function parse(html: string): Document {
   return new DOMParser().parseFromString(html, 'text/html');
@@ -165,7 +165,7 @@ describe('extractLyrics: other markup', () => {
 
   it('skips containers nested in our own UI', () => {
     const doc = parse(
-      '<body><div class="ll-card"><div data-lyrics-container="true">ours<br></div></div>' +
+      '<body><div class="ll-note"><div data-lyrics-container="true">ours<br></div></div>' +
       '<div data-lyrics-container="true">theirs<br></div></body>',
     );
     expect(extractLyrics(doc)!.rows).toEqual([{ kind: 'line', text: 'theirs' }]);
@@ -243,5 +243,26 @@ describe('songPath with a canonical URL', () => {
   it('ignores a canonical URL that is not a song page', () => {
     const dom = new JSDOM('<head><link rel="canonical" href="https://genius.com/artists/Kendrick-lamar"></head>', { url: 'https://genius.com/x-lyrics' });
     expect(songPath(dom.window.location as unknown as Location, dom.window.document)).toBe('/x-lyrics');
+  });
+});
+
+describe('aboutText', () => {
+  it('drops Genius page chrome around the bio', () => {
+    const dom = new JSDOM('<div id="a"><div class="Attribution">22 contributors</div>Song Bio 22 contributors On the ironically braggadocious track, Kendrick challenges rivals. <button>Expand</button> +107755 Share</div>');
+    const text = aboutText(dom.window.document.getElementById('a'));
+    expect(text.startsWith('On the ironically')).toBe(true);
+    expect(text).not.toMatch(/Expand|Share|contributors/);
+  });
+});
+
+describe('lyricsContainers with our classes on <html>', () => {
+  it('still finds the lyrics when translations are hidden (html.ll-hidden) or the page is dark', () => {
+    document.documentElement.classList.add('ll-hidden', 'll-dark');
+    document.body.innerHTML = '<div data-lyrics-container="true">one<br>two</div>';
+    try {
+      expect(lyricsContainers(document)).toHaveLength(1);
+    } finally {
+      document.documentElement.classList.remove('ll-hidden', 'll-dark');
+    }
   });
 });

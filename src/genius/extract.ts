@@ -37,7 +37,8 @@ function shouldSkip(el: Element): boolean {
 export function lyricsContainers(doc: Document = document): HTMLElement[] {
   let nodes = Array.from(doc.querySelectorAll<HTMLElement>('[data-lyrics-container="true"]'));
   if (!nodes.length) nodes = Array.from(doc.querySelectorAll<HTMLElement>('[data-lyrics-container]'));
-  return nodes.filter((n) => !n.closest('[class^="ll-"], [class*=" ll-"]'));
+  // Only our inserted UI counts as "ours" here: <html> itself carries ll-hidden / ll-dark.
+  return nodes.filter((n) => !n.closest('.ll-head, .ll-line, .ll-note, .ll-sheet-host'));
 }
 
 function cleanText(text: string): string {
@@ -164,6 +165,20 @@ function text(doc: Document, selector: string): string {
   return doc.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
+/** The song's About text without Genius' page chrome ("Song Bio 22 contributors",
+ *  "Expand +107755 Share", buttons), which would otherwise reach the model as content. */
+export function aboutText(el: Element | null): string {
+  if (!el) return '';
+  const clone = el.cloneNode(true) as Element;
+  clone.querySelectorAll('button, svg, [class*="Attribution"], [class*="ExpandableContent__Button"], [class*="Contributors"]').forEach((n) => n.remove());
+  return (clone.textContent ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*(?:Verified\s+|Song\s+)?Bio\s*[\d,.]*[KM]?\s*contributors?\s*/i, '')
+    .replace(/\s*\b(?:Expand|Read More)\b[\s\S]{0,40}$/i, '')
+    .replace(/\s*\+?[\d,.]+[KM]?\s*Share\s*$/i, '')
+    .trim();
+}
+
 export function extractMeta(doc: Document = document): SongMeta {
   const og = doc.querySelector('meta[property="og:title"]')?.getAttribute('content')?.trim() ?? '';
   const [ogArtist, ...ogTitle] = og.split(/\s+[–—]\s+/);
@@ -176,8 +191,7 @@ export function extractMeta(doc: Document = document): SongMeta {
   const album = text(doc, 'a[class*="PrimaryAlbum__Title"]')
     || text(doc, '[class*="AlbumCredit"] a[href*="/albums/"]')
     || text(doc, '[class*="SongHeader"] a[href*="/albums/"]');
-  const aboutEl = doc.querySelector('[class*="SongDescription__Container"]') ?? doc.querySelector('[class*="About__Container"] [class*="RichText"]');
-  const about = aboutEl?.textContent?.replace(/\s+/g, ' ').replace(/\b(Expand|Read More)\b\s*$/i, '').trim() ?? '';
+  const about = aboutText(doc.querySelector('[class*="SongDescription__Container"]') ?? doc.querySelector('[class*="About__Container"] [class*="RichText"]'));
   const meta: SongMeta = { title, artist };
   if (album) meta.album = album;
   if (about.length > 40) meta.about = about;
