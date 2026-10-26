@@ -58,15 +58,21 @@ export class LineRenderer {
       this.sigs.delete(i);
     }
 
-    const firstMissing = page.source.lines.findIndex((l) => !record?.lines[l.key]?.ja);
+    // The frontier is where writing stopped (or continues): the first missing line after the
+    // last filled one. Holes before it are lines the model skipped, not the place to resume.
+    const filled = (i: number) => Boolean(record?.lines[page.source.lines[i]!.key]?.ja);
+    let lastFilled = -1;
+    page.source.lines.forEach((_, i) => { if (filled(i)) lastFilled = i; });
+    let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
+    if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
     page.source.lines.forEach((line, i) => {
       const anchor = page.anchors[i];
       const result = record?.lines[line.key];
       let state: State | null = null;
       if (result?.ja) state = 'filled';
-      else if (input.seam && i === firstMissing) state = 'seam';
+      else if (input.seam && i === frontier) state = 'seam';
       else if (input.gaps) state = 'gap';
-      else if (input.slots) state = input.breathing && i === firstMissing ? 'next' : 'empty';
+      else if (input.slots) state = i < frontier && lastFilled > i ? 'gap' : input.breathing && i === frontier ? 'next' : 'empty';
 
       const current = this.nodes.get(i);
       if (!state || !anchor) {

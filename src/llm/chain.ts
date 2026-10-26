@@ -178,7 +178,9 @@ export interface ChainOptions {
   signal?: AbortSignal;
 }
 
-const PRIORITY: LLMErrorKind[] = ['auth', 'quota', 'rate', 'overloaded', 'blocked', 'timeout', 'network', 'bad-request', 'not-found', 'empty', 'unknown'];
+// Transient failures outrank quota: if any model was merely busy, trying again soon can work,
+// so the reader must not be told to wait until tomorrow.
+const PRIORITY: LLMErrorKind[] = ['auth', 'rate', 'overloaded', 'blocked', 'timeout', 'network', 'quota', 'bad-request', 'not-found', 'empty', 'unknown'];
 /** When every model is merely busy, wait and go around again before giving up. */
 const BUSY_PASS_WAITS_MS = [10_000, 25_000];
 

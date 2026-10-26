@@ -47,15 +47,28 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
   }
 }
 
-const GLOSS = /[（(][^（）()]{1,24}[）)]/g;
+const GROUP = '[（(][^（）()]{1,24}[）)]';
+const HAS_GROUP = new RegExp(GROUP);
+const TRAILING_GROUPS = new RegExp(`(?:\\s*${GROUP})+\\s*$`);
+const SOURCE_TRAILING_ONLY = /^[^(（]*(?:[(（][^()（）]*[)）]\s*)+$/;
+
+function dropGroups(text: string): string {
+  return text.replace(new RegExp(GROUP, 'g'), '').replace(/\s{2,}/g, ' ').replace(/\s+([、。！？!?])/g, '$1').trim();
+}
 
 /** Flash-class models keep adding dictionary glosses in parentheses ("パルメザン（大金）")
- *  despite the prompt. When the source line has no parentheses, no parenthesis in the
- *  translation can be an ad-lib, so they go. */
+ *  despite the prompt. A parenthesis in the translation is legitimate only where the source
+ *  has one: with none in the source, all go; when the source's parentheses are trailing
+ *  ad-libs or echoes, the translation keeps its trailing groups and loses any before them. */
 export function stripGlosses(ja: string, source: string): string {
-  if (/[（(]/.test(source) || !GLOSS.test(ja)) return ja;
-  const stripped = ja.replace(GLOSS, '').replace(/\s{2,}/g, ' ').replace(/\s+([、。！？!?])/g, '$1').trim();
-  return stripped || ja;
+  if (!HAS_GROUP.test(ja)) return ja;
+  if (!/[（(]/.test(source)) return dropGroups(ja) || ja;
+  if (!SOURCE_TRAILING_ONLY.test(source.trim())) return ja;
+  const tail = TRAILING_GROUPS.exec(ja);
+  const head = tail ? ja.slice(0, tail.index) : ja;
+  if (!HAS_GROUP.test(head)) return ja;
+  const cleaned = dropGroups(head);
+  return cleaned ? cleaned + (tail ? tail[0].trimStart() : '') : ja;
 }
 
 function sameNote(a: Note, b: Note): boolean {
@@ -68,6 +81,8 @@ export class RecordBuilder {
   added = 0;
   /** Line records dropped because their echoed first words did not match the line. */
   misaligned = 0;
+  /** The model wrote its {"t":"end"} record. */
+  ended = false;
 
   constructor(private readonly source: SongSource, readonly record: SongRecord, targets: number[]) {
     this.targets = new Set(targets);
@@ -80,6 +95,10 @@ export class RecordBuilder {
         if (this.record.song?.who && this.record.song.what) continue;
         this.record.song = { who: ev.who, what: ev.what, ...(ev.tone ? { tone: ev.tone } : {}), ...(ev.motifs ? { motifs: ev.motifs } : {}) };
         changed = true;
+        continue;
+      }
+      if (ev.type === 'end') {
+        this.ended = true;
         continue;
       }
       if (ev.type !== 'line') continue;
@@ -122,6 +141,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
   const parser = new ProtocolParser();
   let model = record.model ?? '';
   let stop: StopInfo | undefined;
+  let finished = false;
 
   try {
     const result = await generateWithFallback(options.providers, {
@@ -141,6 +161,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     if (result.error) stop = stopFromError(result.error);
     else if (result.finish === 'length') stop = { reason: 'length', at: Date.now() };
     else if (result.finish === 'blocked') stop = { reason: 'blocked', at: Date.now() };
+    finished = result.finish === 'stop';
   } catch (error) {
     if (!(error instanceof LLMError)) throw error;
     stop = stopFromError(error);
@@ -151,6 +172,9 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     delete record.stop;
     return { record, complete: true, model };
   }
-  record.stop = stop ?? { reason: builder.added ? 'gaps' : 'unusable', at: Date.now() };
+  // Skipped lines ('gaps') only if the answer really ended; a stream that just went quiet
+  // was cut, and reads "ここまで訳してあります" with 続きを訳す.
+  const reason = !builder.added ? 'unusable' : finished || builder.ended ? 'gaps' : 'closed';
+  record.stop = stop ?? { reason, at: Date.now() };
   return { record, complete: false, stop: record.stop, model };
 }

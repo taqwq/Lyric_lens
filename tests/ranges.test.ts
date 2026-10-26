@@ -64,3 +64,14 @@ describe('locatePhrase: ellipses and dropped g', () => {
     expect(locatePhrase('I keep running', "keep runnin'")).toEqual({ start: 2, end: 14 });
   });
 });
+
+describe('locatePhrase: word boundaries', () => {
+  it('does not match inside a longer word when a whole-word match exists', () => {
+    expect(locatePhrase('Escaped the trap, no cap', 'cap')).toEqual({ start: 21, end: 24 });
+    expect(locatePhrase('Paid the price, wrist on ice', 'ice')).toEqual({ start: 25, end: 28 });
+  });
+
+  it('still falls back to a partial match when that is all there is', () => {
+    expect(locatePhrase('Capital gains', 'cap')).toEqual({ start: 0, end: 3 });
+  });
+});

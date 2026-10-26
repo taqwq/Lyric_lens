@@ -887,3 +887,19 @@ describe('stripGlosses', () => {
     expect(stripGlosses('（イェー）', 'Yeah')).toBe('（イェー）');
   });
 });
+
+describe('stripGlosses with trailing source ad-libs', () => {
+  it('drops a gloss before the trailing echo group', () => {
+    expect(stripGlosses('マンマン（俺）に対してデカい顔してるのは誰だ？', "Who that nigga thinkin' that he frontin' on Man-Man? (Man-Man)"))
+      .toBe('マンマンに対してデカい顔してるのは誰だ？');
+  });
+
+  it('keeps the trailing groups that mirror the source', () => {
+    expect(stripGlosses('座ってろ（待てよ）', 'Sit down (Hold up)')).toBe('座ってろ（待てよ）');
+    expect(stripGlosses('ビッチ（クソ）、座ってろ（待てよ）', 'Bitch, sit down (Hold up)')).toBe('ビッチ、座ってろ（待てよ）');
+  });
+
+  it('leaves lines with parentheses mid-source alone', () => {
+    expect(stripGlosses('（ああ）行くぞ（今）', '(Yeah) let us go (now) right')).toBe('（ああ）行くぞ（今）');
+  });
+});
