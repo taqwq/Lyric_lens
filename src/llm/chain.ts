@@ -6,7 +6,7 @@
  */
 import { getJSON, setJSON } from '../platform/storage';
 import { LLMError, type LLMErrorKind } from './errors';
-import { GeminiProvider } from './gemini';
+import { GeminiProvider, rankGeminiModel } from './gemini';
 import { OpenAICompatibleProvider } from './openai';
 import { presetFor } from './presets';
 import type { GenerateRequest, GenerateResult, ModelInfo, Provider, ProviderConfig } from './types';
@@ -70,6 +70,8 @@ function cooldownFor(config: ProviderConfig, error: LLMError): number {
       return config.kind === 'gemini' ? nextPacificMidnight(now) : nextUtcMidnight(now);
     case 'rate': return now + Math.max(error.retryAfterMs, 60_000);
     case 'overloaded': return now + 2 * 60_000;
+    // A model that never answered would hang the next tap for as long again; bench it longer than a 503.
+    case 'timeout': return now + 5 * 60_000;
     case 'not-found': return now + 3 * 24 * 60 * 60_000;
     default: return 0;
   }
@@ -84,6 +86,94 @@ async function loadCooldowns(): Promise<Cooldowns> {
 
 export async function clearCooldowns(): Promise<void> {
   await setJSON(COOLDOWN_KEY, {});
+}
+
+/* ---------- model health ---------- */
+
+/** What was seen of one model on one key. Times are epoch milliseconds. */
+export interface ModelHealth {
+  /** Last success. */
+  ok?: number;
+  /** Time to the first text of recent successes (moving average; the newest counts half). */
+  ms?: number;
+  /** Last time it was overloaded or went silent. */
+  bad?: number;
+}
+type HealthTable = Record<string, ModelHealth>;
+
+const HEALTH_KEY = 'll3:health';
+const HEALTH_KEEP_MS = 14 * 24 * 60 * 60_000;
+/** A success older than this says little about how fast the model is today. */
+const HEALTH_FRESH_MS = 7 * 24 * 60 * 60_000;
+/** A model that failed this recently (and has not answered since) is probably still struggling. */
+const HEALTH_BAD_MS = 30 * 60_000;
+const HEALTH_ALPHA = 0.5;
+
+async function loadHealth(): Promise<HealthTable> {
+  try {
+    const all = await getJSON<HealthTable>(HEALTH_KEY, {});
+    if (!all || typeof all !== 'object' || Array.isArray(all)) return {};
+    const oldest = Date.now() - HEALTH_KEEP_MS;
+    for (const [k, v] of Object.entries(all)) if (!v || Math.max(v.ok ?? 0, v.bad ?? 0) < oldest) delete all[k];
+    return all;
+  } catch {
+    return {};
+  }
+}
+
+/** One read-modify-write at the end of an attempt. It only advises the order of models, so a
+ *  storage failure must never turn a good answer (or the next fallback) into an error. */
+async function noteHealth(config: ProviderConfig, model: string, outcome: { ms: number } | 'bad'): Promise<void> {
+  try {
+    const table = await loadHealth();
+    const id = cooldownId(config, model);
+    const now = Date.now();
+    const entry: ModelHealth = { ...table[id] };
+    if (outcome === 'bad') {
+      entry.bad = now;
+    } else {
+      entry.ok = now;
+      entry.ms = Math.round(Number.isFinite(entry.ms)
+        ? HEALTH_ALPHA * outcome.ms + (1 - HEALTH_ALPHA) * entry.ms!
+        : outcome.ms);
+    }
+    table[id] = entry;
+    await setJSON(HEALTH_KEY, table);
+  } catch { /* advice only */ }
+}
+
+/** Reorders automatically picked Gemini models by what was seen of them. Flash stays ahead of
+ *  Flash-Lite, and both ahead of Gemma, whatever the speed. Within each of those tiers (a stable
+ *  sort, so ties keep the given rank order): models that answered within a week and have not
+ *  failed since go first, fastest first; models never seen (or seen too long ago) keep their
+ *  rank order after them; models that were overloaded or silent in the last half hour, and
+ *  have not answered since, go last. `stats` is keyed like `ids`. */
+export function orderByHealth(ids: string[], stats: Record<string, ModelHealth | undefined>, now = Date.now()): string[] {
+  const tier = (id: string) => { const rank = rankGeminiModel(id); return rank >= 1000 ? 0 : rank >= 10 ? 1 : 2; };
+  const bucket = (h: ModelHealth | undefined) => {
+    if (!h) return 1;
+    const failedSince = h.bad !== undefined && (h.ok === undefined || h.bad > h.ok);
+    if (h.ok !== undefined && now - h.ok < HEALTH_FRESH_MS && !failedSince) return 0;
+    if (failedSince && now - h.bad! < HEALTH_BAD_MS) return 2;
+    return 1;
+  };
+  return ids
+    .map((id, index) => {
+      const h = stats[id];
+      return { id, index, tier: tier(id), bucket: bucket(h), ms: Number.isFinite(h?.ms) ? h!.ms! : Infinity };
+    })
+    .sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.bucket !== b.bucket) return a.bucket - b.bucket;
+      if (a.bucket === 0 && a.ms !== b.ms) return a.ms < b.ms ? -1 : 1;
+      return a.index - b.index;
+    })
+    .map((m) => m.id);
+}
+
+async function orderedByHealth(config: ProviderConfig, ids: string[]): Promise<string[]> {
+  const table = await loadHealth();
+  return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(config, id)]])));
 }
 
 const BAD_KEY_PREFIX = 'll3:badkey:';
@@ -125,7 +215,7 @@ export async function availability(configs: ProviderConfig[]): Promise<Availabil
     if (!ids.length) return { ok: true, until: 0 };
     for (const id of config.kind === 'gemini' ? ids.slice(0, 10) : ids.slice(0, 3)) {
       const cd = cooldowns[cooldownId(config, id)];
-      if (!cd || cd.reason === 'overloaded' || cd.reason === 'rate') return { ok: true, until: 0 };
+      if (!cd || cd.reason === 'overloaded' || cd.reason === 'timeout' || cd.reason === 'rate') return { ok: true, until: 0 };
       earliest = Math.min(earliest, cd.until);
     }
   }
@@ -153,12 +243,13 @@ async function candidateModels(provider: Provider, signal?: AbortSignal): Promis
   try {
     const models = await modelsFor(provider, { signal });
     const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-    if (auto.length) return config.kind === 'gemini' ? auto.slice(0, 10) : auto.slice(0, 3);
+    // Only Gemini's automatic choice adapts to what was seen of each model; the others keep their rank.
+    if (auto.length) return config.kind === 'gemini' ? await orderedByHealth(config, auto.slice(0, 10)) : auto.slice(0, 3);
   } catch (error) {
     // Gemini has known model ids to fall back on; other endpoints do not.
     if (!(error instanceof LLMError) || error.kind === 'auth' || error.kind === 'aborted' || config.kind !== 'gemini') throw error;
   }
-  if (config.kind === 'gemini') return FALLBACK_GEMINI;
+  if (config.kind === 'gemini') return orderedByHealth(config, FALLBACK_GEMINI);
   throw new LLMError('not-found', '使えるモデルが見つからない。設定でモデルを指定して。');
 }
 
@@ -219,6 +310,7 @@ export async function generateWithFallback(
   const busyNow = new Set<string>();
 
   const remember = async (config: ProviderConfig, model: string, error: LLMError) => {
+    if (error.kind === 'overloaded' || error.kind === 'timeout') await noteHealth(config, model, 'bad');
     const until = cooldownFor(config, error);
     if (!until) return;
     cooldowns[cooldownId(config, model)] = { until, reason: error.kind };
@@ -280,8 +372,9 @@ export async function generateWithFallback(
         modelLists.set(config.id, models);
       }
 
-      // Models out of quota (or missing) are skipped until their cooldown ends; models that
-      // were only busy recently go last. A retry pass only revisits models busy in this run.
+      // Models out of quota, rate-limited, silent (timeout) or missing are skipped until their
+      // cooldown ends; models that were only busy recently go last. A retry pass only revisits
+      // models busy in this run.
       const order: string[] = [];
       const busyLast: string[] = [];
       for (const model of models) {
@@ -305,12 +398,15 @@ export async function generateWithFallback(
           onStatus?.(`${label} · ${shortModel(model)}`);
           options.onAttempt?.();
           let produced = false;
+          const startedAt = Date.now();
+          let firstTextMs: number | null = null;
           try {
             const result = await provider.generate({
               ...request,
               model,
               signal,
               onText: (chunk) => {
+                if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
                 // Without a verdict from the consumer, any text counts as output.
                 const useful = request.onText(chunk);
                 if (useful === undefined || useful) produced = true;
@@ -320,6 +416,8 @@ export async function generateWithFallback(
             // (often 続きを訳す within minutes) would still try it last or skip it.
             const id = cooldownId(config, model);
             if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
+            // A body that only arrived whole (some managers) has no earlier first text than its end.
+            await noteHealth(config, model, { ms: firstTextMs ?? Date.now() - startedAt });
             return { ...result, model, provider: label };
           } catch (raw) {
             if (!(raw instanceof LLMError)) throw raw;
@@ -360,7 +458,7 @@ export async function generateWithFallback(
           break;
         }
         if (error.kind === 'blocked' && ++blocked >= 2) break; // other models will refuse too
-        const reason = error.kind === 'overloaded' ? '混雑' : error.kind === 'quota' ? '今日の上限' : error.kind === 'rate' ? '回数制限' : 'エラー';
+        const reason = error.kind === 'overloaded' ? '混雑' : error.kind === 'timeout' ? '応答なし' : error.kind === 'quota' ? '今日の上限' : error.kind === 'rate' ? '回数制限' : 'エラー';
         onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
       }
     }

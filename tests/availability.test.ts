@@ -67,6 +67,29 @@ describe('availability', () => {
     expect(status).toEqual({ kind: 'ok' });
   });
 
+  // A model that went silent is benched for five minutes: like a busy one, that is a short wait,
+  // never "out for the day".
+  it('treats models benched for going silent (timeout) like busy ones', async () => {
+    await models(gemini(), 'gemini-a', 'gemini-b');
+    const now = Date.now();
+    await setJSON('ll3:cooldowns', {
+      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-b')]: { until: now + 300_000, reason: 'timeout' },
+    });
+    expect(await availability([gemini()])).toEqual({ ok: true, until: 0 });
+  });
+
+  it('stays ok, and names no reset, when every model was only benched for going silent', async () => {
+    await models(gemini(), 'gemini-a', 'gemini-b');
+    const now = Date.now();
+    await setJSON('ll3:cooldowns', {
+      [id('gemini-a')]: { until: now + 240_000, reason: 'timeout' },
+      [id('gemini-b')]: { until: now + 300_000, reason: 'timeout' },
+    });
+    expect(await availability([gemini()])).toEqual({ ok: true, until: 0 });
+    expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
+  });
+
   it('ignores cooldowns that have already ended', async () => {
     await models(gemini(), 'gemini-a');
     await setJSON('ll3:cooldowns', { [id('gemini-a')]: { until: Date.now() - 1000, reason: 'quota' } });

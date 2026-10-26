@@ -484,6 +484,7 @@
     if (/flash/.test(id)) return 1e3 + version * 10 - preview;
     return 0;
   }
+  var FIRST_TEXT_TIMEOUT_MS = { low: 3e4, medium: 75e3, high: 12e4 };
   function thinkingConfig(model, level) {
     if (model.startsWith("gemma-")) return null;
     const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(model)?.[1] ?? 0);
@@ -566,7 +567,7 @@ ${req.user}` : req.user }] }],
         headers: this.headers(),
         body: JSON.stringify(body),
         signal: req.signal,
-        firstByteTimeoutMs: 9e4,
+        firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS[req.thinking],
         idleTimeoutMs: 9e4,
         onText: (chunk) => {
           for (const payload of sse.feed(chunk)) handle(payload);
@@ -861,6 +862,9 @@ ${req.user}` : req.user }] }],
         return now + Math.max(error.retryAfterMs, 6e4);
       case "overloaded":
         return now + 2 * 6e4;
+      // A model that never answered would hang the next tap for as long again; bench it longer than a 503.
+      case "timeout":
+        return now + 5 * 6e4;
       case "not-found":
         return now + 3 * 24 * 60 * 6e4;
       default:
@@ -872,6 +876,65 @@ ${req.user}` : req.user }] }],
     const now = Date.now();
     for (const [k, v] of Object.entries(all)) if (!v || v.until <= now) delete all[k];
     return all;
+  }
+  var HEALTH_KEY = "ll3:health";
+  var HEALTH_KEEP_MS = 14 * 24 * 60 * 6e4;
+  var HEALTH_FRESH_MS = 7 * 24 * 60 * 6e4;
+  var HEALTH_BAD_MS = 30 * 6e4;
+  var HEALTH_ALPHA = 0.5;
+  async function loadHealth() {
+    try {
+      const all = await getJSON(HEALTH_KEY, {});
+      if (!all || typeof all !== "object" || Array.isArray(all)) return {};
+      const oldest = Date.now() - HEALTH_KEEP_MS;
+      for (const [k, v] of Object.entries(all)) if (!v || Math.max(v.ok ?? 0, v.bad ?? 0) < oldest) delete all[k];
+      return all;
+    } catch {
+      return {};
+    }
+  }
+  async function noteHealth(config, model, outcome) {
+    try {
+      const table = await loadHealth();
+      const id = cooldownId(config, model);
+      const now = Date.now();
+      const entry = { ...table[id] };
+      if (outcome === "bad") {
+        entry.bad = now;
+      } else {
+        entry.ok = now;
+        entry.ms = Math.round(Number.isFinite(entry.ms) ? HEALTH_ALPHA * outcome.ms + (1 - HEALTH_ALPHA) * entry.ms : outcome.ms);
+      }
+      table[id] = entry;
+      await setJSON(HEALTH_KEY, table);
+    } catch {
+    }
+  }
+  function orderByHealth(ids, stats, now = Date.now()) {
+    const tier = (id) => {
+      const rank2 = rankGeminiModel(id);
+      return rank2 >= 1e3 ? 0 : rank2 >= 10 ? 1 : 2;
+    };
+    const bucket = (h2) => {
+      if (!h2) return 1;
+      const failedSince = h2.bad !== void 0 && (h2.ok === void 0 || h2.bad > h2.ok);
+      if (h2.ok !== void 0 && now - h2.ok < HEALTH_FRESH_MS && !failedSince) return 0;
+      if (failedSince && now - h2.bad < HEALTH_BAD_MS) return 2;
+      return 1;
+    };
+    return ids.map((id, index) => {
+      const h2 = stats[id];
+      return { id, index, tier: tier(id), bucket: bucket(h2), ms: Number.isFinite(h2?.ms) ? h2.ms : Infinity };
+    }).sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.bucket !== b.bucket) return a.bucket - b.bucket;
+      if (a.bucket === 0 && a.ms !== b.ms) return a.ms < b.ms ? -1 : 1;
+      return a.index - b.index;
+    }).map((m) => m.id);
+  }
+  async function orderedByHealth(config, ids) {
+    const table = await loadHealth();
+    return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(config, id)]])));
   }
   var BAD_KEY_PREFIX = "ll3:badkey:";
   async function keyStatus(config) {
@@ -896,7 +959,7 @@ ${req.user}` : req.user }] }],
       if (!ids.length) return { ok: true, until: 0 };
       for (const id of config.kind === "gemini" ? ids.slice(0, 10) : ids.slice(0, 3)) {
         const cd = cooldowns[cooldownId(config, id)];
-        if (!cd || cd.reason === "overloaded" || cd.reason === "rate") return { ok: true, until: 0 };
+        if (!cd || cd.reason === "overloaded" || cd.reason === "timeout" || cd.reason === "rate") return { ok: true, until: 0 };
         earliest = Math.min(earliest, cd.until);
       }
     }
@@ -919,11 +982,11 @@ ${req.user}` : req.user }] }],
     try {
       const models = await modelsFor(provider, { signal });
       const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-      if (auto.length) return config.kind === "gemini" ? auto.slice(0, 10) : auto.slice(0, 3);
+      if (auto.length) return config.kind === "gemini" ? await orderedByHealth(config, auto.slice(0, 10)) : auto.slice(0, 3);
     } catch (error) {
       if (!(error instanceof LLMError) || error.kind === "auth" || error.kind === "aborted" || config.kind !== "gemini") throw error;
     }
-    if (config.kind === "gemini") return FALLBACK_GEMINI;
+    if (config.kind === "gemini") return orderedByHealth(config, FALLBACK_GEMINI);
     throw new LLMError("not-found", "使えるモデルが見つからない。設定でモデルを指定して。");
   }
   var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unknown"];
@@ -962,6 +1025,7 @@ ${req.user}` : req.user }] }],
     let skippedForCooldown = 0;
     const busyNow = /* @__PURE__ */ new Set();
     const remember = async (config, model, error) => {
+      if (error.kind === "overloaded" || error.kind === "timeout") await noteHealth(config, model, "bad");
       const until = cooldownFor(config, error);
       if (!until) return;
       cooldowns[cooldownId(config, model)] = { until, reason: error.kind };
@@ -1043,12 +1107,15 @@ ${req.user}` : req.user }] }],
             onStatus?.(`${label} · ${shortModel(model)}`);
             options.onAttempt?.();
             let produced = false;
+            const startedAt = Date.now();
+            let firstTextMs = null;
             try {
               const result = await provider.generate({
                 ...request,
                 model,
                 signal,
                 onText: (chunk) => {
+                  if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
                   const useful = request.onText(chunk);
                   if (useful === void 0 || useful) produced = true;
                 }
@@ -1058,6 +1125,7 @@ ${req.user}` : req.user }] }],
                 delete cooldowns[id];
                 await setJSON(COOLDOWN_KEY, cooldowns);
               }
+              await noteHealth(config, model, { ms: firstTextMs ?? Date.now() - startedAt });
               return { ...result, model, provider: label };
             } catch (raw) {
               if (!(raw instanceof LLMError)) throw raw;
@@ -1095,7 +1163,7 @@ ${req.user}` : req.user }] }],
             break;
           }
           if (error.kind === "blocked" && ++blocked >= 2) break;
-          const reason = error.kind === "overloaded" ? "混雑" : error.kind === "quota" ? "今日の上限" : error.kind === "rate" ? "回数制限" : "エラー";
+          const reason = error.kind === "overloaded" ? "混雑" : error.kind === "timeout" ? "応答なし" : error.kind === "quota" ? "今日の上限" : error.kind === "rate" ? "回数制限" : "エラー";
           onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
         }
       }
