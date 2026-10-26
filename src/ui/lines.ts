@@ -3,6 +3,7 @@
  * empty slot, the next slot (breathing), a filled translation, a gap, or the seam where an
  * interrupted translation stopped. Rendering is idempotent: nodes are reused in place.
  */
+import { splitAdlibs } from '../core/adlib';
 import { NOTE_LABELS, type SongRecord } from '../core/types';
 import type { PageSong } from '../genius/extract';
 import { h, isolateClicks } from './dom';
@@ -60,9 +61,11 @@ export class LineRenderer {
 
     // The frontier is where writing stopped (or continues): the first missing line after the
     // last filled one. Holes before it are lines the model skipped, not the place to resume.
+    // Only first occurrences count: a chorus repeat is filled together with its first
+    // occurrence, ahead of the unique lines still to be written above it.
     const filled = (i: number) => Boolean(record?.lines[page.source.lines[i]!.key]?.ja);
     let lastFilled = -1;
-    page.source.lines.forEach((_, i) => { if (filled(i)) lastFilled = i; });
+    page.source.lines.forEach((line, i) => { if (line.occurrence === 0 && filled(i)) lastFilled = i; });
     let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
     if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
     page.source.lines.forEach((line, i) => {
@@ -141,7 +144,9 @@ export class LineRenderer {
       }, seam.button.label);
       return [h('span', { class: 'll-seam' }, h('span', { class: 'll-seam-text' }, seam.text), button)];
     }
-    const out: Node[] = [h('span', { class: 'll-ja' }, ja)];
+    // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
+    const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');
+    const out: Node[] = [h('span', { class: 'll-ja' }, main, tail ? h('span', { class: 'll-adlib' }, tail) : null)];
     if (repeat) out.push(h('span', { class: 'll-repeat', 'aria-label': 'くり返し' }, '↺'));
     if (noteCount) {
       const record = input.record;

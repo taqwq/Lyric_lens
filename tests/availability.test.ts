@@ -51,6 +51,22 @@ describe('availability', () => {
     expect((await availability([gemini()])).ok).toBe(true);
   });
 
+  // Every model under a per-minute cooldown still reads as "worth a tap": availability only
+  // says "out for the day" for quota. The chain answers such a tap without a request and reports
+  // the real (short) wait as a 'rate' error (tests/chain.test.ts), so the reader is never told
+  // that today's quota is over for a one-minute limit.
+  it('stays ok when every model is only rate-limited or busy, and names no reset', async () => {
+    await models(gemini(), 'gemini-a', 'gemini-b');
+    const now = Date.now();
+    await setJSON('ll3:cooldowns', {
+      [id('gemini-a')]: { until: now + 60_000, reason: 'rate' },
+      [id('gemini-b')]: { until: now + 90_000, reason: 'rate' },
+    });
+    expect(await availability([gemini()])).toEqual({ ok: true, until: 0 });
+    const status = await keyStatus(gemini());
+    expect(status).toEqual({ kind: 'ok' });
+  });
+
   it('ignores cooldowns that have already ended', async () => {
     await models(gemini(), 'gemini-a');
     await setJSON('ll3:cooldowns', { [id('gemini-a')]: { until: Date.now() - 1000, reason: 'quota' } });

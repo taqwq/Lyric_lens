@@ -17,6 +17,9 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   --ll-note-bg: #23262B;
   --ll-rule: #3A3F46;
 }
+/* `slot` (the dotted empty-slot rule) is a separate token from `rule` (hairlines): it has to be seen. */
+.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }
+html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }
 html { --ll-hl-bg: rgba(176, 80, 58, .08); }
 html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 
@@ -55,6 +58,8 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
   font-size: 14px;
   line-height: 1.6;
 }
+/* a quiet ruled-paper edge between the front matter and the lyrics */
+.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }
 .ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
 .ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
 .ll-status[data-tone="muted"] { color: var(--ll-label); }
@@ -74,16 +79,19 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }
 .ll-btn[data-primary] { font-size: 15px; }
 .ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
-.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible {
+.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {
   outline: 2px solid var(--ll-accent);
   outline-offset: 2px;
   border-radius: 3px;
 }
+/* Keep keyboard-focused controls clear of Genius' sticky nav. Not on .ll-mark: app.ts focuses it
+   without preventScroll and a margin would make the page jump after anchoring. */
+.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
 .ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }
 .ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
 .ll-preface-rows { display: block; flex: 1; min-width: 0; }
 
-.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
+.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
 .ll-preface-toggle {
   all: unset;
   box-sizing: border-box;
@@ -98,7 +106,7 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
 .ll-preface-row { display: flex; gap: 10px; align-items: baseline; }
 .ll-preface-row[hidden] { display: none; }
-.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; letter-spacing: .06em; }
+.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }
 .ll-preface-who { font-weight: 600; }
 .ll-preface-what { margin-top: 2px; }
 
@@ -123,10 +131,10 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
   display: block;
   width: min(60%, 320px);
   height: 1.6em;
-  background: linear-gradient(to right, var(--ll-rule) 1px, transparent 1px) 0 calc(100% - 4px) / 4px 1px repeat-x !important;
-  opacity: .9;
+  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;
 }
-.ll-line[data-state="next"] .ll-ja { animation: ll-breathe 2.4s ease-in-out infinite; }
+/* the red pen's frontier: the slot being written now is drawn in the accent ink */
+.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }
 .ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }
 .ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }
 @keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
@@ -152,14 +160,22 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
 .ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }
 
 /* The seam: the first empty slot after an interruption says what happened, right there. */
-.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; color: var(--ll-ink); }
-.ll-seam-text { color: var(--ll-ink); }
+.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }
+/* keep the empty slot visible: the line is still untranslated; the sentence below says why */
+.ll-line[data-state="seam"]::before {
+  content: ""; display: block; width: min(60%, 320px); height: 1.6em;
+  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;
+}
+.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }
+.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }
+/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */
+.ll-adlib { color: var(--ll-label) !important; }
 
 /* ---------- notes ---------- */
 .ll-note {
   display: grid;
   grid-template-rows: 1fr;
-  margin: 4px 0 14px;
+  margin: 2px 0 16px;
   padding: 8px 12px;
   border-left: 2px solid var(--ll-accent);
   background: var(--ll-note-bg) !important;
@@ -167,19 +183,25 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
   font-size: .78em;
   line-height: 1.7;
 }
+/* an open note hangs from its own line: 6px under it, 16px before the next lyric */
+.ll-line:has(+ .ll-note) { padding-bottom: 4px; }
+/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */
+.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }
+@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
 .ll-note-body { overflow: hidden; min-height: 0; }
 .ll-note-item + .ll-note-item { margin-top: 10px; }
 .ll-note-head { display: flex; align-items: center; gap: 8px; }
 .ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
-.ll-note-conj { color: var(--ll-label); font-size: 10.5px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }
+.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }
 .ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }
 .ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
 .ll-note-text { display: block; margin-top: 2px; }
 .ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }
 .ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }
-.ll-gn-toggle { all: unset; cursor: pointer; color: var(--ll-label); font-size: 12px; }
+.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }
 .ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
-.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 4px; }
+.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }
+@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }
 
 ::highlight(ll-phrase) {
   text-decoration: underline 1.5px;
@@ -196,16 +218,19 @@ html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { 
 
 @media (max-width: 599px) {
   .ll-line { font-size: .875em; padding-bottom: 10px; }
+  /* 13px on Genius' 16px phone lyrics */
+  .ll-note { font-size: .8125em; }
   .ll-head-row { flex-direction: column; align-items: stretch; }
   /* In a column the flex-basis would become a height. */
   .ll-status { flex: none; }
-  .ll-actions { justify-content: flex-end; margin-left: 0; }
-  .ll-head-row[data-bare="1"] .ll-actions { justify-content: flex-start; }
-  .ll-btn { min-height: 44px; }
+  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */
+  .ll-actions { justify-content: flex-start; margin-left: 0; }
+  .ll-btn, .ll-gn-toggle { min-height: 44px; }
   .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .5; }
+  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }
+  .ll-note[data-enter] { animation: none; }
   .ll-line[data-ink] .ll-ja { animation: none; }
 }

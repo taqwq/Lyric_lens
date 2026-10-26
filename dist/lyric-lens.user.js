@@ -38,6 +38,77 @@
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
+  // src/genius/ranges.ts
+  var QUOTES = "'‘’ʼ`´";
+  var DQUOTES = '"“”„';
+  var G_ENDING = "\0";
+  function escapeChar(ch) {
+    if (QUOTES.includes(ch)) return `[${QUOTES}]`;
+    if (DQUOTES.includes(ch)) return `[${DQUOTES}]`;
+    if (ch === "…") return "(?:…|\\.{3})";
+    if (ch === G_ENDING) return `(?:g|[${QUOTES}])?`;
+    if (/\s/.test(ch)) return "\\s+";
+    return ch.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+  }
+  function phrasePattern(phrase) {
+    let text2 = phrase.trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, "").replace(/\.{3}/g, "…");
+    if (!text2) return null;
+    text2 = text2.replace(/([A-Za-z]+)in(?:g|['‘’ʼ])?(?![A-Za-z])/g, `$1in${G_ENDING}`);
+    let source = "";
+    let lastWasSpace = false;
+    for (const ch of text2) {
+      const space = /\s/.test(ch);
+      if (space && lastWasSpace) continue;
+      source += escapeChar(ch);
+      lastWasSpace = space;
+    }
+    try {
+      return new RegExp(source, "iu");
+    } catch {
+      return null;
+    }
+  }
+  function boundedPattern(re) {
+    try {
+      return new RegExp(`(?<![\\p{L}\\p{N}])(?:${re.source})(?![\\p{L}\\p{N}])`, "iu");
+    } catch {
+      return null;
+    }
+  }
+  function locatePhrase(raw, phrase) {
+    const re = phrasePattern(phrase);
+    if (!re) return null;
+    const m = boundedPattern(re)?.exec(raw) ?? re.exec(raw);
+    if (!m) return null;
+    return { start: m.index, end: m.index + m[0].length };
+  }
+  function point(line, offset, preferEnd) {
+    for (let i = 0; i < line.segments.length; i += 1) {
+      const seg = line.segments[i];
+      const len = seg.node.data.length;
+      const inside = preferEnd ? offset > seg.offset && offset <= seg.offset + len : offset >= seg.offset && offset < seg.offset + len;
+      if (inside) return { node: seg.node, offset: offset - seg.offset };
+    }
+    return null;
+  }
+  function phraseRange(line, phrase, doc = document) {
+    if (!line || !line.segments.length) return null;
+    if (line.segments.some((s) => !s.node.isConnected)) return null;
+    const at = locatePhrase(line.raw, phrase);
+    if (!at || at.end <= at.start) return null;
+    const start = point(line, at.start, false);
+    const end = point(line, at.end, true);
+    if (!start || !end) return null;
+    const range = doc.createRange();
+    try {
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+    } catch {
+      return null;
+    }
+    return range;
+  }
+
   // src/platform/storage.ts
   function gmKV() {
     try {
@@ -650,26 +721,37 @@ ${req.user}` : req.user }] }],
       const recommended = preset.recommended ?? [];
       return raw.map((m) => {
         const id = String(m.id ?? m.model ?? m.name ?? "");
-        let rank = 1;
+        let rank2 = 1;
         const rec = recommended.findIndex((r) => id === r || id.endsWith(`/${r}`));
-        if (rec >= 0) rank = 100 - rec;
-        if (preset.id === "openrouter") rank = id.endsWith(":free") ? Math.max(rank, 10) : 0;
-        if (/whisper|tts|embed|guard|moderation|image|vision-only|audio|rerank/i.test(id)) rank = -1;
-        return { id, label: m.name || id, rank };
+        if (rec >= 0) rank2 = 100 - rec;
+        if (preset.id === "openrouter") rank2 = id.endsWith(":free") ? Math.max(rank2, 10) : 0;
+        if (/whisper|tts|embed|guard|moderation|image|vision-only|audio|rerank/i.test(id)) rank2 = -1;
+        return { id, label: m.name || id, rank: rank2 };
       }).filter((m) => m.id && m.rank >= 0).sort((a, b) => b.rank - a.rank || a.id.localeCompare(b.id));
     }
     async generate(req) {
-      const usesCompletionTokens = this.config.preset === "openai" || this.config.preset === "groq";
-      try {
-        return await this.generateOnce(req, usesCompletionTokens);
-      } catch (error) {
-        if (error instanceof LLMError && error.kind === "bad-request" && /max_(completion_)?tokens/i.test(error.message)) {
-          return this.generateOnce(req, !usesCompletionTokens);
+      let completionTokens = this.config.preset === "openai" || this.config.preset === "groq";
+      let flippedTokens = false;
+      let reasoning = /gpt-oss/i.test(req.model) && (this.config.preset === "groq" || this.config.preset === "cerebras");
+      for (; ; ) {
+        try {
+          return await this.generateOnce(req, completionTokens, reasoning);
+        } catch (error) {
+          if (!(error instanceof LLMError) || error.kind !== "bad-request") throw error;
+          if (!flippedTokens && /max_(completion_)?tokens/i.test(error.message)) {
+            completionTokens = !completionTokens;
+            flippedTokens = true;
+            continue;
+          }
+          if (reasoning && /reasoning/i.test(error.message)) {
+            reasoning = false;
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
     }
-    async generateOnce(req, completionTokens) {
+    async generateOnce(req, completionTokens, reasoning) {
       const body = {
         model: req.model,
         messages: [
@@ -680,6 +762,7 @@ ${req.user}` : req.user }] }],
         temperature: 0.6
       };
       body[completionTokens ? "max_completion_tokens" : "max_tokens"] = req.maxOutputTokens;
+      if (reasoning) body.reasoning_effort = req.thinking;
       const sse = new SseParser();
       const think = new ThinkFilter();
       let text2 = "";
@@ -884,6 +967,31 @@ ${req.user}` : req.user }] }],
       cooldowns[cooldownId(config, model)] = { until, reason: error.kind };
       await setJSON(COOLDOWN_KEY, cooldowns);
     };
+    const fromCooldown = (base) => {
+      const now = Date.now();
+      let best = null;
+      for (const config of usable) {
+        for (const m of modelLists.get(config.id) ?? []) {
+          const cd = cooldowns[cooldownId(config, m)];
+          if (cd && cd.reason !== "not-found" && cd.until > now && (!best || cd.until < best.until)) best = cd;
+        }
+      }
+      const message = base?.message ?? "使えるモデルがすべて上限に達しています。";
+      if (!best) return base ?? new LLMError("quota", message, { status: 429 });
+      const kind = best.reason === "quota" ? "quota" : "rate";
+      const wait = best.until - now;
+      const error = new LLMError(kind, message, {
+        status: 429,
+        // stopFromError reads a quota wait above one minute as the real reset (not Pacific midnight).
+        retryAfterMs: kind === "quota" ? Math.max(60001, wait) : wait,
+        detail: base?.detail
+      });
+      if (base) {
+        error.model = base.model;
+        error.provider = base.provider;
+      }
+      return error;
+    };
     for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length; pass += 1) {
       if (pass > 0) {
         const wait = BUSY_PASS_WAITS_MS[pass - 1];
@@ -945,7 +1053,11 @@ ${req.user}` : req.user }] }],
                   if (useful === void 0 || useful) produced = true;
                 }
               });
-              delete cooldowns[cooldownId(config, model)];
+              const id = cooldownId(config, model);
+              if (cooldowns[id]) {
+                delete cooldowns[id];
+                await setJSON(COOLDOWN_KEY, cooldowns);
+              }
               return { ...result, model, provider: label };
             } catch (raw) {
               if (!(raw instanceof LLMError)) throw raw;
@@ -954,6 +1066,7 @@ ${req.user}` : req.user }] }],
               error.model = model;
               error.provider = label;
               if (produced) {
+                await remember(config, model, error);
                 return { finish: "unknown", finishDetail: error.kind, text: "", model, provider: label, error };
               }
               if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
@@ -990,10 +1103,9 @@ ${req.user}` : req.user }] }],
       const busy = busyNow.size > 0 && passErrors.every((e) => ["overloaded", "not-found", "timeout", "network", "quota"].includes(e.kind));
       if (!busy) break;
     }
-    if (!errors.length && skippedForCooldown) {
-      throw new LLMError("quota", "使えるモデルがすべて上限に達しています。", { status: 429 });
-    }
-    throw pickReportedError(errors);
+    if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+    const reported = pickReportedError(errors);
+    throw reported.kind === "quota" ? fromCooldown(reported) : reported;
   }
 
   // src/core/prompt.ts
@@ -1004,19 +1116,23 @@ ${req.user}` : req.user }] }],
 ## 進め方
 1. 歌詞を最後まで読み、誰が誰に語っているか、何が起きているか、語調と温度感をつかむ。前半の言葉が後半で回収・反転されていないか、語り手が途中で替わらないか（客演のヴァースなど）も確かめる。
 2. その理解を song レコードに書いてから、1行ずつ訳す。motifs には繰り返すフレーズに加えて、繰り返すアドリブ・呼びかけ語（hold up、ayy、bitch／lil' bitch など）も入れ、全行でその訳語を使う。罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。
+3. 各行を訳す前に、その英文の主語と時制を確かめる（主語があれば命令形にしない）。
 
 ## 訳（ja）
 - 何より先に、語調と温度感を写す：自慢、挑発、脅し、皮肉、自嘲、色気、甘さ、ユーモア。意味はその次。かしこまった書き言葉に丸めない。
 - 一人称と語尾は語り手の人物像と相手との関係で決め、同じ語り手の間は保つ（俺／僕／あたし／私、〜だぜ／〜じゃねえ／〜だよ）。
-- 卑語・性的な語・乱暴な表現は、同じ強さの口語で訳す。fuck／shit／fuckin' の強調は「クソ」「クソみてえな」「マジで」などで残し、落とさない。性器・性行為の語を「体」「女」「抱く」のような穏やかな語に丸めない。遠回しな言い換え・硬い語・誇張はしない。
+- 卑語・性的な語・乱暴な表現は、同じ強さの口語で訳す。fuck／shit／fuckin' の強調は「クソ」「クソみてえな」「マジで」などで残し、落とさない。性器・性行為の語を「体」「女」「抱く」のような穏やかな語に丸めない。遠回しな言い換え・硬い語・誇張はしない。ただし卑語や体の部位を含む決まり文句は字面どおりに訳さず、その句の慣用の意味を同じ強さの口語で訳す（kiss my ass＝ふざけんな、bust my balls＝しつこく絡んでくる）。字面の性的・身体的な意味で訳すのは、その行が本当に体や行為の話をしているときだけ。
 - スラング・AAVE・隠語は意味で訳す。直訳して意味が通らない訳にしない。
-- AAVE の文法はそのまま読む：三単現の -s や be 動詞の省略は普通の平叙文で、命令文ではない（例：Nobody love her は「誰も彼女を愛さない」、She don't care は「あいつは気にしない」）。習慣の be、ain't、無変化の過去形（put / hit / quit など）に注意する。恋愛・性的な文脈の lil' baby や shorty は多くの場合女性を指し、聞き手の you と取り違えない。
+- 主語のある英文は命令文ではない。AAVE では三単現の -s や be 動詞が落ちる（Nobody call my phone＝誰も俺に電話してこない、She don't care＝あいつは気にしない）。命令形（〜な／〜しろ／〜れ）で訳すのは、行頭の呼びかけ語を除くと主語が無く、動詞の原形か Don't で始まる文だけ。
+- put / hit / quit / set / cut などの無変化の過去形は、前後が過去の話なら過去で訳し、未来や意志（〜してやる）にしない。習慣の be、ain't にも注意する。
+- 恋愛・性的な文脈の lil' baby／shorty や she は三人称（あの子・あいつ）。「お前」と訳すのは、その行が明らかにその相手に呼びかけているときだけ。聞き手の you と取り違えない。
 - 1つの文が複数行にまたがるときは、各行に対応する部分を訳し、続けて読むと自然な日本語になるようにする。
 - 原文の ( ) は、中身が直前の語のこだまや相づちの繰り返しでも省かず、同じ数・同じ位置に（）で訳す。
-- 原文にない人物関係・出来事・感情・因果を足さない。曖昧な箇所は曖昧なまま訳す。
+- 原文に無い人物関係・出来事・感情・因果を足さない。原文に無い語で解釈を補わない：感嘆詞・地名・名前を、それが暗に指すかもしれない人物・神仏・称号・品質の語に置き換えたり書き足したりしない（その読みは notes の reference か ambiguous に書く）。
+- 原文の語も落とさない：行頭・行末の呼びかけ（nigga／motherfucker／homie／girl など）、I know／I swear／I bet のような行の中身をくくる枠の語、ayy／uh などのアドリブも訳に残す。曖昧な箇所は曖昧なまま訳し、読みが割れるなら notes の ambiguous に書く。
 - 訳には訳文だけを書く。説明や補足を混ぜない。訳文に（）を書くのは、原文の同じ位置に ( ) があるときだけ。語の意味の補足は notes に書く。
 - 長さの目安はスマホで1行（およそ24字）。ただし語調や二重の意味を削ってまで縮めない。
-- 人名・ブランド・地名はカタカナ（定着した表記があればそれ）。
+- 人名・ブランド・商品名・地名は、訳文でもその名前のまま書く（カタカナ。定着した表記があればそれ。例：Hennessy→ヘネシー）。商品名の一部の英単語（色・数・形容詞など）を名前から切り離して普通の語として訳さない。名前を説明や一般名詞（値段・格・種類の言い換え）に置き換えたり、名前の横に説明を並べたりしない。名前を知らないと行の意味を取り違えるときだけ notes の reference に書く。
 
 ## 注（notes）
 訳だけでは誤読する、または大事なものが抜け落ちる箇所にだけ付ける。目安は6行に1つ以下。0件でよい。
@@ -1024,8 +1140,8 @@ ${req.user}` : req.user }] }],
 - 付けないもの：名前が出るだけの人名やブランド・商品名（知らないと行の意味を取り違える場合だけ付ける）、酒・食べ物・服などのブランドを「高級〜」と説明するだけの注、一般的な口語、訳を読めば分かること、単語の辞書的な意味。
 - 迷ったら付けない。指示にある上限件数を超えない。
 - 優先順：訳で消えてしまう掛詞・音遊び ＞ 裏の意味があるスラング ＞ 知らないと意味が変わる reference。
-- x を「〜の一種」「〜のこと」のような辞書の定義で始めない。この行で何が起きているかを書く。
-- q は原文の行からそのまま抜き出した語句。x は日本語で2文以内・80字程度。訳の言い直しではなく、訳から抜け落ちる情報を書く。
+- x を「〜のこと」「〜の略」「〜を指すスラング」のような辞書の定義にしない（文頭でも文末でも）。この行で何が起きているかを書く。
+- q は原文の行の連続した一部をそのまま1つ（「/」や「...」で離れた語をつながない。離れた語にまたがる仕掛けは、それらを含む最短の連続した部分を q にする）。x は日本語で2文以内・80字程度。訳の言い直しではなく、訳から抜け落ちる情報を書く。
 - Genius の注釈は有力な手がかり（▲は支持の数、公認は本人・編集部の確認済み）。▲の多い注釈がある箇所を優先する。使ったときは g にその id を入れる。丸写しせず要点だけ書く。
 - 確証のない事実（特に reference）は c を true にする。Genius の注釈で裏付けられるなら false。
 - 曲解説や注釈は誤りや憶測を含みうる。歌詞と食い違うときは歌詞を優先し、解釈が割れるなら ambiguous にする。
@@ -1359,6 +1475,49 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     const cleaned = dropGroups(head);
     return cleaned ? cleaned + (tail ? tail[0].trimStart() : "") : ja;
   }
+  function widenParens(ja) {
+    return ja.replace(/\s*\(([^()（）]*)\)/g, "（$1）");
+  }
+  var DEFINITION = /^[^。]*(?:のこと|の略語?|の一種|を(?:指す|意味する)(?:スラング|俗語|言葉|語|表現)?)。?$/;
+  var TWO_READINGS = /両方|二重|二つの意味|掛け|掛詞|もじ|韻|同時に|裏の意味/;
+  var DEFINITION_TAIL = /(?:という意味)?(?:の表現)?(?:のこと|の略語?|の一種|を(?:指す|意味する)(?:スラング|俗語|言葉|語|表現)?)。?$/;
+  var GENERIC = /* @__PURE__ */ new Set(["意味", "表現", "言葉", "俗語", "隠語", "略語", "略", "一種", "単語", "英語", "言い方", "スラング"]);
+  function definedTerms(sentence) {
+    const body = sentence.replace(DEFINITION_TAIL, "");
+    const meaning = body.split(/[＝=]/).pop().replace(/^[^は]{1,24}は/, "");
+    return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A0-\u30FF]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
+  }
+  function trimDefinition(note, ja) {
+    if (note.kind !== "slang" && note.kind !== "idiom") return note;
+    const sentences = (note.text.match(/[^。]+。?/g) ?? []).map((s) => s.trim()).filter(Boolean);
+    const first = sentences[0] ?? "";
+    if (!DEFINITION.test(first) || TWO_READINGS.test(first)) return note;
+    if (!definedTerms(first).some((t) => ja.includes(t))) return note;
+    const rest = sentences.slice(1).join("");
+    return rest.length >= 12 ? { ...note, text: rest } : null;
+  }
+  var PHRASE_JOIN = /\s*(?:[/／]|…|\.{3})\s*/;
+  function contiguousPhrase(phrase, line) {
+    if (!PHRASE_JOIN.test(phrase) || locatePhrase(line, phrase)) return phrase;
+    const parts = phrase.split(new RegExp(PHRASE_JOIN.source, "g")).map((p) => p.trim()).filter((p) => looseText(p));
+    if (!parts.length) return phrase;
+    let from = 0;
+    let start = -1;
+    for (const part of parts) {
+      const at2 = locatePhrase(line.slice(from), part);
+      if (!at2) {
+        start = -1;
+        break;
+      }
+      if (start < 0) start = from + at2.start;
+      from += at2.end;
+    }
+    if (start >= 0 && parts.length > 1) return line.slice(start, from).trim();
+    const found = parts.filter((p) => locatePhrase(line, p)).sort((a, b) => b.length - a.length)[0];
+    if (!found) return phrase;
+    const at = locatePhrase(line, found);
+    return line.slice(at.start, at.end).trim() || phrase;
+  }
   function sameNote(a, b) {
     return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
   }
@@ -1397,12 +1556,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         }
         const notes = [];
         for (const raw of ev.notes) {
-          const note = { kind: raw.kind, phrase: raw.phrase, text: raw.text };
-          if (raw.conjecture) note.conjecture = true;
-          if (raw.genius) note.genius = raw.genius;
+          const built = { kind: raw.kind, phrase: contiguousPhrase(raw.phrase, u.text), text: raw.text };
+          if (raw.conjecture) built.conjecture = true;
+          if (raw.genius) built.genius = raw.genius;
+          const note = trimDefinition(built, ev.ja);
+          if (!note) continue;
           if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
         }
-        const result = { ja: stripGlosses(ev.ja, u.text) };
+        const result = { ja: widenParens(stripGlosses(ev.ja, u.text)) };
         if (notes.length) result.notes = notes;
         this.record.lines[u.key] = result;
         this.added += 1;
@@ -1487,9 +1648,18 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     return out;
   }
-  async function fetchAnnotations(songId, opts = {}) {
+  var inflight = /* @__PURE__ */ new Map();
+  function fetchAnnotations(songId, opts = {}) {
     const hit = cache.get(songId);
-    if (hit) return hit;
+    if (hit) return Promise.resolve(hit);
+    let pending = inflight.get(songId);
+    if (!pending) {
+      pending = fetchOnce(songId, opts).finally(() => inflight.delete(songId));
+      inflight.set(songId, pending);
+    }
+    return pending;
+  }
+  async function fetchOnce(songId, opts) {
     const origin = opts.origin ?? location.origin;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 6e3);
@@ -1784,13 +1954,18 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   var SONG_PREFIX = "ll3:s:";
   var INDEX_KEY = "ll3:index";
   var MAX_SONGS = 300;
+  var TOUCH_INTERVAL_MS = 6 * 36e5;
+  var MAX_IMPORT_CHARS = 64 * 1024 * 1024;
   function songKey(id) {
     return SONG_PREFIX + id;
   }
+  function isRecord(value) {
+    const r = value;
+    return Boolean(r) && typeof r === "object" && r.v === 2 && typeof r.lines === "object" && r.lines !== null && !Array.isArray(r.lines);
+  }
   async function loadSong(id) {
     const record = await getJSON(songKey(id), null);
-    if (!record || record.v !== 2 || typeof record.lines !== "object") return null;
-    return record;
+    return isRecord(record) ? record : null;
   }
   async function saveSong(record) {
     record.updatedAt = Date.now();
@@ -1805,6 +1980,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         await remove(songKey(old));
       }
     }
+    await setJSON(INDEX_KEY, index);
+  }
+  async function touchSong(id) {
+    const index = await getJSON(INDEX_KEY, {});
+    const entry = index[id];
+    if (!entry || Date.now() - entry[0] < TOUCH_INTERVAL_MS) return;
+    entry[0] = Date.now();
     await setJSON(INDEX_KEY, index);
   }
   async function deleteSong(id) {
@@ -1826,6 +2008,105 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   async function deleteAllSongs() {
     for (const key of await listKeys()) if (key.startsWith(SONG_PREFIX)) await remove(key);
     await setJSON(INDEX_KEY, {});
+  }
+  var EXPORT_APP = "lyric-lens";
+  var EXPORT_VERSION = 1;
+  async function exportSongs() {
+    const songs = [];
+    for (const key of await listKeys()) {
+      if (!key.startsWith(SONG_PREFIX)) continue;
+      const record = await loadSong(key.slice(SONG_PREFIX.length));
+      if (record) songs.push(record);
+    }
+    return JSON.stringify({ app: EXPORT_APP, v: EXPORT_VERSION, exportedAt: Date.now(), songs });
+  }
+  var isObject = (x) => Boolean(x) && typeof x === "object" && !Array.isArray(x);
+  var str2 = (x) => typeof x === "string" ? x : "";
+  var stamp = (x, fallback) => typeof x === "number" && Number.isFinite(x) && x > 0 ? Math.min(x, Date.now()) : fallback;
+  function cleanNote(raw) {
+    if (!isObject(raw)) return null;
+    const kind = raw.kind;
+    if (!NOTE_KINDS.includes(kind) || typeof raw.phrase !== "string" || typeof raw.text !== "string") return null;
+    return {
+      kind,
+      phrase: raw.phrase,
+      text: raw.text,
+      ...raw.conjecture === true ? { conjecture: true } : {},
+      ...typeof raw.genius === "string" && raw.genius ? { genius: raw.genius } : {}
+    };
+  }
+  function cleanLine(raw) {
+    if (!isObject(raw) || typeof raw.ja !== "string" || !raw.ja.trim()) return null;
+    const notes = (Array.isArray(raw.notes) ? raw.notes : []).map(cleanNote).filter((n) => n !== null);
+    return notes.length ? { ja: raw.ja, notes } : { ja: raw.ja };
+  }
+  var STOP_REASONS = ["busy", "rate", "quota", "auth", "blocked", "network", "unusable", "stopped", "length", "closed", "gaps"];
+  function cleanStop(raw, fallbackAt) {
+    if (!isObject(raw) || !STOP_REASONS.includes(raw.reason)) return void 0;
+    const until = typeof raw.until === "number" && Number.isFinite(raw.until) ? raw.until : void 0;
+    return { reason: raw.reason, at: typeof raw.at === "number" && Number.isFinite(raw.at) ? raw.at : fallbackAt, ...until !== void 0 ? { until } : {} };
+  }
+  function cleanContext(raw) {
+    if (!isObject(raw) || typeof raw.who !== "string" || typeof raw.what !== "string") return void 0;
+    const motifs = (Array.isArray(raw.motifs) ? raw.motifs : []).filter((m) => isObject(m) && typeof m.en === "string" && typeof m.ja === "string" && Boolean(m.en) && Boolean(m.ja)).map((m) => ({ en: m.en, ja: m.ja }));
+    return { who: raw.who, what: raw.what, ...typeof raw.tone === "string" && raw.tone ? { tone: raw.tone } : {}, ...motifs.length ? { motifs } : {} };
+  }
+  function cleanRecord(raw) {
+    if (!isObject(raw) || raw.v !== 2 || typeof raw.id !== "string" || !raw.id || !isObject(raw.lines)) return null;
+    const lines = {};
+    for (const [key, value] of Object.entries(raw.lines)) {
+      if (key === "__proto__") continue;
+      const line = cleanLine(value);
+      if (line) lines[key] = line;
+    }
+    if (!Object.keys(lines).length) return null;
+    const now = Date.now();
+    const updatedAt = stamp(raw.updatedAt, now);
+    const song = cleanContext(raw.song);
+    const stop = cleanStop(raw.stop, updatedAt);
+    return {
+      v: 2,
+      id: raw.id,
+      path: str2(raw.path),
+      title: str2(raw.title),
+      artist: str2(raw.artist),
+      ...song ? { song } : {},
+      lines,
+      ...stop ? { stop } : {},
+      ...typeof raw.model === "string" && raw.model ? { model: raw.model } : {},
+      createdAt: stamp(raw.createdAt, updatedAt),
+      updatedAt
+    };
+  }
+  function rank(r) {
+    return [Object.keys(r.lines).length, r.stop ? 0 : 1, r.updatedAt];
+  }
+  function betterThan(incoming, saved) {
+    const a = rank(incoming);
+    const b = rank(saved);
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  }
+  async function importSongs(text2, skipId) {
+    if (typeof text2 !== "string" || text2.length > MAX_IMPORT_CHARS) throw new Error("not-an-export");
+    const data = JSON.parse(text2);
+    if (!isObject(data) || data.app !== EXPORT_APP || data.v !== EXPORT_VERSION || !Array.isArray(data.songs)) throw new Error("not-an-export");
+    const index = await getJSON(INDEX_KEY, {});
+    let written = 0;
+    try {
+      for (const raw of data.songs) {
+        const record = cleanRecord(raw);
+        if (!record || record.id === skipId) continue;
+        const saved = await loadSong(record.id);
+        if (saved && !betterThan(record, saved)) continue;
+        await setJSON(songKey(record.id), record);
+        index[record.id] = [Math.max(index[record.id]?.[0] ?? 0, record.updatedAt), record.stop ? 1 : 0];
+        written += 1;
+      }
+    } finally {
+      if (written) await setJSON(INDEX_KEY, index);
+    }
+    return written;
   }
   var SaveQueue = class {
     constructor(delayMs = 700) {
@@ -1908,7 +2189,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         this.el = h("div", { class: "ll-head", lang: "ja", "data-exclude-from-selection": "true" });
         isolateClicks(this.el);
       }
-      const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+      const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+      if (view.state) this.el.dataset.llState = view.state;
       if (sig !== this.sig) {
         const focus = this.focusedSlot();
         this.sig = sig;
@@ -1997,6 +2279,17 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
   };
 
+  // src/core/adlib.ts
+  var GROUP2 = "[（(][^（）()]{1,48}[）)]";
+  var TRAILING_GROUPS2 = new RegExp(`(?:\\s*${GROUP2})+\\s*$`);
+  var SOURCE_TRAILING_ONLY2 = /^[^(（]*(?:[(（][^()（）]*[)）]\s*)+$/;
+  function splitAdlibs(ja, source) {
+    if (!/[(（]/.test(source) || !SOURCE_TRAILING_ONLY2.test(source.trim())) return { main: ja, tail: "" };
+    const m = TRAILING_GROUPS2.exec(ja);
+    if (!m || !ja.slice(0, m.index).trim()) return { main: ja, tail: "" };
+    return { main: ja.slice(0, m.index), tail: m[0] };
+  }
+
   // src/ui/lines.ts
   function insertAfter(anchor, el) {
     if (!anchor.parentNode || !anchor.isConnected) return false;
@@ -2024,8 +2317,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       const filled = (i) => Boolean(record?.lines[page.source.lines[i].key]?.ja);
       let lastFilled = -1;
-      page.source.lines.forEach((_, i) => {
-        if (filled(i)) lastFilled = i;
+      page.source.lines.forEach((line, i) => {
+        if (line.occurrence === 0 && filled(i)) lastFilled = i;
       });
       let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
       if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
@@ -2108,7 +2401,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         }, seam.button.label);
         return [h("span", { class: "ll-seam" }, h("span", { class: "ll-seam-text" }, seam.text), button)];
       }
-      const out = [h("span", { class: "ll-ja" }, ja)];
+      const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
+      const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
       if (repeat) out.push(h("span", { class: "ll-repeat", "aria-label": "くり返し" }, "↺"));
       if (noteCount) {
         const record = input.record;
@@ -2158,77 +2452,6 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
   };
 
-  // src/genius/ranges.ts
-  var QUOTES = "'‘’ʼ`´";
-  var DQUOTES = '"“”„';
-  var G_ENDING = "\0";
-  function escapeChar(ch) {
-    if (QUOTES.includes(ch)) return `[${QUOTES}]`;
-    if (DQUOTES.includes(ch)) return `[${DQUOTES}]`;
-    if (ch === "…") return "(?:…|\\.{3})";
-    if (ch === G_ENDING) return `(?:g|[${QUOTES}])?`;
-    if (/\s/.test(ch)) return "\\s+";
-    return ch.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
-  }
-  function phrasePattern(phrase) {
-    let text2 = phrase.trim().replace(/^[\s"“”'‘’.,!?…]+|[\s"“”'‘’.,!?…]+$/g, "").replace(/\.{3}/g, "…");
-    if (!text2) return null;
-    text2 = text2.replace(/([A-Za-z]+)in(?:g|['‘’ʼ])?(?![A-Za-z])/g, `$1in${G_ENDING}`);
-    let source = "";
-    let lastWasSpace = false;
-    for (const ch of text2) {
-      const space = /\s/.test(ch);
-      if (space && lastWasSpace) continue;
-      source += escapeChar(ch);
-      lastWasSpace = space;
-    }
-    try {
-      return new RegExp(source, "iu");
-    } catch {
-      return null;
-    }
-  }
-  function boundedPattern(re) {
-    try {
-      return new RegExp(`(?<![\\p{L}\\p{N}])(?:${re.source})(?![\\p{L}\\p{N}])`, "iu");
-    } catch {
-      return null;
-    }
-  }
-  function locatePhrase(raw, phrase) {
-    const re = phrasePattern(phrase);
-    if (!re) return null;
-    const m = boundedPattern(re)?.exec(raw) ?? re.exec(raw);
-    if (!m) return null;
-    return { start: m.index, end: m.index + m[0].length };
-  }
-  function point(line, offset, preferEnd) {
-    for (let i = 0; i < line.segments.length; i += 1) {
-      const seg = line.segments[i];
-      const len = seg.node.data.length;
-      const inside = preferEnd ? offset > seg.offset && offset <= seg.offset + len : offset >= seg.offset && offset < seg.offset + len;
-      if (inside) return { node: seg.node, offset: offset - seg.offset };
-    }
-    return null;
-  }
-  function phraseRange(line, phrase, doc = document) {
-    if (!line || !line.segments.length) return null;
-    if (line.segments.some((s) => !s.node.isConnected)) return null;
-    const at = locatePhrase(line.raw, phrase);
-    if (!at || at.end <= at.start) return null;
-    const start = point(line, at.start, false);
-    const end = point(line, at.end, true);
-    if (!start || !end) return null;
-    const range = doc.createRange();
-    try {
-      range.setStart(start.node, start.offset);
-      range.setEnd(end.node, end.offset);
-    } catch {
-      return null;
-    }
-    return range;
-  }
-
   // src/ui/notes.ts
   var GENIUS_CLIP = 400;
   function registry() {
@@ -2270,7 +2493,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     get element() {
       return this.el;
     }
-    open(note, onClose) {
+    /** `animate`: the reader opened it (not a re-render refreshing an open note). */
+    open(note, onClose, animate = false) {
       this.close();
       this.current = note;
       const notes = note.result.notes ?? [];
@@ -2286,6 +2510,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           onClose();
         }
       });
+      if (animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        el.dataset.enter = "";
+        const done = () => {
+          delete el.dataset.enter;
+        };
+        el.addEventListener("animationend", done, { once: true });
+        setTimeout(done, 400);
+      }
       note.lineNode.after(el);
       this.el = el;
       paint("ll-phrase", phraseRanges(note.lineText, notes));
@@ -2698,10 +2930,16 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   gap: 8px;
 }
 
+/* The key field and mask absorb the remaining width; a button is never squeezed or broken inside a word. */
+.inline > .btn { flex: none; white-space: nowrap; }
+
 /* ---------- services ---------- */
 
 .service { padding: 10px 0; }
 .service + .service { border-top: 1px solid var(--rule); }
+/* the row the app pointed to (focusService): the free service that would unblock the reader */
+.service[data-focus="true"] { margin: 0 -10px; padding: 10px; border-radius: 8px; background: var(--note-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.service[data-focus="true"] + .service { border-top-color: transparent; }
 
 .service-head {
   display: flex;
@@ -2785,9 +3023,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
 
   // src/ui/time.ts
   function formatWhen(until, now = Date.now()) {
+    const past = until % 36e5;
+    const shown = past < 2 * 6e4 ? until - past : until;
     const day = (t) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
-    const time = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(until));
-    return until <= now || day(until) === day(now) ? time : `明日 ${time}`;
+    const time = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(shown));
+    return until <= now || day(shown) === day(now) ? time : `明日 ${time}`;
   }
   function formatDate(at) {
     return new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "long", day: "numeric" }).format(new Date(at));
@@ -2796,11 +3036,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   // src/ui/sheet.ts
   var COPY = {
     firstTitle: "日本語訳をはじめる",
-    step1: "Google AI Studio を開いて、無料のAPIキーを作ります",
+    step1: "Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります",
     step1Link: "Google AI Studio を開く",
     step2: "キーをコピーして、下に貼り付けます",
     placeholder: "APIキーを貼り付け",
-    keyNote: "キーはこの端末のスクリプト用保存領域にだけ保存されます",
+    keyNote: "キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません",
     primary: "保存してこの曲を訳す",
     secondary: "保存だけする",
     checking: "確かめています…",
@@ -2813,6 +3053,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     save: "保存",
     makeKey: "キーを作る",
     removeKey: "キーを消す",
+    reenterKey: "キーを入れ直す",
     statusMissing: "未設定",
     statusOk: "使えます",
     statusBad: "キーが使えません",
@@ -2823,6 +3064,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     deleteSong: "この曲の保存データを消す",
     deleteSongConfirm: "この曲の保存した訳を消しますか？",
     data: "保存データ",
+    dataLead: "書き出したファイルは、別の端末でも読み込めます",
+    exportData: "書き出す",
+    importData: "読み込む",
+    exportFailed: "書き出せませんでした",
+    importNothing: "新しく読み込める曲はありませんでした",
+    importFailed: "読み込めませんでした。Lyric Lens で書き出したファイルを選んでください",
     deleteAll: "すべて消す",
     ok: "消す",
     cancel: "やめる"
@@ -2901,6 +3148,19 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     } catch {
     }
   }
+  function readFileText(file) {
+    if (typeof file.text === "function") return file.text();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("read"));
+      reader.readAsText(file);
+    });
+  }
+  function exportFileName(now = /* @__PURE__ */ new Date()) {
+    const two = (n) => String(n).padStart(2, "0");
+    return `lyric-lens-${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}.json`;
+  }
   function statusText(row) {
     switch (row.kind) {
       case "missing":
@@ -2913,8 +3173,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return COPY.checking;
       case "resting": {
         if (row.until <= 0) return COPY.statusOk;
-        const when = formatWhen(row.until);
-        return when.startsWith("明日") ? `${when}まで休み` : `今日は${when}まで休み`;
+        const when2 = formatWhen(row.until);
+        return when2.startsWith("明日") ? `${when2}まで休み` : `今日は${when2}まで休み`;
       }
       default:
         return "";
@@ -2976,7 +3236,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (outside) finish();
     });
     function focusables() {
-      return Array.from(panel.querySelectorAll("a[href], button, input, select, textarea")).filter((el) => !el.disabled);
+      return Array.from(panel.querySelectorAll('a[href], button, input:not([type="file"]), select, textarea')).filter((el) => !el.disabled);
     }
     rootEl.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !e.isComposing) {
@@ -3265,6 +3525,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         row.el.setAttribute("aria-busy", String(row.busy));
         const want = row.config.apiKey.trim() ? "key" : "input";
         if (row.mode !== want) buildControls(row, want);
+        if (row.removeButton) row.removeButton.textContent = row.kind === "bad" ? COPY.reenterKey : COPY.removeKey;
         if (row.input) {
           row.input.disabled = row.busy;
           if (row.kind === "bad") row.input.setAttribute("aria-invalid", "true");
@@ -3349,6 +3610,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       async function removeKey(row) {
         if (row.busy || closed) return;
+        const wasBad = row.kind === "bad";
         row.busy = true;
         paintRow(row);
         try {
@@ -3367,7 +3629,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         row.until = 0;
         row.message = "";
         paintRow(row);
-        if (isDesktop()) focusEl(row.input);
+        if (isDesktop() || wasBad) focusEl(row.input);
         else {
           row.el.tabIndex = -1;
           focusEl(row.el);
@@ -3463,8 +3725,78 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }
       let summary = null;
       let deleting = false;
+      let transferring = false;
+      const dataBusy = () => deleting || transferring;
       const summaryEl = h("p", { class: "line" });
+      const dataMsg = h("p", { class: "msg", role: "status", "aria-live": "polite" });
+      const sayData = (text2, kind = "") => {
+        dataMsg.textContent = text2;
+        if (kind) dataMsg.dataset.kind = kind;
+        else delete dataMsg.dataset.kind;
+      };
       const zone = h("div", { class: "zone" });
+      const exportButton = button(COPY.exportData, "text", () => {
+        void exportData();
+      });
+      async function exportData() {
+        if (dataBusy() || closed || !summary || summary.count === 0) return;
+        const count = summary.count;
+        transferring = true;
+        sayData("");
+        paintSummary();
+        let failed = false;
+        try {
+          const url = URL.createObjectURL(new Blob([await exportSongs()], { type: "application/json" }));
+          const link = h("a", { href: url, download: exportFileName(), hidden: true });
+          shadow.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1e4);
+        } catch {
+          failed = true;
+          console.error("[Lyric Lens] sheet exportSongs failed");
+        }
+        transferring = false;
+        if (closed) return;
+        paintSummary();
+        if (failed) sayData(COPY.exportFailed, "error");
+        else sayData(`${count}曲を書き出しました`);
+        focusEl(exportButton);
+      }
+      const importButton = button(COPY.importData, "text", () => {
+        fileInput.click();
+      });
+      const fileInput = h("input", {
+        type: "file",
+        accept: "application/json",
+        hidden: true,
+        tabIndex: -1,
+        "aria-hidden": "true",
+        onChange: () => {
+          const file = fileInput.files?.[0];
+          fileInput.value = "";
+          if (file) void importFile(file);
+        }
+      });
+      async function importFile(file) {
+        if (dataBusy() || closed) return;
+        transferring = true;
+        sayData("");
+        paintSummary();
+        let written = -1;
+        try {
+          written = await importSongs(await readFileText(file), options.busySongId);
+          if (written > 0) changed = true;
+        } catch {
+        }
+        transferring = false;
+        if (closed) return;
+        await refreshSummary();
+        if (closed) return;
+        if (written < 0) sayData(COPY.importFailed, "error");
+        else sayData(written === 0 ? COPY.importNothing : `${written}曲を読み込みました`);
+        focusEl(importButton);
+      }
       const deleteAll = button(COPY.deleteAll, "text", () => {
         if (!summary) return;
         const count = summary.count;
@@ -3486,17 +3818,22 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
               done();
               await refreshSummary();
               if (closed) return;
-              zone.replaceChildren(h("div", { class: "actions" }, deleteAll));
+              zone.replaceChildren(dataActions);
               paintSummary();
-              focusEl(deleteAll.disabled ? closeButton : deleteAll);
+              focusEl(deleteAll.disabled ? importButton : deleteAll);
             })();
           }
         });
       });
-      zone.append(h("div", { class: "actions" }, deleteAll));
+      const dataActions = h("div", { class: "actions" }, exportButton, importButton, deleteAll);
+      zone.append(dataActions);
       function paintSummary() {
         summaryEl.textContent = summary ? `保存した曲：${summary.count}曲 · ${formatSize(summary.bytes)}` : "保存した曲：…";
-        deleteAll.disabled = !summary || summary.count === 0 || deleting;
+        const none = !summary || summary.count === 0;
+        exportButton.disabled = none || dataBusy();
+        importButton.disabled = dataBusy();
+        deleteAll.disabled = none || dataBusy();
+        zone.setAttribute("aria-busy", String(dataBusy()));
       }
       async function refreshSummary() {
         try {
@@ -3511,8 +3848,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         "section",
         { class: "section" },
         h("h3", { class: "section-title" }, COPY.data),
+        h("p", { class: "section-lead" }, COPY.dataLead),
         summaryEl,
-        zone
+        zone,
+        dataMsg,
+        fileInput
       ));
       void refreshSummary();
       const firstEmptyInput = () => rows.find((r) => r.input)?.input ?? null;
@@ -3531,9 +3871,26 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           servicesBox.append(row.el);
           paintRow(row);
         }
+        const wanted = options.focusService ? rows.find((r) => r.id === options.focusService) : void 0;
+        if (wanted) wanted.el.dataset.focus = "true";
         place(true);
-        const target = firstEmptyInput();
-        if (target && isDesktop() && shadow.activeElement === closeButton) focusEl(target);
+        const untouched = shadow.activeElement === closeButton;
+        if (wanted) {
+          try {
+            wanted.el.scrollIntoView?.({ block: "nearest" });
+          } catch {
+          }
+          if (untouched) {
+            if (isDesktop() && wanted.input) focusEl(wanted.input);
+            else {
+              wanted.el.tabIndex = -1;
+              focusEl(wanted.el);
+            }
+          }
+        } else {
+          const target = firstEmptyInput();
+          if (target && isDesktop() && untouched) focusEl(target);
+        }
         await Promise.all(rows.map(async (row) => {
           if (!row.config.apiKey.trim()) return;
           const config = row.config;
@@ -3552,7 +3909,174 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     return handle;
   }
 
+  // src/ui/state.ts
+  var SETTINGS = { id: "settings", label: "設定" };
+  var STOP = { id: "stop", label: "止める" };
+  function hideAction(i) {
+    return { id: "hide", label: i.hidden ? "訳を表示" : "訳を隠す" };
+  }
+  function when(until, now) {
+    return until && until > now ? formatWhen(until, now) : "";
+  }
+  function liveStop(stop, i) {
+    if (!stop) return stop;
+    if (stop.reason === "auth" && !i.keyBad) return { reason: "closed", at: stop.at };
+    if (stop.reason === "quota" && i.avail.ok) return { reason: "closed", at: stop.at };
+    if ((stop.reason === "quota" || stop.reason === "rate") && stop.until && stop.until <= i.now) return { reason: "closed", at: stop.at };
+    return stop;
+  }
+  function seamText(stop, i) {
+    const at = when(stop.until, i.now);
+    const text2 = {
+      busy: "AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます",
+      rate: "AIの回数制限にかかりました。1分ほどおいてから続きを訳せます",
+      quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}続きを訳せます`,
+      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
+      blocked: i.onlyGemini ? "この先はAIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります" : "この先はAIの安全フィルタで止められました。もう一度試すと通ることもあります",
+      network: "接続が切れました。つながったら続きを訳せます",
+      unusable: "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
+      stopped: "ここで止めました",
+      length: "長い曲なので、ここで一度区切りました",
+      closed: "ここまで訳してあります",
+      gaps: "ここまで訳してあります"
+    };
+    return text2[stop.reason];
+  }
+  function startFailText(stop, i) {
+    const at = when(stop.until, i.now);
+    const text2 = {
+      busy: "AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ",
+      rate: "AIの回数制限にかかりました。1分ほどおいてから訳せます",
+      quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}訳せます`,
+      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
+      blocked: i.onlyGemini ? "AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります" : "AIの安全フィルタで止められ、訳せませんでした",
+      network: "接続が切れて、訳し始められませんでした。つながったら訳せます",
+      unusable: "AIの返事をうまく読み取れませんでした。もう一度試せます",
+      length: "長い曲なので、一度では訳し切れませんでした"
+    };
+    return text2[stop.reason] ?? "";
+  }
+  function failureText(stop, now) {
+    const at = when(stop.until, now);
+    const text2 = {
+      busy: "混み合っていました。少しおいてから試せます",
+      rate: "AIの回数制限にかかりました。1分ほどおいてから試せます",
+      quota: `今日の無料枠が終わりました${at ? `（${at}に戻ります）` : ""}`,
+      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
+      blocked: "AIの安全フィルタで止められました",
+      network: "接続が切れました",
+      unusable: "AIの返事をうまく読み取れませんでした",
+      stopped: "止めました",
+      length: "長い曲なので、一度では訳し切れませんでした",
+      closed: "返事が途中で途切れました",
+      gaps: "訳せない行が残りました"
+    };
+    return text2[stop.reason];
+  }
+  function seamFor(stop, i, blocker, spareHint) {
+    const text2 = seamText(stop, i);
+    if (stop.reason === "auth") return { text: text2, button: { id: "settings", label: "設定を開く" } };
+    if (blocker && spareHint) {
+      const reason = stop.reason === "quota" ? text2 : `${text2.split("。")[0]}。${blocker}`;
+      return { text: `${reason}。${spareHint}`, button: { id: "addKey", label: "キーを足す" } };
+    }
+    if (blocker && stop.reason !== "quota") return { text: `${text2.split("。")[0]}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };
+    let disabled = Boolean(blocker);
+    if (stop.reason === "rate" && stop.until && i.now < stop.until) disabled = true;
+    if (stop.reason === "network" && !i.online) disabled = true;
+    return { text: text2, button: { id: "resume", label: "続きを訳す", disabled } };
+  }
+  function decide(i) {
+    const missing = i.total - i.done;
+    const quotaUntil = i.avail.ok ? null : i.avail.until;
+    const blocker = i.otherSong ? "別の曲を訳し終えると続きを訳せます" : quotaUntil != null ? `今日の無料枠は終わりました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から訳せます` : "あとで訳せます"}` : null;
+    const spareHint = !i.otherSong && quotaUntil != null && i.spare ? `${i.spare.name}の無料キーを足すと、今日も続けて訳せます` : null;
+    const none = { slots: false, gaps: false, breathing: false, seam: null };
+    const writing = { slots: true, gaps: false, breathing: true, seam: null };
+    const hide = hideAction(i);
+    if (i.running === "here-retranslate") {
+      return { state: "S8", status: "訳し直しています · 終わるまで今の訳を表示します", actions: [STOP], preface: i.hasPreface, lines: none };
+    }
+    if (i.running === "here") {
+      const arriving = i.hasPreface || i.done > 0;
+      return {
+        state: arriving ? "S4" : "S3",
+        status: arriving ? "" : "曲全体を読んでいます",
+        actions: arriving ? [STOP, hide, SETTINGS] : [STOP],
+        ...i.streams ? {} : { note: "この環境では訳がまとめて届きます" },
+        preface: i.hasPreface,
+        lines: writing
+      };
+    }
+    if (i.mirrored) {
+      return { state: "S4m", status: "別のタブで訳しています", actions: [{ id: "stopMirror", label: "止める" }, hide], preface: i.hasPreface, lines: writing };
+    }
+    if (i.notice && i.done) {
+      return { state: "S8f", status: i.notice.status, ...i.notice.detail ? { note: i.notice.detail } : {}, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+    }
+    const stop = liveStop(i.stop, i);
+    if (!i.done) {
+      if (!i.hasKey) {
+        return { state: "S1", status: "日本語訳には無料のAPIキーが必要です", actions: [{ id: "firstRun", label: "キーを設定", primary: true }], preface: false, lines: none };
+      }
+      if (i.otherSong) {
+        return { state: "S2b", status: `別の曲（${i.otherSong}）を訳しています · 終わると訳せます`, actions: [{ id: "stopOther", label: "あちらを止める" }, SETTINGS], preface: false, lines: none };
+      }
+      if (quotaUntil != null) {
+        return {
+          state: "S2q",
+          status: blocker ?? "",
+          tone: "muted",
+          ...spareHint ? { note: spareHint } : {},
+          actions: [i.spare ? { id: "addKey", label: "キーを足す" } : SETTINGS],
+          preface: false,
+          lines: none
+        };
+      }
+      if (stop && stop.reason !== "closed" && stop.reason !== "stopped") {
+        const seam2 = seamFor(stop, i, null, null);
+        const button = { ...seam2.button, label: seam2.button.label === "続きを訳す" ? "日本語で読む" : seam2.button.label, primary: true };
+        if (button.id === "resume") button.id = "start";
+        return { state: "S2f", status: startFailText(stop, i) || seam2.text, actions: stop.reason === "auth" ? [button] : [button, SETTINGS], preface: false, lines: none };
+      }
+      return { state: "S2", status: "", actions: [{ id: "start", label: "日本語で読む", primary: true }, SETTINGS], preface: false, lines: none };
+    }
+    if (!missing) return { state: "S5", status: "", actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+    const resume = (label) => ({ id: "resume", label, primary: true, disabled: Boolean(blocker) });
+    if (stop?.reason === "gaps") {
+      return {
+        state: "S5g",
+        status: `${missing}行が訳せていません`,
+        ...blocker ? { note: blocker } : {},
+        actions: [resume("抜けた行を訳す"), hide, SETTINGS],
+        preface: i.hasPreface,
+        lines: { slots: false, gaps: true, breathing: false, seam: null }
+      };
+    }
+    if (!stop) {
+      return {
+        state: "S7",
+        status: `歌詞が更新され、まだ訳していない行が${missing}行あります`,
+        ...blocker ? { note: blocker } : {},
+        actions: [resume("新しい行を訳す"), hide, SETTINGS],
+        preface: i.hasPreface,
+        lines: { slots: true, gaps: false, breathing: false, seam: null }
+      };
+    }
+    const seam = seamFor(stop, i, blocker, spareHint);
+    const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === "auth" || seam.button.id === "addKey");
+    return {
+      state: "S6",
+      status: `途中まで訳してあります（${i.done}/${i.total}行）`,
+      ...explain ? { note: seam.text } : {},
+      actions: [{ ...seam.button, primary: true }, hide, ...seam.button.id === "settings" ? [] : [SETTINGS]],
+      preface: i.hasPreface,
+      lines: { slots: true, gaps: false, breathing: false, seam }
+    };
+  }
+
   // src/app.ts
+  var SERVICE_NAMES = { gemini: "Google AI Studio", groq: "Groq", openrouter: "OpenRouter" };
   function identityOf(page) {
     return page.songId ? `id:${page.songId}` : `path:${page.path}`;
   }
@@ -3567,6 +4091,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "run", null);
       __publicField(this, "foreignLock", null);
       __publicField(this, "avail", { ok: true, until: 0 });
+      /** Some configured key is known to be rejected: an invalid-key stop still applies. */
+      __publicField(this, "keyBad", false);
       __publicField(this, "annotations", null);
       /** The record was already saved when this page opened: render without motion. */
       __publicField(this, "fromCache", false);
@@ -3614,7 +4140,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             continue;
           }
           const identity = identityOf(page);
-          if (identity !== this.identity) {
+          const fresh = identity !== this.identity;
+          if (fresh) {
             this.teardown();
             this.identity = identity;
             this.annotations = null;
@@ -3622,14 +4149,16 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             this.record = this.acceptStored(identity, page, await loadSong(identity));
             this.fromCache = hasLines(this.record);
             this.prefaceCollapsed = this.fromCache && !this.record?.stop;
+            if (this.fromCache) void touchSong(identity);
           } else if (!this.run) {
             this.record = this.acceptStored(identity, page, await loadSong(identity));
           }
           this.page = page;
           this.foreignLock = await this.otherLock();
-          this.avail = await availability(currentSettings().providers);
+          await this.refreshKeys();
           this.detectTheme();
           this.renderNow();
+          if (fresh && page.songId && (hasAnyKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
         } while (this.refreshAgain);
       })().finally(() => {
         this.refreshing = null;
@@ -3643,6 +4172,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (stored && identity.startsWith("path:") && stored.title && title && stored.title !== title) return null;
       if (stored && !hasLines(stored) && stored.stop?.reason !== "auth") return null;
       return stored;
+    }
+    prefetchAnnotations(page) {
+      const idle = window.requestIdleCallback;
+      const go = () => {
+        if (this.page?.songId === page.songId) void this.loadAnnotations(page);
+      };
+      if (idle) idle(go, { timeout: 3e3 });
+      else setTimeout(go, 1500);
     }
     teardown() {
       closeSheet();
@@ -3676,10 +4213,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         });
       });
       const dismiss = () => {
-        if (this.notice) {
-          this.notice = null;
-          this.scheduleRender();
-        }
+        if (!this.notice) return;
+        const r = this.head.element?.getBoundingClientRect();
+        if (!r || r.bottom <= 0 || r.top >= window.innerHeight) return;
+        this.notice = null;
+        this.scheduleRender();
       };
       document.addEventListener("pointerdown", dismiss, true);
       document.addEventListener("keydown", dismiss, true);
@@ -3698,15 +4236,20 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         const stored = await loadSong(this.identity);
         if (stored) this.record = stored;
       }
-      if (changed && !lock) this.avail = await availability(currentSettings().providers);
+      if (changed && !lock) await this.refreshKeys();
       if (changed || mirroring) this.scheduleRender();
     }
-    /** A lock held by another tab, or by this tab for another song. */
+    /** What the configured keys allow right now, from what is already known (no request). */
+    async refreshKeys() {
+      const providers = currentSettings().providers;
+      this.avail = await availability(providers);
+      const keyed = providers.filter((p) => p.enabled && p.apiKey.trim());
+      this.keyBad = !keyed.length || (await Promise.all(keyed.map((p) => keyStatus(p)))).every((st) => st.kind === "bad");
+    }
+    /** A lock held by another tab. */
     async otherLock() {
       const lock = await readLock();
-      if (!lock) return null;
-      if (lock.tab === TAB_ID && this.run && lock.id === this.run.id && lock.id === this.identity) return null;
-      return lock;
+      return lock && lock.tab !== TAB_ID ? lock : null;
     }
     affectsLyrics(m) {
       const target = m.target.nodeType === 1 ? m.target : m.target.parentElement;
@@ -3843,28 +4386,43 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (!times.length) return;
       const at = Math.min(...times);
       this.wakeTimer = setTimeout(() => {
-        void availability(currentSettings().providers).then((a) => {
-          this.avail = a;
-          this.renderNow();
-        });
+        void this.refreshKeys().then(() => this.renderNow());
       }, Math.min(at - Date.now() + 500, 2 ** 31 - 1));
     }
-    view(page) {
+    /** Everything the pure state machine (ui/state.ts) needs, read from this tab's state. */
+    viewInput(page) {
       const settings = currentSettings();
       const run = this.run;
       const here = run && run.id === this.identity ? run : null;
       const shown = this.shown();
-      const total = page.source.lines.length;
-      const done = page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length;
-      const missing = total - done;
-      const mirrored = !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity);
-      const otherSong = run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null;
-      const quotaUntil = this.avail.ok ? null : this.avail.until;
-      const blocker = otherSong ? "別の曲を訳し終えると続きを訳せます" : quotaUntil != null ? `今日の無料枠は終わりました · ${quotaUntil > Date.now() ? `${formatWhen(quotaUntil)}から訳せます` : "あとで訳せます"}` : null;
-      const settingsAction = { label: "設定", onClick: (b) => this.openSettings(b) };
-      const hideAction = { label: settings.hideTranslation ? "訳を表示" : "訳を隠す", onClick: () => void this.toggleHidden() };
-      const stopAction = { label: "止める", onClick: () => this.stop() };
-      const preface = shown?.song && (shown.song.who || shown.song.what) ? {
+      const keyed = settings.providers.filter((p) => p.enabled && p.apiKey.trim());
+      const spare = settings.providers.find((p) => p.enabled && !p.apiKey.trim());
+      return {
+        now: Date.now(),
+        online: navigator.onLine,
+        streams: transportStreams(),
+        hidden: settings.hideTranslation,
+        hasKey: hasAnyKey(settings),
+        keyBad: this.keyBad,
+        onlyGemini: keyed.length === 1 && keyed[0].preset === "gemini",
+        spare: spare ? { id: spare.preset, name: SERVICE_NAMES[spare.preset] ?? spare.preset } : null,
+        total: page.source.lines.length,
+        done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
+        stop: shown?.stop,
+        hasPreface: Boolean(shown?.song && (shown.song.who || shown.song.what)),
+        running: here ? here.retranslate ? "here-retranslate" : "here" : "none",
+        mirrored: !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity),
+        otherSong: run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null,
+        avail: this.avail,
+        notice: this.notice
+      };
+    }
+    view(page) {
+      const input = this.viewInput(page);
+      const d = decide(input);
+      const shown = this.shown();
+      const bind = (a) => ({ ...a, onClick: (el) => this.act(a.id, el, input) });
+      const preface = d.preface && shown?.song ? {
         who: shown.song.who,
         what: shown.song.what,
         collapsed: this.prefaceCollapsed,
@@ -3874,136 +4432,56 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.renderNow();
         }
       } : null;
-      const lines = {
-        page,
-        record: shown,
-        slots: false,
-        gaps: false,
-        breathing: false,
-        seam: null,
-        animate: !this.fromCache,
-        openIndex: this.notes.openIndex,
-        onMark: (i) => void this.toggleNote(i),
-        onMarkHover: (i, on) => this.peek(i, on)
-      };
-      if (here?.retranslate) {
-        return { head: { status: "訳し直しています · 終わるまで今の訳を表示します", actions: [stopAction], preface }, lines };
-      }
-      if (here) {
-        const arriving = Boolean(preface) || done > 0;
-        return {
-          head: {
-            status: arriving ? "" : "曲全体を読んでいます",
-            actions: arriving ? [stopAction, hideAction, settingsAction] : [stopAction],
-            note: transportStreams() ? void 0 : "この環境では訳がまとめて届きます",
-            preface
-          },
-          lines: { ...lines, slots: true, breathing: true }
-        };
-      }
-      if (mirrored) {
-        return {
-          head: { status: "別のタブで訳しています", actions: [{ label: "止める", onClick: () => void requestAbort() }, hideAction], preface },
-          lines: { ...lines, slots: true, breathing: true }
-        };
-      }
-      if (this.notice && done) {
-        return { head: { status: this.notice.status, actions: [hideAction, settingsAction], note: this.notice.detail || void 0, preface }, lines };
-      }
-      const stop = this.liveStop(shown?.stop);
-      if (!done) {
-        if (!hasAnyKey(settings)) {
-          return { head: { status: "日本語訳には無料のAPIキーが必要です", actions: [{ label: "キーを設定", primary: true, onClick: () => this.openFirstRun() }] }, lines };
-        }
-        if (otherSong) {
-          return {
-            head: { status: `別の曲（${otherSong}）を訳しています · 終わると訳せます`, actions: [{ label: "あちらを止める", onClick: () => this.stopOther() }, settingsAction] },
-            lines
-          };
-        }
-        if (quotaUntil != null) {
-          return { head: { status: blocker ?? "", tone: "muted", actions: [settingsAction] }, lines };
-        }
-        if (stop && stop.reason !== "closed") {
-          const seam2 = this.seamFor(stop, null);
-          return { head: { status: seam2.text, actions: [{ ...seam2.button, label: seam2.button.label === "続きを訳す" ? "日本語で読む" : seam2.button.label, primary: true }, settingsAction] }, lines };
-        }
-        return { head: { status: "", actions: [{ label: "日本語で読む", primary: true, onClick: () => void this.translate("start") }, settingsAction] }, lines };
-      }
-      if (!missing) {
-        return { head: { status: "", actions: [hideAction, settingsAction], preface }, lines };
-      }
-      const resume = { label: "訳す", primary: true, disabled: Boolean(blocker), onClick: () => void this.translate("resume") };
-      if (stop?.reason === "gaps") {
-        return {
-          head: { status: `${missing}行が訳せていません`, actions: [resume, hideAction, settingsAction], note: blocker ?? void 0, preface },
-          lines: { ...lines, gaps: true }
-        };
-      }
-      if (!stop) {
-        return {
-          head: { status: `歌詞が更新され、まだ訳していない行が${missing}行あります`, actions: [resume, hideAction, settingsAction], note: blocker ?? void 0, preface },
-          lines: { ...lines, slots: true }
-        };
-      }
-      const seam = this.seamFor(stop, blocker);
+      const seam = d.lines.seam ? { text: d.lines.seam.text, button: { ...d.lines.seam.button, onClick: () => this.act(d.lines.seam.button.id, null, input) } } : null;
       return {
-        head: { status: `途中まで訳してあります（${done}/${total}行）`, actions: [{ ...seam.button, primary: true }, hideAction, settingsAction], preface },
-        lines: { ...lines, slots: true, seam }
+        head: { status: d.status, ...d.tone ? { tone: d.tone } : {}, ...d.note ? { note: d.note } : {}, actions: d.actions.map(bind), preface, state: d.state },
+        lines: {
+          page,
+          record: shown,
+          slots: d.lines.slots,
+          gaps: d.lines.gaps,
+          breathing: d.lines.breathing,
+          seam,
+          animate: !this.fromCache,
+          openIndex: this.notes.openIndex,
+          onMark: (i) => void this.toggleNote(i),
+          onMarkHover: (i, on) => this.peek(i, on)
+        }
       };
     }
-    /** A stored stop whose wait is over reads as plain "ここまで訳してあります". */
-    liveStop(stop) {
-      if (!stop) return stop;
-      if ((stop.reason === "quota" || stop.reason === "rate") && stop.until && stop.until <= Date.now()) return { reason: "closed", at: stop.at };
-      return stop;
-    }
-    /** Why a retranslation did not finish, without promising a 続き that S8f does not offer. */
-    failureText(stop) {
-      const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : "";
-      const text2 = {
-        busy: "混み合っていました",
-        rate: "短い時間に使いすぎました。1分ほどおいてから試せます",
-        quota: `今日の無料枠が終わりました${when ? `（${when}に戻ります）` : ""}`,
-        auth: "APIキーが使えません。設定で確かめてください",
-        blocked: "AIの安全フィルタで止められました",
-        network: "接続が切れました",
-        unusable: "うまく受け取れない返事が来ました",
-        stopped: "止めました",
-        length: "長い曲なので、一度では訳し切れませんでした"
-      };
-      return text2[stop.reason] ?? "";
-    }
-    seamText(stop) {
-      const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : "";
-      const text2 = {
-        busy: "混み合っていて、ここで途切れました",
-        rate: "短い時間に使いすぎました。1分ほどおいてから続きを訳せます",
-        quota: `今日の無料枠が終わりました。${when ? `${when}ごろから` : "あとで"}続きを訳せます`,
-        auth: "APIキーが使えません。設定で確かめてください",
-        blocked: "この先はAIの安全フィルタで止められました。別のモデルなら通ることがあります",
-        network: "接続が切れました。つながったら続きを訳せます",
-        unusable: "うまく受け取れない返事が来ました",
-        stopped: "ここで止めました",
-        length: "長い曲なので、ここで一度区切りました",
-        closed: "ここまで訳してあります",
-        gaps: "ここまで訳してあります"
-      };
-      return text2[stop.reason];
-    }
-    /** The seam's sentence and button. `blocker` (another song running, quota spent) disables
-     *  the button and is said right there, so a tap never silently does nothing. */
-    seamFor(stop, blocker) {
-      const now = Date.now();
-      const text2 = this.seamText(stop);
-      if (stop.reason === "auth") return { text: text2, button: { label: "設定を開く", onClick: () => this.openSettings(null) } };
-      let disabled = false;
-      if (stop.reason === "rate" && stop.until && now < stop.until) disabled = true;
-      if (stop.reason === "network" && !navigator.onLine) disabled = true;
-      if (blocker && stop.reason !== "quota") return { text: `${text2}。${blocker}`, button: { label: "続きを訳す", disabled: true, onClick: () => {
-      } } };
-      if (blocker) disabled = true;
-      return { text: text2, button: { label: "続きを訳す", disabled, onClick: () => void this.translate("resume") } };
+    /** Runs an action named by the state machine. */
+    act(id, el, input) {
+      switch (id) {
+        case "start":
+          void this.translate("start");
+          break;
+        case "resume":
+          void this.translate("resume");
+          break;
+        case "stop":
+          this.stop();
+          break;
+        case "stopMirror":
+          void requestAbort();
+          break;
+        case "stopOther":
+          this.stopOther();
+          break;
+        case "hide":
+          void this.toggleHidden();
+          break;
+        case "settings":
+          this.openSettings(el);
+          break;
+        case "firstRun":
+          this.openFirstRun();
+          break;
+        case "addKey":
+          this.openSettings(el, input.spare?.id);
+          break;
+        case "noop":
+          break;
+      }
     }
     /* ---------- notes ---------- */
     async toggleNote(index) {
@@ -4022,7 +4500,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       if (!line || !result?.notes?.length || !node) return;
       this.anchored(() => this.notes.open(
         { index, key: line.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
-        () => void this.toggleNote(index)
+        () => void this.toggleNote(index),
+        true
       ), node);
       this.renderNow();
       markOf(index)?.focus();
@@ -4063,7 +4542,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.openFirstRun();
           return;
         }
-        this.avail = await availability(settings.providers);
+        await this.refreshKeys();
         if (!this.avail.ok) {
           cannotRetranslate(`今日の無料枠は終わりました${this.avail.until > Date.now() ? `（${formatWhen(this.avail.until)}に戻ります）` : ""}`);
           this.renderNow();
@@ -4102,10 +4581,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         let leaving = false;
         const bye = () => {
           leaving = true;
+          void current.saver.flush();
           current.controller.abort();
           void current.lock.release();
         };
+        const hiddenNow = () => {
+          if (document.visibilityState === "hidden" && !retranslate) void current.saver.flush();
+        };
         window.addEventListener("pagehide", bye, { once: true });
+        document.addEventListener("visibilitychange", hiddenNow);
         this.renderNow();
         try {
           const annotations = await this.loadAnnotations(page);
@@ -4120,21 +4604,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             }
           });
           if (retranslate) {
-            let complete = outcome.complete;
-            if (!complete && stored && outcome.stop && ["gaps", "length"].includes(outcome.stop.reason)) {
+            let landed = outcome.complete;
+            if (!landed && stored && outcome.stop && ["gaps", "length"].includes(outcome.stop.reason)) {
               for (const u of missingLines(source, record)) {
                 const old = stored.lines[u.key];
-                if (old) record.lines[u.key] = old;
+                if (old?.ja) record.lines[u.key] = old;
               }
-              complete = !missingLines(source, record).length;
-              if (complete) delete record.stop;
+              if (!missingLines(source, record).length) delete record.stop;
+              landed = true;
             }
-            if (complete) {
+            if (landed) {
               await saveSong(record);
               if (this.identity === id) this.record = record;
             } else if (this.identity === id) {
               const stop = outcome.stop ?? { reason: "unusable", at: Date.now() };
-              this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: this.failureText(stop) };
+              this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: failureText(stop, Date.now()) };
             }
           } else {
             if (leaving && record.stop?.reason === "stopped") record.stop = { reason: "closed", at: Date.now() };
@@ -4143,13 +4627,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         } catch (error) {
           console.error("[Lyric Lens]", error);
           if (retranslate) {
-            if (this.identity === id) this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: this.failureText({ reason: "unusable", at: Date.now() }) };
+            if (this.identity === id) this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: failureText({ reason: "unusable", at: Date.now() }, Date.now()) };
           } else {
             record.stop = { reason: "unusable", at: Date.now() };
             await this.persist(current, record);
           }
         } finally {
           window.removeEventListener("pagehide", bye);
+          document.removeEventListener("visibilitychange", hiddenNow);
         }
       } finally {
         this.starting = false;
@@ -4157,7 +4642,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         if (run) {
           this.run = null;
           this.foreignLock = await this.otherLock();
-          this.avail = await availability(currentSettings().providers);
+          await this.refreshKeys();
           this.renderNow();
         }
       }
@@ -4184,23 +4669,21 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
      *  offer 続きを訳す / 日本語で読む again. */
-    async afterSheet(changed) {
+    /** An invalid-key stop needs no rewrite here: it stops applying (liveStop) as soon as a
+     *  configured key is believed to work, on this page or any other. */
+    async afterSheet() {
       await loadSettings();
-      const record = this.record;
-      if (changed && !this.run && record?.stop?.reason === "auth") {
-        if (hasLines(record)) record.stop = { reason: "closed", at: Date.now() };
-        else delete record.stop;
-        await saveSong(record);
-      }
       await this.refresh();
     }
-    openSettings(anchor) {
+    openSettings(anchor, focusService) {
       const record = this.record;
       const id = this.identity;
       const busy = Boolean(this.run || this.foreignLock && this.foreignLock.id === id);
       openSheet({
         mode: "settings",
         anchor,
+        ...focusService ? { focusService } : {},
+        busySongId: busy ? id : null,
         song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
         onRetranslate: () => {
           if (this.identity === id) void this.translate("retranslate");
@@ -4211,231 +4694,20 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           this.record = null;
           this.renderNow();
         },
-        onClose: (changed) => void this.afterSheet(changed)
+        onClose: () => void this.afterSheet()
       });
     }
     openFirstRun() {
       openSheet({
         mode: "first-run",
         onSaveAndTranslate: () => void this.translate("start"),
-        onClose: (changed) => void this.afterSheet(changed)
+        onClose: () => void this.afterSheet()
       });
     }
   };
 
   // src/ui/styles.css
-  var styles_default = `/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */
-
-.ll-head, .ll-line, .ll-note {
-  --ll-ink: #4A5260;
-  --ll-ink-repeat: #6B7380;
-  --ll-accent: #B0503A;
-  --ll-label: #6E7581;
-  --ll-note-bg: #F7F3EE;
-  --ll-rule: #D9DCE1;
-  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
-}
-html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
-  --ll-ink: #B8C0CB;
-  --ll-ink-repeat: #8E96A2;
-  --ll-accent: #E3876C;
-  --ll-label: #9AA1AC;
-  --ll-note-bg: #23262B;
-  --ll-rule: #3A3F46;
-}
-html { --ll-hl-bg: rgba(176, 80, 58, .08); }
-html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
-
-/* Japanese typesetting and link resets on every node we add. */
-.ll-head, .ll-line, .ll-note {
-  font-family: var(--ll-font);
-  font-style: normal;
-  font-weight: 400;
-  text-align: left;
-  text-transform: none;
-  line-break: strict;
-  word-break: normal;
-  word-break: auto-phrase;
-  overflow-wrap: anywhere;
-  font-feature-settings: "palt" 1;
-  letter-spacing: .02em;
-  text-spacing-trim: trim-start;
-  hanging-punctuation: none;
-  background: transparent !important;
-  text-decoration: none !important;
-  cursor: auto;
-  overflow-anchor: none;
-  -webkit-tap-highlight-color: transparent;
-}
-.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
-/* Marked data-exclude-from-selection for Genius' own selection tools, but readers can
-   still copy the Japanese. */
-.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
-
-/* ---------- head row + preface ---------- */
-.ll-head {
-  display: block;
-  margin: 0 0 22px;
-  padding: 0;
-  color: var(--ll-ink) !important;
-  font-size: 14px;
-  line-height: 1.6;
-}
-.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
-.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
-.ll-status[data-tone="muted"] { color: var(--ll-label); }
-.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }
-.ll-btn {
-  all: unset;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  color: var(--ll-accent) !important;
-  font: 600 14px/1.3 var(--ll-font);
-  letter-spacing: .02em;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }
-.ll-btn[data-primary] { font-size: 15px; }
-.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
-.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible {
-  outline: 2px solid var(--ll-accent);
-  outline-offset: 2px;
-  border-radius: 3px;
-}
-.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }
-.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
-.ll-preface-rows { display: block; flex: 1; min-width: 0; }
-
-.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
-.ll-preface-toggle {
-  all: unset;
-  box-sizing: border-box;
-  position: relative;
-  flex: none;
-  padding: 0 4px;
-  color: var(--ll-label) !important;
-  font-size: 12px;
-  line-height: 1.8;
-  cursor: pointer;
-}
-.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
-.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }
-.ll-preface-row[hidden] { display: none; }
-.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; letter-spacing: .06em; }
-.ll-preface-who { font-weight: 600; }
-.ll-preface-what { margin-top: 2px; }
-
-/* ---------- lines on ruled paper ---------- */
-.ll-line {
-  display: block;
-  position: relative;
-  margin: 0;
-  padding: 2px 0 12px;
-  min-height: 1.6em;
-  color: var(--ll-ink) !important;
-  font-size: .84em;
-  line-height: 1.6;
-}
-html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
-.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }
-.ll-ja { color: inherit !important; }
-.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }
-
-.ll-line[data-state="empty"] .ll-ja,
-.ll-line[data-state="next"] .ll-ja {
-  display: block;
-  width: min(60%, 320px);
-  height: 1.6em;
-  background: linear-gradient(to right, var(--ll-rule) 1px, transparent 1px) 0 calc(100% - 4px) / 4px 1px repeat-x !important;
-  opacity: .9;
-}
-.ll-line[data-state="next"] .ll-ja { animation: ll-breathe 2.4s ease-in-out infinite; }
-.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }
-.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }
-@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
-@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }
-
-.ll-mark {
-  all: unset;
-  box-sizing: content-box;
-  position: relative;
-  display: inline-block;
-  margin-left: .25em;
-  padding: 0 .15em;
-  color: var(--ll-accent) !important;
-  font: 600 1em/1 var(--ll-font);
-  vertical-align: baseline;
-  cursor: pointer;
-  -webkit-user-select: none;
-  user-select: none;
-}
-/* 44×44 hit area without moving the text. */
-.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
-.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }
-.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }
-
-/* The seam: the first empty slot after an interruption says what happened, right there. */
-.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; color: var(--ll-ink); }
-.ll-seam-text { color: var(--ll-ink); }
-
-/* ---------- notes ---------- */
-.ll-note {
-  display: grid;
-  grid-template-rows: 1fr;
-  margin: 4px 0 14px;
-  padding: 8px 12px;
-  border-left: 2px solid var(--ll-accent);
-  background: var(--ll-note-bg) !important;
-  color: var(--ll-ink) !important;
-  font-size: .78em;
-  line-height: 1.7;
-}
-.ll-note-body { overflow: hidden; min-height: 0; }
-.ll-note-item + .ll-note-item { margin-top: 10px; }
-.ll-note-head { display: flex; align-items: center; gap: 8px; }
-.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
-.ll-note-conj { color: var(--ll-label); font-size: 10.5px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }
-.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }
-.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
-.ll-note-text { display: block; margin-top: 2px; }
-.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }
-.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }
-.ll-gn-toggle { all: unset; cursor: pointer; color: var(--ll-label); font-size: 12px; }
-.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
-.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 4px; }
-
-::highlight(ll-phrase) {
-  text-decoration: underline 1.5px;
-  text-decoration-color: #B0503A;
-  text-underline-offset: 3px;
-  background-color: var(--ll-hl-bg);
-}
-::highlight(ll-phrase-peek) {
-  text-decoration: underline 1.5px;
-  text-decoration-color: #B0503A;
-  text-underline-offset: 3px;
-}
-html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }
-
-@media (max-width: 599px) {
-  .ll-line { font-size: .875em; padding-bottom: 10px; }
-  .ll-head-row { flex-direction: column; align-items: stretch; }
-  /* In a column the flex-basis would become a height. */
-  .ll-status { flex: none; }
-  .ll-actions { justify-content: flex-end; margin-left: 0; }
-  .ll-head-row[data-bare="1"] .ll-actions { justify-content: flex-start; }
-  .ll-btn { min-height: 44px; }
-  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .5; }
-  .ll-line[data-ink] .ll-ja { animation: none; }
-}
-`;
+  var styles_default = '/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */\n\n.ll-head, .ll-line, .ll-note {\n  --ll-ink: #4A5260;\n  --ll-ink-repeat: #6B7380;\n  --ll-accent: #B0503A;\n  --ll-label: #6E7581;\n  --ll-note-bg: #F7F3EE;\n  --ll-rule: #D9DCE1;\n  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;\n}\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {\n  --ll-ink: #B8C0CB;\n  --ll-ink-repeat: #8E96A2;\n  --ll-accent: #E3876C;\n  --ll-label: #9AA1AC;\n  --ll-note-bg: #23262B;\n  --ll-rule: #3A3F46;\n}\n/* `slot` (the dotted empty-slot rule) is a separate token from `rule` (hairlines): it has to be seen. */\n.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }\nhtml { --ll-hl-bg: rgba(176, 80, 58, .08); }\nhtml.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }\n\n/* Japanese typesetting and link resets on every node we add. */\n.ll-head, .ll-line, .ll-note {\n  font-family: var(--ll-font);\n  font-style: normal;\n  font-weight: 400;\n  text-align: left;\n  text-transform: none;\n  line-break: strict;\n  word-break: normal;\n  word-break: auto-phrase;\n  overflow-wrap: anywhere;\n  font-feature-settings: "palt" 1;\n  letter-spacing: .02em;\n  text-spacing-trim: trim-start;\n  hanging-punctuation: none;\n  background: transparent !important;\n  text-decoration: none !important;\n  cursor: auto;\n  overflow-anchor: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }\n/* Marked data-exclude-from-selection for Genius\' own selection tools, but readers can\n   still copy the Japanese. */\n.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }\n\n/* ---------- head row + preface ---------- */\n.ll-head {\n  display: block;\n  margin: 0 0 22px;\n  padding: 0;\n  color: var(--ll-ink) !important;\n  font-size: 14px;\n  line-height: 1.6;\n}\n/* a quiet ruled-paper edge between the front matter and the lyrics */\n.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }\n.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }\n.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }\n.ll-status[data-tone="muted"] { color: var(--ll-label); }\n.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }\n.ll-btn {\n  all: unset;\n  box-sizing: border-box;\n  display: inline-flex;\n  align-items: center;\n  min-height: 28px;\n  color: var(--ll-accent) !important;\n  font: 600 14px/1.3 var(--ll-font);\n  letter-spacing: .02em;\n  cursor: pointer;\n  white-space: nowrap;\n}\n.ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; }\n.ll-btn[data-primary] { font-size: 15px; }\n.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }\n.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {\n  outline: 2px solid var(--ll-accent);\n  outline-offset: 2px;\n  border-radius: 3px;\n}\n/* Keep keyboard-focused controls clear of Genius\' sticky nav. Not on .ll-mark: app.ts focuses it\n   without preventScroll and a margin would make the page jump after anchoring. */\n.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }\n.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }\n.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }\n.ll-preface-rows { display: block; flex: 1; min-width: 0; }\n\n.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }\n.ll-preface-toggle {\n  all: unset;\n  box-sizing: border-box;\n  position: relative;\n  flex: none;\n  padding: 0 4px;\n  color: var(--ll-label) !important;\n  font-size: 12px;\n  line-height: 1.8;\n  cursor: pointer;\n}\n.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }\n.ll-preface-row[hidden] { display: none; }\n.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }\n.ll-preface-who { font-weight: 600; }\n.ll-preface-what { margin-top: 2px; }\n\n/* ---------- lines on ruled paper ---------- */\n.ll-line {\n  display: block;\n  position: relative;\n  margin: 0;\n  padding: 2px 0 12px;\n  min-height: 1.6em;\n  color: var(--ll-ink) !important;\n  font-size: .84em;\n  line-height: 1.6;\n}\nhtml.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }\n.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }\n.ll-ja { color: inherit !important; }\n.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }\n\n.ll-line[data-state="empty"] .ll-ja,\n.ll-line[data-state="next"] .ll-ja {\n  display: block;\n  width: min(60%, 320px);\n  height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;\n}\n/* the red pen\'s frontier: the slot being written now is drawn in the accent ink */\n.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }\n.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }\n.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }\n@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }\n@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }\n\n.ll-mark {\n  all: unset;\n  box-sizing: content-box;\n  position: relative;\n  display: inline-block;\n  margin-left: .25em;\n  padding: 0 .15em;\n  color: var(--ll-accent) !important;\n  font: 600 1em/1 var(--ll-font);\n  vertical-align: baseline;\n  cursor: pointer;\n  -webkit-user-select: none;\n  user-select: none;\n}\n/* 44×44 hit area without moving the text. */\n.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }\n.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }\n\n/* The seam: the first empty slot after an interruption says what happened, right there. */\n.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }\n/* keep the empty slot visible: the line is still untranslated; the sentence below says why */\n.ll-line[data-state="seam"]::before {\n  content: ""; display: block; width: min(60%, 320px); height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;\n}\n.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }\n.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }\n/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */\n.ll-adlib { color: var(--ll-label) !important; }\n\n/* ---------- notes ---------- */\n.ll-note {\n  display: grid;\n  grid-template-rows: 1fr;\n  margin: 2px 0 16px;\n  padding: 8px 12px;\n  border-left: 2px solid var(--ll-accent);\n  background: var(--ll-note-bg) !important;\n  color: var(--ll-ink) !important;\n  font-size: .78em;\n  line-height: 1.7;\n}\n/* an open note hangs from its own line: 6px under it, 16px before the next lyric */\n.ll-line:has(+ .ll-note) { padding-bottom: 4px; }\n/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */\n.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }\n@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }\n.ll-note-body { overflow: hidden; min-height: 0; }\n.ll-note-item + .ll-note-item { margin-top: 10px; }\n.ll-note-head { display: flex; align-items: center; gap: 8px; }\n.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }\n.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }\n.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }\n.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }\n.ll-note-text { display: block; margin-top: 2px; }\n.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }\n.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }\n.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }\n.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }\n.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }\n@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n\n::highlight(ll-phrase) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n  background-color: var(--ll-hl-bg);\n}\n::highlight(ll-phrase-peek) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n}\nhtml.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }\n\n@media (max-width: 599px) {\n  .ll-line { font-size: .875em; padding-bottom: 10px; }\n  /* 13px on Genius\' 16px phone lyrics */\n  .ll-note { font-size: .8125em; }\n  .ll-head-row { flex-direction: column; align-items: stretch; }\n  /* In a column the flex-basis would become a height. */\n  .ll-status { flex: none; }\n  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */\n  .ll-actions { justify-content: flex-start; margin-left: 0; }\n  .ll-btn, .ll-gn-toggle { min-height: 44px; }\n  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }\n  .ll-note[data-enter] { animation: none; }\n  .ll-line[data-ink] .ll-ja { animation: none; }\n}\n';
 
   // src/main.ts
   function registerMenu(label, fn) {

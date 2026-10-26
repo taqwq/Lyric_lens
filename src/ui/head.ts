@@ -7,6 +7,9 @@ import { isOwnNode, type PageSong } from '../genius/extract';
 import { h, isolateClicks } from './dom';
 
 export interface HeadAction {
+  /** What the button does (state machine action id): part of the render signature, so a
+   *  button that looks the same but does something else is rebuilt with its new handler. */
+  id?: string;
   label: string;
   onClick: (button: HTMLElement) => void;
   disabled?: boolean;
@@ -20,6 +23,8 @@ export interface HeadView {
   /** Small line under the row (e.g. buffered transport, why a button is disabled). */
   note?: string;
   preface?: { who: string; what: string; collapsed: boolean; onToggle: () => void } | null;
+  /** State name (S2, S6…), exposed as data-ll-state for debugging and tests. */
+  state?: string;
 }
 
 let prefaceSeq = 0;
@@ -40,7 +45,8 @@ export class HeadRow {
       this.el = h('div', { class: 'll-head', lang: 'ja', 'data-exclude-from-selection': 'true' });
       isolateClicks(this.el);
     }
-    const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+    const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+    if (view.state) this.el.dataset.llState = view.state;
     if (sig !== this.sig) {
       // Rebuilding destroys the focused control: remember which one it was.
       const focus = this.focusedSlot();

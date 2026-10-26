@@ -76,7 +76,8 @@ export class NoteView {
     return this.el;
   }
 
-  open(note: OpenNote, onClose: () => void): void {
+  /** `animate`: the reader opened it (not a re-render refreshing an open note). */
+  open(note: OpenNote, onClose: () => void, animate = false): void {
     this.close();
     this.current = note;
     const notes = note.result.notes ?? [];
@@ -89,6 +90,14 @@ export class NoteView {
         onClose();
       }
     });
+    if (animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      el.dataset.enter = '';
+      // Also on a timer: a background tab may never fire animationend, and a node moved by
+      // reattach() with the attribute still set would replay the animation.
+      const done = () => { delete el.dataset.enter; };
+      el.addEventListener('animationend', done, { once: true });
+      setTimeout(done, 400);
+    }
     note.lineNode.after(el);
     this.el = el;
     paint('ll-phrase', phraseRanges(note.lineText, notes));

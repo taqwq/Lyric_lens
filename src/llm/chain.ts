@@ -225,6 +225,31 @@ export async function generateWithFallback(
     await setJSON(COOLDOWN_KEY, cooldowns);
   };
 
+  /** The soonest any candidate comes back, read from the cooldown table (which this run's
+   *  failures already updated). A per-minute wait is reported as 'rate', never as the daily quota. */
+  const fromCooldown = (base: LLMError | null): LLMError => {
+    const now = Date.now();
+    let best: Cooldown | null = null;
+    for (const config of usable) {
+      for (const m of modelLists.get(config.id) ?? []) {
+        const cd = cooldowns[cooldownId(config, m)];
+        if (cd && cd.reason !== 'not-found' && cd.until > now && (!best || cd.until < best.until)) best = cd;
+      }
+    }
+    const message = base?.message ?? '使えるモデルがすべて上限に達しています。';
+    if (!best) return base ?? new LLMError('quota', message, { status: 429 });
+    const kind: LLMErrorKind = best.reason === 'quota' ? 'quota' : 'rate';
+    const wait = best.until - now;
+    const error = new LLMError(kind, message, {
+      status: 429,
+      // stopFromError reads a quota wait above one minute as the real reset (not Pacific midnight).
+      retryAfterMs: kind === 'quota' ? Math.max(60_001, wait) : wait,
+      detail: base?.detail,
+    });
+    if (base) { error.model = base.model; error.provider = base.provider; }
+    return error;
+  };
+
   for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length; pass += 1) {
     if (pass > 0) {
       const wait = BUSY_PASS_WAITS_MS[pass - 1]!;
@@ -291,7 +316,10 @@ export async function generateWithFallback(
                 if (useful === undefined || useful) produced = true;
               },
             });
-            delete cooldowns[cooldownId(config, model)];
+            // A model that answered is no longer benched: write that back, or the next tap
+            // (often 続きを訳す within minutes) would still try it last or skip it.
+            const id = cooldownId(config, model);
+            if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
             return { ...result, model, provider: label };
           } catch (raw) {
             if (!(raw instanceof LLMError)) throw raw;
@@ -300,7 +328,9 @@ export async function generateWithFallback(
             error.model = model;
             error.provider = label;
             if (produced) {
-              // Keep what arrived; the pipeline asks for the rest in a follow-up round.
+              // Keep what arrived; the pipeline asks for the rest in a follow-up round. Bench the
+              // model first, so 続きを訳す does not go straight back to the one that just broke.
+              await remember(config, model, error);
               return { finish: 'unknown', finishDetail: error.kind, text: '', model, provider: label, error };
             }
             if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
@@ -341,8 +371,10 @@ export async function generateWithFallback(
     if (!busy) break;
   }
 
-  if (!errors.length && skippedForCooldown) {
-    throw new LLMError('quota', '使えるモデルがすべて上限に達しています。', { status: 429 });
-  }
-  throw pickReportedError(errors);
+  // Every candidate was skipped: say when the first one is back (a minute or a day), not always "today".
+  if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+  const reported = pickReportedError(errors);
+  // A real quota error often carries no usable reset time (or a Gemini-style midnight that does not
+  // apply to another provider's model); the cooldown table knows when the soonest model returns.
+  throw reported.kind === 'quota' ? fromCooldown(reported) : reported;
 }

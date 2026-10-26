@@ -4,6 +4,7 @@
  * applied (and saved by the caller) immediately. If the stream stops early, the song simply
  * stays partial with a reason; continuing is the reader's next tap, never automatic.
  */
+import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
 import { LLMError } from '../llm/errors';
 import type { ProviderConfig, ThinkingLevel } from '../llm/types';
@@ -71,6 +72,73 @@ export function stripGlosses(ja: string, source: string): string {
   return cleaned ? cleaned + (tail ? tail[0].trimStart() : '') : ja;
 }
 
+/** Some models (Gemma in particular) write the source's ad-lib groups with ASCII
+ *  parentheses and a space: 「そうさ (Yeah)」. The Japanese column uses one style, （…）,
+ *  set tight against the text. The contents are left exactly as written. */
+export function widenParens(ja: string): string {
+  return ja.replace(/\s*\(([^()（）]*)\)/g, '（$1）');
+}
+
+const DEFINITION = /^[^。]*(?:のこと|の略語?|の一種|を(?:指す|意味する)(?:スラング|俗語|言葉|語|表現)?)。?$/;
+/** A sentence that names two readings is wordplay, not a definition, whatever its ending. */
+const TWO_READINGS = /両方|二重|二つの意味|掛け|掛詞|もじ|韻|同時に|裏の意味/;
+
+const DEFINITION_TAIL = /(?:という意味)?(?:の表現)?(?:のこと|の略語?|の一種|を(?:指す|意味する)(?:スラング|俗語|言葉|語|表現)?)。?$/;
+const GENERIC = new Set(['意味', '表現', '言葉', '俗語', '隠語', '略語', '略', '一種', '単語', '英語', '言い方', 'スラング']);
+
+/** The words a definition sentence gives as the meaning: 「雪＝コカインを意味するスラング」 →
+ *  コカイン, 「旅先でもらう日当のこと」 → 旅先, 日当. Kanji and katakana runs only. */
+function definedTerms(sentence: string): string[] {
+  const body = sentence.replace(DEFINITION_TAIL, '');
+  const meaning = body.split(/[＝=]/).pop()!.replace(/^[^は]{1,24}は/, '');
+  return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A0-\u30FF]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
+}
+
+/** A slang/idiom note whose first sentence only defines the word repeats the translation
+ *  when ja already renders that meaning (the prompt asks it to), and costs a ※. Then keep
+ *  what follows the definition when there is something, or drop the note. When ja kept the
+ *  word itself (「パルメザン」), the definition is what the reader needs: it stays. Reference,
+ *  wordplay and ambiguous notes are never touched. Sentences are split without lookbehind
+ *  (old iOS Safari). */
+export function trimDefinition(note: Note, ja: string): Note | null {
+  if (note.kind !== 'slang' && note.kind !== 'idiom') return note;
+  const sentences = (note.text.match(/[^。]+。?/g) ?? []).map((s) => s.trim()).filter(Boolean);
+  const first = sentences[0] ?? '';
+  if (!DEFINITION.test(first) || TWO_READINGS.test(first)) return note;
+  if (!definedTerms(first).some((t) => ja.includes(t))) return note;
+  const rest = sentences.slice(1).join('');
+  return rest.length >= 12 ? { ...note, text: rest } : null;
+}
+
+const PHRASE_JOIN = /\s*(?:[/／]|…|\.{3})\s*/;
+
+/** Models sometimes quote separate words joined by '/' or '...' ("rights / write"), which
+ *  never occurs in the line, so the note gets no underline (the phrase match needs one
+ *  contiguous span). Such a phrase becomes the line's own text from the first quoted part
+ *  to the last; if the parts are not all there in order, the longest part that is. A phrase
+ *  that already matches (an "AC/DC" in the line itself) is kept as written. */
+export function contiguousPhrase(phrase: string, line: string): string {
+  if (!PHRASE_JOIN.test(phrase) || locatePhrase(line, phrase)) return phrase;
+  const parts = phrase.split(new RegExp(PHRASE_JOIN.source, 'g')).map((p) => p.trim()).filter((p) => looseText(p));
+  if (!parts.length) return phrase;
+  let from = 0;
+  let start = -1;
+  for (const part of parts) {
+    const at = locatePhrase(line.slice(from), part);
+    if (!at) {
+      start = -1;
+      break;
+    }
+    if (start < 0) start = from + at.start;
+    from += at.end;
+  }
+  if (start >= 0 && parts.length > 1) return line.slice(start, from).trim();
+  const found = parts.filter((p) => locatePhrase(line, p)).sort((a, b) => b.length - a.length)[0];
+  if (!found) return phrase;
+  const at = locatePhrase(line, found)!;
+  return line.slice(at.start, at.end).trim() || phrase;
+}
+
 function sameNote(a: Note, b: Note): boolean {
   return a.kind === b.kind && looseText(a.phrase) === looseText(b.phrase);
 }
@@ -110,12 +178,15 @@ export class RecordBuilder {
       }
       const notes: Note[] = [];
       for (const raw of ev.notes) {
-        const note: Note = { kind: raw.kind, phrase: raw.phrase, text: raw.text };
-        if (raw.conjecture) note.conjecture = true;
-        if (raw.genius) note.genius = raw.genius;
+        const built: Note = { kind: raw.kind, phrase: contiguousPhrase(raw.phrase, u.text), text: raw.text };
+        if (raw.conjecture) built.conjecture = true;
+        if (raw.genius) built.genius = raw.genius;
+        // A dropped definition does not use up a slot of the cap.
+        const note = trimDefinition(built, ev.ja);
+        if (!note) continue;
         if (notes.length < MAX_NOTES_PER_LINE && !notes.some((n) => sameNote(n, note))) notes.push(note);
       }
-      const result: LineResult = { ja: stripGlosses(ev.ja, u.text) };
+      const result: LineResult = { ja: widenParens(stripGlosses(ev.ja, u.text)) };
       if (notes.length) result.notes = notes;
       this.record.lines[u.key] = result;
       this.added += 1;

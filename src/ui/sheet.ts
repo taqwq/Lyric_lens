@@ -11,12 +11,15 @@ import { LLMError } from '../llm/errors';
 import { presetFor } from '../llm/presets';
 import type { ProviderConfig } from '../llm/types';
 import { SERVICE_ORDER, currentSettings, loadSettings, providerFor, setProviderKey } from '../store/settings';
-import { deleteAllSongs, storageSummary } from '../store/songs';
+import { deleteAllSongs, exportSongs, importSongs, storageSummary } from '../store/songs';
 import { h } from './dom';
 import css from './sheet.css';
 import { formatDate, formatWhen } from './time';
 
 export interface SheetSong { title: string; model?: string; translatedAt?: number }
+
+/** The services a settings row can be emphasised for (SERVICE_ORDER). */
+export type SheetService = 'gemini' | 'groq' | 'openrouter';
 
 export interface OpenSheetOptions {
   mode: 'first-run' | 'settings';
@@ -24,13 +27,18 @@ export interface OpenSheetOptions {
   anchor?: HTMLElement | null;
   /** Shows the 「この曲」 section (settings mode) when given. */
   song?: SheetSong | null;
+  /** Settings mode: the service row to scroll to, emphasise and focus (e.g. the free service
+   *  the reader has not set up yet, when quota blocks them). Ignored in first-run mode. */
+  focusService?: SheetService;
+  /** Id of the song a request is writing right now (here or in another tab). 読み込む leaves it alone. */
+  busySongId?: string | null;
   /** Called after the reader confirms 訳し直す. */
   onRetranslate?: () => void;
   /** After the reader confirms 消す for this song. */
   onDeleteSong?: () => Promise<void> | void;
   /** First-run primary button, after the key is saved and verified. */
   onSaveAndTranslate?: () => void;
-  /** `changed` = any key saved/removed or data deleted. */
+  /** `changed` = any key saved/removed, songs imported, or data deleted. */
   onClose?: (changed: boolean) => void;
 }
 
@@ -38,11 +46,11 @@ export interface OpenSheetOptions {
 
 const COPY = {
   firstTitle: '日本語訳をはじめる',
-  step1: 'Google AI Studio を開いて、無料のAPIキーを作ります',
+  step1: 'Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります',
   step1Link: 'Google AI Studio を開く',
   step2: 'キーをコピーして、下に貼り付けます',
   placeholder: 'APIキーを貼り付け',
-  keyNote: 'キーはこの端末のスクリプト用保存領域にだけ保存されます',
+  keyNote: 'キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません',
   primary: '保存してこの曲を訳す',
   secondary: '保存だけする',
   checking: '確かめています…',
@@ -55,6 +63,7 @@ const COPY = {
   save: '保存',
   makeKey: 'キーを作る',
   removeKey: 'キーを消す',
+  reenterKey: 'キーを入れ直す',
   statusMissing: '未設定',
   statusOk: '使えます',
   statusBad: 'キーが使えません',
@@ -65,6 +74,12 @@ const COPY = {
   deleteSong: 'この曲の保存データを消す',
   deleteSongConfirm: 'この曲の保存した訳を消しますか？',
   data: '保存データ',
+  dataLead: '書き出したファイルは、別の端末でも読み込めます',
+  exportData: '書き出す',
+  importData: '読み込む',
+  exportFailed: '書き出せませんでした',
+  importNothing: '新しく読み込める曲はありませんでした',
+  importFailed: '読み込めませんでした。Lyric Lens で書き出したファイルを選んでください',
   deleteAll: 'すべて消す',
   ok: '消す',
   cancel: 'やめる',
@@ -152,6 +167,23 @@ function safely(fn: () => unknown, label: string): void {
 
 function focusEl(el: HTMLElement | null | undefined): void {
   try { el?.focus({ preventScroll: true }); } catch { /* not focusable */ }
+}
+
+/** File.text() is missing on older iOS Safari; FileReader is everywhere. */
+function readFileText(file: Blob): Promise<string> {
+  if (typeof file.text === 'function') return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('read'));
+    reader.readAsText(file);
+  });
+}
+
+/** lyric-lens-20261026.json, from the reader's local date. */
+function exportFileName(now = new Date()): string {
+  const two = (n: number): string => String(n).padStart(2, '0');
+  return `lyric-lens-${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}.json`;
 }
 
 type RowKind = 'pending' | 'checking' | 'missing' | 'ok' | 'resting' | 'bad';
@@ -254,7 +286,8 @@ function mount(options: OpenSheetOptions): Active {
   });
 
   function focusables(): HTMLElement[] {
-    return Array.from(panel.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea'))
+    // The hidden file input behind 読み込む cannot take focus: counting it would break the Tab wrap.
+    return Array.from(panel.querySelectorAll<HTMLElement>('a[href], button, input:not([type="file"]), select, textarea'))
       .filter((el) => !(el as HTMLButtonElement).disabled);
   }
 
@@ -535,6 +568,8 @@ function mount(options: OpenSheetOptions): Active {
       row.el.setAttribute('aria-busy', String(row.busy));
       const want = row.config.apiKey.trim() ? 'key' : 'input';
       if (row.mode !== want) buildControls(row, want);
+      // A rejected key is replaced, not merely removed: say so, since that is the next step.
+      if (row.removeButton) row.removeButton.textContent = row.kind === 'bad' ? COPY.reenterKey : COPY.removeKey;
       if (row.input) {
         row.input.disabled = row.busy;
         if (row.kind === 'bad') row.input.setAttribute('aria-invalid', 'true'); else row.input.removeAttribute('aria-invalid');
@@ -608,6 +643,7 @@ function mount(options: OpenSheetOptions): Active {
 
     async function removeKey(row: Row): Promise<void> {
       if (row.busy || closed) return;
+      const wasBad = row.kind === 'bad';
       row.busy = true;
       paintRow(row);
       try {
@@ -626,8 +662,10 @@ function mount(options: OpenSheetOptions): Active {
       row.until = 0;
       row.message = '';
       paintRow(row);
-      // The button that had focus is gone: on a phone, focusing the input would raise the keyboard.
-      if (isDesktop()) focusEl(row.input);
+      // The button that had focus is gone. After キーを入れ直す the reader is here to paste a new
+      // key, so the field gets focus even on a phone. After キーを消す on a phone, focusing the
+      // input would raise the keyboard for nothing.
+      if (isDesktop() || wasBad) focusEl(row.input);
       else { row.el.tabIndex = -1; focusEl(row.el); }
     }
 
@@ -711,8 +749,78 @@ function mount(options: OpenSheetOptions): Active {
 
     let summary: { count: number; bytes: number } | null = null;
     let deleting = false;
+    let transferring = false;
+    const dataBusy = (): boolean => deleting || transferring;
     const summaryEl = h('p', { class: 'line' });
+    const dataMsg = h('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
+    const sayData = (text: string, kind: '' | 'error' = ''): void => {
+      dataMsg.textContent = text;
+      if (kind) dataMsg.dataset.kind = kind; else delete dataMsg.dataset.kind;
+    };
     const zone = h('div', { class: 'zone' });
+
+    /* 書き出す: one JSON file with every saved song. Nothing is sent anywhere. */
+    const exportButton: HTMLButtonElement = button(COPY.exportData, 'text', () => { void exportData(); });
+
+    async function exportData(): Promise<void> {
+      if (dataBusy() || closed || !summary || summary.count === 0) return;
+      const count = summary.count;
+      transferring = true;
+      sayData('');
+      paintSummary();
+      let failed = false;
+      try {
+        const url = URL.createObjectURL(new Blob([await exportSongs()], { type: 'application/json' }));
+        const link = h('a', { href: url, download: exportFileName(), hidden: true });
+        shadow.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch {
+        failed = true;
+        console.error('[Lyric Lens] sheet exportSongs failed');
+      }
+      transferring = false;
+      if (closed) return;
+      paintSummary();
+      if (failed) sayData(COPY.exportFailed, 'error'); else sayData(`${count}曲を書き出しました`);
+      focusEl(exportButton);
+    }
+
+    /* 読み込む: a hidden file input inside the shadow root; the visible button opens it. */
+    const importButton: HTMLButtonElement = button(COPY.importData, 'text', () => { fileInput.click(); });
+    const fileInput = h('input', {
+      type: 'file',
+      accept: 'application/json',
+      hidden: true,
+      tabIndex: -1,
+      'aria-hidden': 'true',
+      onChange: () => {
+        const file = fileInput.files?.[0];
+        fileInput.value = ''; // the same file can be chosen again
+        if (file) void importFile(file);
+      },
+    });
+
+    async function importFile(file: Blob): Promise<void> {
+      if (dataBusy() || closed) return;
+      transferring = true;
+      sayData('');
+      paintSummary();
+      let written = -1; // -1 = not a usable file
+      try {
+        written = await importSongs(await readFileText(file), options.busySongId);
+        if (written > 0) changed = true;
+      } catch { /* the message below says it; the file's contents are never logged */ }
+      transferring = false;
+      if (closed) return;
+      await refreshSummary();
+      if (closed) return;
+      if (written < 0) sayData(COPY.importFailed, 'error');
+      else sayData(written === 0 ? COPY.importNothing : `${written}曲を読み込みました`);
+      focusEl(importButton);
+    }
+
     const deleteAll: HTMLButtonElement = button(COPY.deleteAll, 'text', () => {
       if (!summary) return;
       const count = summary.count;
@@ -734,18 +842,23 @@ function mount(options: OpenSheetOptions): Active {
             done();
             await refreshSummary();
             if (closed) return;
-            zone.replaceChildren(h('div', { class: 'actions' }, deleteAll));
+            zone.replaceChildren(dataActions);
             paintSummary();
-            focusEl(deleteAll.disabled ? closeButton : deleteAll);
+            focusEl(deleteAll.disabled ? importButton : deleteAll);
           })();
         },
       });
     });
-    zone.append(h('div', { class: 'actions' }, deleteAll));
+    const dataActions = h('div', { class: 'actions' }, exportButton, importButton, deleteAll);
+    zone.append(dataActions);
 
     function paintSummary(): void {
       summaryEl.textContent = summary ? `保存した曲：${summary.count}曲 · ${formatSize(summary.bytes)}` : '保存した曲：…';
-      deleteAll.disabled = !summary || summary.count === 0 || deleting;
+      const none = !summary || summary.count === 0;
+      exportButton.disabled = none || dataBusy();
+      importButton.disabled = dataBusy();
+      deleteAll.disabled = none || dataBusy();
+      zone.setAttribute('aria-busy', String(dataBusy()));
     }
 
     async function refreshSummary(): Promise<void> {
@@ -760,8 +873,11 @@ function mount(options: OpenSheetOptions): Active {
     paintSummary();
     body.append(h('section', { class: 'section' },
       h('h3', { class: 'section-title' }, COPY.data),
+      h('p', { class: 'section-lead' }, COPY.dataLead),
       summaryEl,
-      zone));
+      zone,
+      dataMsg,
+      fileInput));
     void refreshSummary();
 
     /* -- load the services -- */
@@ -783,10 +899,25 @@ function mount(options: OpenSheetOptions): Active {
         servicesBox.append(row.el);
         paintRow(row);
       }
+      // The row the app wants seen (e.g. the free service not set up yet, when quota blocks the reader).
+      const wanted = options.focusService ? rows.find((r) => r.id === options.focusService) : undefined;
+      // Emphasised by sheet.css ([data-focus]).
+      if (wanted) wanted.el.dataset.focus = 'true';
       place(true);
-      // 閉じる has focus until now. On a desktop, move to the first empty key field; a phone keyboard would cover the sheet.
-      const target = firstEmptyInput();
-      if (target && isDesktop() && (shadow as ShadowRoot & { activeElement: Element | null }).activeElement === closeButton) focusEl(target);
+      // 閉じる has focus until now.
+      const untouched = (shadow as ShadowRoot & { activeElement: Element | null }).activeElement === closeButton;
+      if (wanted) {
+        try { wanted.el.scrollIntoView?.({ block: 'nearest' }); } catch { /* old browsers */ }
+        if (untouched) {
+          // A key field on a desktop; on a phone the keyboard would cover the sheet, so the row itself.
+          if (isDesktop() && wanted.input) focusEl(wanted.input);
+          else { wanted.el.tabIndex = -1; focusEl(wanted.el); }
+        }
+      } else {
+        // On a desktop, move to the first empty key field; a phone keyboard would cover the sheet.
+        const target = firstEmptyInput();
+        if (target && isDesktop() && untouched) focusEl(target);
+      }
 
       await Promise.all(rows.map(async (row) => {
         if (!row.config.apiKey.trim()) return;

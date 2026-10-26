@@ -82,18 +82,28 @@ export class OpenAICompatibleProvider implements Provider {
   }
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
-    const usesCompletionTokens = this.config.preset === 'openai' || this.config.preset === 'groq';
-    try {
-      return await this.generateOnce(req, usesCompletionTokens);
-    } catch (error) {
-      if (error instanceof LLMError && error.kind === 'bad-request' && /max_(completion_)?tokens/i.test(error.message)) {
-        return this.generateOnce(req, !usesCompletionTokens);
+    let completionTokens = this.config.preset === 'openai' || this.config.preset === 'groq';
+    let flippedTokens = false;
+    // gpt-oss defaults to medium reasoning; follow the reader's thinking level (low by default)
+    // where the endpoint documents the parameter. An endpoint that rejects it gets one retry without.
+    let reasoning = /gpt-oss/i.test(req.model) && (this.config.preset === 'groq' || this.config.preset === 'cerebras');
+    for (;;) {
+      try {
+        return await this.generateOnce(req, completionTokens, reasoning);
+      } catch (error) {
+        if (!(error instanceof LLMError) || error.kind !== 'bad-request') throw error;
+        if (!flippedTokens && /max_(completion_)?tokens/i.test(error.message)) {
+          completionTokens = !completionTokens;
+          flippedTokens = true;
+          continue;
+        }
+        if (reasoning && /reasoning/i.test(error.message)) { reasoning = false; continue; }
+        throw error;
       }
-      throw error;
     }
   }
 
-  private async generateOnce(req: GenerateRequest, completionTokens: boolean): Promise<GenerateResult> {
+  private async generateOnce(req: GenerateRequest, completionTokens: boolean, reasoning: boolean): Promise<GenerateResult> {
     const body: Record<string, unknown> = {
       model: req.model,
       messages: [
@@ -104,6 +114,7 @@ export class OpenAICompatibleProvider implements Provider {
       temperature: 0.6,
     };
     body[completionTokens ? 'max_completion_tokens' : 'max_tokens'] = req.maxOutputTokens;
+    if (reasoning) body.reasoning_effort = req.thinking;
 
     const sse = new SseParser();
     const think = new ThinkFilter();
