@@ -322,3 +322,11 @@ Amendments made during implementation:
 3. **Head echo tolerance.** `head` must match at least two of the first three normalized words (`-in'`/`-ing` treated alike); a missing `head` is accepted.
 4. **Persisted progress carries `stop: closed`** while a request is in flight, so a tab that dies mid-stream leaves a resumable song (S6 "ここまで訳してあります") instead of one that looks finished or "lyrics changed" (S7).
 5. **A first request that produced no lines** shows its reason in the head row (with the seam's button rule) instead of drawing a seam at line 1.
+6. **Retranslation lands when it mostly succeeds.** If a retranslation is cut ('length') or skips lines ('gaps'), the missing lines keep their previous translation and the new edition is swapped in; only a failure with nothing usable keeps the old edition (S8f). A retranslation that cannot start (quota, another song running) says so in the head row: `訳し直せませんでした。今の訳はそのままです` + reason. The settings sheet hides 「この曲」 while a request is writing this song.
+7. **Zero-line failures are not stored** (except an invalid key, which explains why 日本語で読む needs a new key). Reopening such a song shows plain S2.
+8. **The seam sits at the writing frontier** (the first missing line after the last filled one); missing lines before it are lines the model skipped and read as `—`.
+9. **The preface is text, not a button.** Only a small ▸/▾ toggle (44 px hit area) opens and closes 「この曲は」; the text stays readable, selectable and announced.
+10. **Reported errors favour what is transient.** If any model was merely busy, the reader is told it was busy, not that today's quota is gone.
+11. **Default thinking level is low.** Measured on the same song and model: first line 65 s (medium) vs 3–16 s (low) at comparable quality.
+
+Each of these came out of two rounds of four-lens review with adversarial verification (52 confirmed findings in total), all fixed and covered by the unit tests.
