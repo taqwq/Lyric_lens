@@ -2,6 +2,7 @@ import './setup';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  availability,
   clearCooldowns,
   cooldownId,
   generateWithFallback,
@@ -10,9 +11,12 @@ import {
   keyTag,
   markKey,
   nextPacificMidnight,
+  orderByHealth,
   type ChainResult,
+  type ModelHealth,
 } from '../src/llm/chain';
 import { LLMError } from '../src/llm/errors';
+import { FIRST_TEXT_TIMEOUT_MS } from '../src/llm/gemini';
 import type { HttpResult, StreamRequest } from '../src/platform/http';
 import { streamRequest } from '../src/platform/http';
 import { getJSON, memoryStorage, setJSON, setKV } from '../src/platform/storage';
@@ -34,9 +38,11 @@ const MODEL_LIST = {
   models: [A, B, C].map((id) => ({ name: `models/${id}`, supportedGenerationMethods: ['generateContent'] })),
 };
 
+/** `hangMs` makes the endpoint stay silent that long first (fake timers must be on): a model that
+ *  is slow to its first text, or never answers and is cut off by the transport's watchdog. */
 type Reply =
-  | { status: number; body: string }
-  | { throws: LLMError; partial?: string };
+  | { status: number; body: string; hangMs?: number }
+  | { throws: LLMError; partial?: string; hangMs?: number };
 
 const queues = new Map<string, Reply[]>();
 /** Every generation request, by model, in order. Model-list requests are not included. */
@@ -65,6 +71,7 @@ async function serve(req: StreamRequest): Promise<HttpResult> {
     next = queues.get(model)?.shift();
   }
   if (!next) throw new Error(`no scripted reply left for ${model}`);
+  if (next.hangMs) await new Promise((resolve) => setTimeout(resolve, next.hangMs));
   if ('throws' in next) {
     if (next.partial) req.onText?.(next.partial);
     throw next.throws;
@@ -313,9 +320,10 @@ describe('generateWithFallback: quota cooldowns', () => {
     await start([gemini()]).promise;
     await clearCooldowns();
     generated = [];
+    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field')); // B answered last time, so it is still asked first
     reply(A, ok('L1: い\n'));
     const result = await start([gemini()]).promise;
-    expect(generated).toEqual([A]);
+    expect(generated).toEqual([B, A]); // A is no longer skipped
     expect(result.model).toBe(A);
   });
 
@@ -957,6 +965,456 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     expect(result?.model).toBe(A);
     expect(generated).toEqual([A, A]);
     expect(run.statuses).toContain('3.5-flash の回数制限 · 3秒後に再試行');
+  });
+});
+
+/* ---------- model health ---------- */
+
+const HEALTH = 'll3:health';
+const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
+type StoredHealth = Record<string, ModelHealth>;
+const readHealth = () => getJSON<StoredHealth>(HEALTH, {});
+const seedHealth = (entries: StoredHealth) => setJSON(HEALTH, entries);
+/** The endpoint stays silent for `ms` before it answers (fake timers must be on). */
+const slowly = (ms: number, scripted: Reply): Reply => ({ ...scripted, hangMs: ms });
+const badField = () => googleError(400, 'INVALID_ARGUMENT', 'bad field');
+
+describe('orderByHealth', () => {
+  const NOW = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const FLASH_1 = 'gemini-3.5-flash'; // rank 1035
+  const FLASH_2 = 'gemini-3-flash-preview'; // rank 1027
+  const FLASH_3 = 'gemini-2.5-flash'; // rank 1025
+  const LITE_1 = 'gemini-3.5-flash-lite'; // rank 135
+  const LITE_2 = 'gemini-2.5-flash-lite'; // rank 125
+  const GEMMA = 'gemma-3-27b-it'; // rank 1.03
+  const ranked = [FLASH_1, FLASH_2, FLASH_3, LITE_1, LITE_2, GEMMA];
+  const order = (stats: Record<string, ModelHealth>, ids = ranked) => orderByHealth(ids, stats, NOW);
+  const answered = (ms: number, ago = MIN): ModelHealth => ({ ok: NOW - ago, ms });
+
+  it('keeps the given order when nothing is known, and leaves its input alone', () => {
+    const ids = [...ranked];
+    expect(orderByHealth(ids, {}, NOW)).toEqual(ranked);
+    expect(ids).toEqual(ranked);
+  });
+
+  it('puts models that answered recently first, fastest first', () => {
+    expect(order({ [FLASH_1]: answered(4_000), [FLASH_2]: answered(900), [FLASH_3]: answered(2_000) }))
+      .toEqual([FLASH_2, FLASH_3, FLASH_1, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('puts a model that answered ahead of models nothing is known about', () => {
+    expect(order({ [FLASH_3]: answered(5_000) })).toEqual([FLASH_3, FLASH_1, FLASH_2, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('keeps the rank order between models that are equally fast, and puts one without a time after those with one', () => {
+    expect(order({ [FLASH_2]: answered(1_000), [FLASH_3]: answered(1_000) })).toEqual([FLASH_2, FLASH_3, FLASH_1, LITE_1, LITE_2, GEMMA]);
+    expect(order({ [FLASH_1]: { ok: NOW - MIN }, [FLASH_3]: answered(900) })).toEqual([FLASH_3, FLASH_1, FLASH_2, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('puts a model that was overloaded or silent in the last half hour last in its tier', () => {
+    expect(order({ [FLASH_1]: { bad: NOW - 5 * MIN } })).toEqual([FLASH_2, FLASH_3, FLASH_1, LITE_1, LITE_2, GEMMA]);
+    expect(order({ [FLASH_1]: { bad: NOW - 5 * MIN }, [FLASH_2]: { bad: NOW - MIN } })).toEqual([FLASH_3, FLASH_1, FLASH_2, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('forgives a failure after half an hour', () => {
+    expect(order({ [FLASH_1]: { bad: NOW - 29 * MIN } }).indexOf(FLASH_1)).toBe(2);
+    expect(order({ [FLASH_1]: { bad: NOW - 31 * MIN } })).toEqual(ranked);
+    expect(order({ [FLASH_1]: { bad: NOW - 30 * MIN } })).toEqual(ranked);
+  });
+
+  it('weighs a failure against the last answer: whichever is newer decides', () => {
+    // answered 20 minutes ago, failed 10 minutes ago: last
+    expect(order({ [FLASH_1]: { ok: NOW - 20 * MIN, ms: 800, bad: NOW - 10 * MIN } })).toEqual([FLASH_2, FLASH_3, FLASH_1, LITE_1, LITE_2, GEMMA]);
+    // failed 20 minutes ago, answered 10 minutes ago: proven again, first
+    expect(order({ [FLASH_3]: { ok: NOW - 10 * MIN, ms: 800, bad: NOW - 20 * MIN } })).toEqual([FLASH_3, FLASH_1, FLASH_2, LITE_1, LITE_2, GEMMA]);
+    // failed days ago, answered since: proven
+    expect(order({ [FLASH_3]: { ok: NOW - 2 * DAY, ms: 800, bad: NOW - 3 * DAY } })[0]).toBe(FLASH_3);
+  });
+
+  it('puts a model back among the unknown ones when its failure was not recent but is newer than its answer', () => {
+    expect(order({ [FLASH_3]: { ok: NOW - 2 * DAY, ms: 500, bad: NOW - 40 * MIN }, [FLASH_2]: answered(3_000) }))
+      .toEqual([FLASH_2, FLASH_1, FLASH_3, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('does not trust an answer older than a week', () => {
+    expect(order({ [FLASH_3]: answered(100, 8 * DAY) })).toEqual(ranked);
+    expect(order({ [FLASH_3]: answered(100, 6 * DAY) })[0]).toBe(FLASH_3);
+    // a recent failure still counts against a model whose last answer is old
+    expect(order({ [FLASH_1]: { ok: NOW - 9 * DAY, ms: 100, bad: NOW - MIN } })).toEqual([FLASH_2, FLASH_3, FLASH_1, LITE_1, LITE_2, GEMMA]);
+  });
+
+  it('keeps Flash ahead of Flash-Lite and Gemma however fast the others are', () => {
+    expect(order({ [FLASH_1]: answered(30_000), [LITE_2]: answered(20), [LITE_1]: answered(50), [GEMMA]: answered(10) }))
+      .toEqual([FLASH_1, FLASH_2, FLASH_3, LITE_2, LITE_1, GEMMA]);
+    // even when every Flash model failed a minute ago and a Lite model is proven
+    expect(order({ [FLASH_1]: { bad: NOW - MIN }, [FLASH_2]: { bad: NOW - MIN }, [FLASH_3]: { bad: NOW - MIN }, [LITE_2]: answered(10) }))
+      .toEqual([FLASH_1, FLASH_2, FLASH_3, LITE_2, LITE_1, GEMMA]);
+  });
+
+  it('orders inside the Flash-Lite and Gemma tiers the same way', () => {
+    expect(order({ [LITE_1]: { bad: NOW - MIN } })).toEqual([FLASH_1, FLASH_2, FLASH_3, LITE_2, LITE_1, GEMMA]);
+    expect(order({ [LITE_2]: answered(700) })).toEqual([FLASH_1, FLASH_2, FLASH_3, LITE_2, LITE_1, GEMMA]);
+    expect(order({ [GEMMA]: { bad: NOW - MIN } })).toEqual(ranked); // already last, still last
+    expect(order({ [GEMMA]: answered(10) })).toEqual(ranked); // never ahead of Lite
+  });
+
+  it('sorts a list that is not in rank order into its tiers (the built-in fallback list)', () => {
+    expect(order({}, [FLASH_1, LITE_1, FLASH_3, GEMMA, FLASH_2])).toEqual([FLASH_1, FLASH_3, FLASH_2, LITE_1, GEMMA]);
+  });
+});
+
+describe('generateWithFallback: model health (fake timers)', () => {
+  const NOW = Date.UTC(2026, 2, 10, 12, 0, 0);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  /** One call, with the fake clock advanced by `ms` (enough for every scripted silence). */
+  async function call(ms = 0, configs: ProviderConfig[] = [gemini()]) {
+    const run = start(configs);
+    const done = settle(run);
+    await vi.advanceTimersByTimeAsync(ms);
+    return { run, ...(await done) };
+  }
+
+  describe('what is recorded', () => {
+    it('keeps the time of the last answer and how long its first text took', async () => {
+      reply(A, slowly(3_000, ok('L1: あ\n')));
+      const { result } = await call(3_000);
+      expect(result?.model).toBe(A);
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ ok: NOW + 3_000, ms: 3_000 });
+    });
+
+    it('times the first text, not the end of the answer', async () => {
+      http.mockImplementation(async (req) => {
+        if (req.url.includes('/v1beta/models?')) return { status: 200, text: JSON.stringify(MODEL_LIST), headers: '' };
+        generated.push(decodeURIComponent(/models\/([^:]+):/.exec(req.url)![1]!));
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        const first = textEvent('L1: あ\n');
+        req.onText?.(first);
+        await new Promise((resolve) => setTimeout(resolve, 8_000));
+        const rest = stopEvent();
+        req.onText?.(rest);
+        return { status: 200, text: first + rest, headers: '' };
+      });
+      await call(10_000);
+      expect(generated).toEqual([A]);
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ ok: NOW + 10_000, ms: 2_000 });
+    });
+
+    it('averages the times of successive answers, the newest counting half', async () => {
+      for (const ms of [3_000, 1_000, 500]) {
+        reply(A, slowly(ms, ok('L1: あ\n')));
+        await call(ms);
+      }
+      expect((await readHealth())[cooldownKey(A)]?.ms).toBe(1_250); // 3000, then 2000, then 1250
+    });
+
+    it('notes an overloaded model as bad, and the model that answered instead as good', async () => {
+      reply(A, busy());
+      reply(B, ok('L1: あ\n'));
+      await call();
+      const health = await readHealth();
+      expect(health[cooldownKey(A)]).toEqual({ bad: NOW });
+      expect(health[cooldownKey(B)]).toEqual({ ok: NOW, ms: 0 });
+    });
+
+    it('notes a model that broke after streaming text as bad, not as an answer', async () => {
+      reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('overloaded', 'busy') });
+      const { result } = await call();
+      expect(result?.error?.kind).toBe('overloaded');
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ bad: NOW });
+    });
+
+    it('keeps the earlier answer when a model later fails, so the failure can be weighed against it', async () => {
+      reply(A, ok('L1: あ\n'));
+      await call();
+      await vi.advanceTimersByTimeAsync(MIN);
+      reply(A, busy());
+      reply(B, ok('L1: い\n'));
+      await call();
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ ok: NOW, ms: 0, bad: NOW + MIN });
+    });
+
+    it('notes nothing for failures that say nothing about speed or load', async () => {
+      reply(A, dailyQuota());
+      reply(B, badField());
+      reply(C, rateLimited('120s'));
+      await call();
+      expect(generated).toEqual([A, B, C]);
+      expect(await readHealth()).toEqual({});
+    });
+
+    it('does not note a network drop, even after text', async () => {
+      reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'down') });
+      await call();
+      expect(await readHealth()).toEqual({});
+    });
+  });
+
+  describe('a model that never answers', () => {
+    const silent = () => new LLMError('timeout', '応答が途切れました。');
+
+    it('is given up on after its first-text timeout, benched for five minutes, and skipped by the next call', async () => {
+      reply(A, { throws: silent(), hangMs: FIRST_TEXT_TIMEOUT_MS.low });
+      reply(B, ok('L1: あ\n'));
+      const first = start([gemini()]);
+      const done = settle(first);
+      await vi.advanceTimersByTimeAsync(FIRST_TEXT_TIMEOUT_MS.low - 1);
+      expect(generated).toEqual([A]); // still waiting for A's first text
+      await vi.advanceTimersByTimeAsync(1);
+      const { result } = await done;
+      expect(result?.model).toBe(B);
+      expect(generated).toEqual([A, B]);
+      expect(first.statuses).toContain('3.5-flash が応答なし · 次へ');
+
+      const failedAt = NOW + FIRST_TEXT_TIMEOUT_MS.low;
+      expect((await readCooldowns())[cooldownKey(A)]).toEqual({ until: failedAt + 5 * MIN, reason: 'timeout' });
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ bad: failedAt });
+
+      // the next call goes straight to B and never asks A
+      generated = [];
+      reply(B, ok('L1: い\n'));
+      expect((await call()).result?.model).toBe(B);
+      expect(generated).toEqual([B]);
+
+      // five minutes later A may be asked again, but behind B, which has been answering
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      generated = [];
+      reply(B, badField());
+      reply(A, ok('L1: う\n'));
+      const third = await call();
+      expect(generated).toEqual([B, A]);
+      expect(third.result?.model).toBe(A);
+    });
+
+    it('does not ask a benched model while its five minutes last, however the others fare', async () => {
+      reply(A, { throws: silent(), hangMs: 30_000 });
+      reply(B, badField());
+      reply(C, badField());
+      await call(30_000);
+      expect(generated).toEqual([A, B, C]);
+
+      generated = [];
+      await vi.advanceTimersByTimeAsync(5 * MIN - 1);
+      reply(B, badField());
+      reply(C, badField());
+      const { error } = await call();
+      expect(generated).toEqual([B, C]); // A stays out until the last millisecond of its bench
+      expect(error?.kind).toBe('bad-request');
+    });
+
+    it('is benched too when it goes silent after it had started to answer', async () => {
+      reply(A, { partial: textEvent('L1: あ\n'), throws: silent() });
+      const { result } = await call();
+      expect(result?.error?.kind).toBe('timeout');
+      expect(result?.model).toBe(A);
+      expect(generated).toEqual([A]);
+      expect((await readCooldowns())[cooldownKey(A)]).toEqual({ until: NOW + 5 * MIN, reason: 'timeout' });
+      expect((await readHealth())[cooldownKey(A)]).toEqual({ bad: NOW });
+
+      generated = [];
+      reply(B, ok('L1: い\n'));
+      await call();
+      expect(generated).toEqual([B]);
+    });
+
+    it('is un-benched when it answers a pinned request', async () => {
+      const pinned = gemini({ model: A });
+      reply(A, { throws: silent(), hangMs: 30_000 });
+      expect((await call(30_000, [pinned])).error?.kind).toBe('timeout');
+      expect((await readCooldowns())[cooldownKey(A, pinned)]?.reason).toBe('timeout');
+
+      reply(A, ok('L1: あ\n')); // a pinned model is asked despite the bench
+      expect((await call(0, [pinned])).result?.model).toBe(A);
+      expect(await readCooldowns()).toEqual({});
+    });
+
+    it('is reported as a short "rate" wait, not as the daily quota, once every model has been benched', async () => {
+      for (const model of [A, B, C]) reply(model, { throws: silent(), hangMs: 30_000 });
+      const first = await call(90_000);
+      expect(first.error?.kind).toBe('timeout');
+      expect(generated).toEqual([A, B, C]);
+
+      generated = [];
+      const second = await call();
+      expect(generated).toEqual([]); // nothing is asked
+      expect(second.error?.kind).toBe('rate');
+      expect(second.error?.status).toBe(429);
+      expect(second.error?.retryAfterMs).toBe(30_000 + 5 * MIN - 90_000); // A is the first to come back
+      // the head's "worth a tap" check agrees: this is a short wait, not "out for the day"
+      expect(await availability([gemini()])).toEqual({ ok: true, until: 0 });
+      expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
+    });
+
+    it('turns a quota error into the short wait of a benched model that is back sooner', async () => {
+      await seedCooldowns({ [cooldownKey(A)]: { until: NOW + 4 * MIN, reason: 'timeout' } });
+      reply(B, dailyQuota());
+      reply(C, dailyQuota());
+      const { error } = await call();
+      expect(generated).toEqual([B, C]);
+      expect(error?.kind).toBe('rate');
+      expect(error?.retryAfterMs).toBe(4 * MIN);
+    });
+
+    it('is still reported as a timeout when the other models were out of quota', async () => {
+      reply(A, { throws: silent(), hangMs: 30_000 });
+      reply(B, dailyQuota());
+      reply(C, dailyQuota());
+      const { error } = await call(30_000);
+      expect(error?.kind).toBe('timeout');
+      expect(error?.model).toBe(A);
+    });
+  });
+
+  describe('the order of automatically chosen Gemini models', () => {
+    it('tries the faster of two proven models first, and proven models before unknown ones', async () => {
+      await seedHealth({
+        [cooldownKey(A)]: { ok: NOW - MIN, ms: 4_000 },
+        [cooldownKey(B)]: { ok: NOW - MIN, ms: 1_500 },
+      });
+      for (const model of [A, B, C]) reply(model, badField());
+      await call();
+      expect(generated).toEqual([B, A, C]);
+    });
+
+    it('puts a model that failed within half an hour behind the unknown ones, and tries it again later', async () => {
+      await seedHealth({ [cooldownKey(A)]: { bad: NOW - 10 * MIN } });
+      for (const model of [A, B, C]) reply(model, badField());
+      await call();
+      expect(generated).toEqual([B, A, C]);
+
+      generated = [];
+      await vi.advanceTimersByTimeAsync(21 * MIN); // 31 minutes since the failure
+      for (const model of [A, B, C]) reply(model, badField());
+      await call();
+      expect(generated).toEqual([A, B, C]);
+    });
+
+    it('learns which model is quick from its own answers', async () => {
+      reply(A, slowly(5_000, ok('L1: あ\n')));
+      await call(5_000); // A answers, slowly
+      reply(A, badField());
+      reply(B, slowly(1_000, ok('L1: い\n')));
+      await call(1_000); // A (proven) is asked first and refuses; B answers quickly
+      expect(generated).toEqual([A, A, B]);
+
+      generated = [];
+      reply(B, ok('L1: う\n'));
+      await call();
+      expect(generated).toEqual([B]); // B has been quicker
+    });
+
+    it('keeps Flash ahead of Flash-Lite however fast Flash-Lite is', async () => {
+      await seedHealth({
+        [cooldownKey(C)]: { ok: NOW - MIN, ms: 200 },
+        [cooldownKey(A)]: { ok: NOW - MIN, ms: 9_000 },
+      });
+      for (const model of [A, B, C]) reply(model, badField());
+      await call();
+      expect(generated).toEqual([A, B, C]);
+    });
+
+    it('adapts the built-in list used when the model list cannot be fetched', async () => {
+      listReply = { status: 500, body: 'internal error' };
+      await seedHealth({ [cooldownKey('gemini-3.5-flash')]: { ok: NOW - MIN, ms: 800 } });
+      reply('gemini-3.5-flash', ok('L1: え\n'));
+      const { result } = await call();
+      expect(result?.model).toBe('gemini-3.5-flash');
+      expect(generated).toEqual(['gemini-3.5-flash']);
+    });
+
+    it('ignores health for a pinned model: it is asked, whatever is known about it', async () => {
+      const pinned = gemini({ model: B });
+      await seedHealth({
+        [cooldownKey(B, pinned)]: { bad: NOW - MIN },
+        [cooldownKey(A, pinned)]: { ok: NOW - MIN, ms: 10 },
+      });
+      reply(B, ok('L1: あ\n'));
+      const { result } = await call(0, [pinned]);
+      expect(result?.model).toBe(B);
+      expect(generated).toEqual([B]);
+      expect(http.mock.calls.some(([r]) => r.url.includes('/v1beta/models?'))).toBe(false);
+    });
+
+    it('leaves the order of other providers alone', async () => {
+      const groq = newProvider('groq', 'gk');
+      await seedModels(groq, 'one', 'two', 'three');
+      await seedHealth({
+        [cooldownKey('two', groq)]: { ok: NOW - MIN, ms: 100 },
+        [cooldownKey('one', groq)]: { bad: NOW - MIN },
+      });
+      for (const model of ['one', 'two', 'three']) reply(model, badField());
+      await call(0, [groq]);
+      expect(generated).toEqual(['one', 'two', 'three']);
+    });
+
+    it('does not mix up two API keys', async () => {
+      const one = gemini({ apiKey: 'key-one' });
+      const two = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+      await seedHealth({ [cooldownKey(B, one)]: { ok: NOW - MIN, ms: 100 } });
+      for (const model of [A, B, C]) reply(model, badField());
+      await call(0, [two]);
+      expect(generated).toEqual([A, B, C]); // key-two has seen nothing
+    });
+  });
+
+  describe('storage', () => {
+    it('drops entries older than 14 days when it writes', async () => {
+      await seedHealth({
+        old: { ok: NOW - 15 * DAY, ms: 100 },
+        oldBad: { bad: NOW - 20 * DAY },
+        empty: {},
+        recent: { ok: NOW - 13 * DAY, ms: 100 },
+      });
+      reply(A, ok('L1: あ\n'));
+      await call();
+      expect(Object.keys(await readHealth()).sort()).toEqual([cooldownKey(A), 'recent'].sort());
+    });
+
+    it('ignores garbage in storage', async () => {
+      for (const junk of ['junk', null, [1, 2], 7]) {
+        await setJSON(HEALTH, junk);
+        generated = [];
+        reply(A, ok('L1: あ\n'));
+        const { result } = await call();
+        expect(result?.model).toBe(A);
+        expect(Object.keys(await readHealth())).toEqual([cooldownKey(A)]);
+      }
+    });
+
+    it('never lets a failing write turn an answer or a fallback into an error', async () => {
+      const inner = memoryStorage();
+      setKV({ ...inner, set: (key, value) => (key === HEALTH ? Promise.reject(new Error('storage full')) : inner.set(key, value)) });
+      reply(A, busy());
+      reply(B, ok('L1: あ\n'));
+      const { result, error } = await call();
+      expect(error).toBeUndefined();
+      expect(result?.model).toBe(B);
+      expect(generated).toEqual([A, B]);
+      expect((await readCooldowns())[cooldownKey(A)]?.reason).toBe('overloaded'); // the cooldown table is unaffected
+    });
+  });
+});
+
+describe('GeminiProvider: first-text timeout follows the thinking level', () => {
+  it('is 30 s, 75 s and 120 s for low, medium and high thinking', () => {
+    expect(FIRST_TEXT_TIMEOUT_MS).toEqual({ low: 30_000, medium: 75_000, high: 120_000 });
+  });
+
+  it.each([['low', 30_000], ['medium', 75_000], ['high', 120_000]] as const)('sends %s thinking with a %i ms first-text timeout and an unchanged idle timeout', async (thinking, ms) => {
+    reply(A, ok('L1: あ\n'));
+    await generateWithFallback(
+      [gemini({ model: A })],
+      { system: 's', user: 'u', maxOutputTokens: 100, thinking, onText: () => undefined },
+    );
+    const sent = http.mock.calls.map(([r]) => r).filter((r) => r.url.includes(':streamGenerateContent'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.firstByteTimeoutMs).toBe(ms);
+    expect(sent[0]?.idleTimeoutMs).toBe(90_000);
   });
 });
 

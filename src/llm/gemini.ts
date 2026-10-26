@@ -23,6 +23,10 @@ export function rankGeminiModel(id: string): number {
   return 0;
 }
 
+/** How long a model may stay silent before its first text. Deeper thinking legitimately takes
+ *  longer, but a model that hangs (measured: 90 s and more) should hand over to the next one sooner. */
+export const FIRST_TEXT_TIMEOUT_MS: Record<ThinkingLevel, number> = { low: 30_000, medium: 75_000, high: 120_000 };
+
 function thinkingConfig(model: string, level: ThinkingLevel): Record<string, unknown> | null {
   if (model.startsWith('gemma-')) return null;
   const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(model)?.[1] ?? 0);
@@ -114,7 +118,7 @@ export class GeminiProvider implements Provider {
       headers: this.headers(),
       body: JSON.stringify(body),
       signal: req.signal,
-      firstByteTimeoutMs: 90_000,
+      firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS[req.thinking],
       idleTimeoutMs: 90_000,
       onText: (chunk) => { for (const payload of sse.feed(chunk)) handle(payload); },
     });
