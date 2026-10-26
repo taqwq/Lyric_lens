@@ -5,19 +5,22 @@
  */
 import { translateSong } from './core/pipeline';
 import { emptyRecord, missingLines } from './core/song';
-import type { GeniusAnnotation, SongRecord, StopInfo } from './core/types';
+import type { GeniusAnnotation, SongRecord } from './core/types';
 import { fetchAnnotations } from './genius/annotations';
 import { isOwnNode, readPage, type PageSong } from './genius/extract';
-import { availability, type Availability } from './llm/chain';
+import { availability, keyStatus, type Availability } from './llm/chain';
 import { transportStreams } from './platform/http';
 import { acquireLock, readLock, requestAbort, TAB_ID, type Lock, type LockHandle } from './store/lock';
 import { currentSettings, hasAnyKey, loadSettings, onSettings, updateSettings } from './store/settings';
-import { SaveQueue, deleteSong, loadSong, saveSong } from './store/songs';
+import { SaveQueue, deleteSong, loadSong, saveSong, touchSong } from './store/songs';
 import { HeadRow, type HeadAction, type HeadView } from './ui/head';
 import { LineRenderer, type LinesInput, type SeamView } from './ui/lines';
 import { NoteView } from './ui/notes';
-import { closeSheet, openSheet } from './ui/sheet';
+import { closeSheet, openSheet, type SheetService } from './ui/sheet';
+import { decide, failureText, type ActionId, type ActionSpec, type ViewInput } from './ui/state';
 import { formatWhen } from './ui/time';
+
+const SERVICE_NAMES: Record<string, string> = { gemini: 'Google AI Studio', groq: 'Groq', openrouter: 'OpenRouter' };
 
 interface Run {
   id: string;
@@ -47,6 +50,8 @@ export class App {
   private run: Run | null = null;
   private foreignLock: Lock | null = null;
   private avail: Availability = { ok: true, until: 0 };
+  /** Some configured key is known to be rejected: an invalid-key stop still applies. */
+  private keyBad = false;
   private annotations: GeniusAnnotation[] | null = null;
   /** The record was already saved when this page opened: render without motion. */
   private fromCache = false;
@@ -94,7 +99,8 @@ export class App {
           continue;
         }
         const identity = identityOf(page);
-        if (identity !== this.identity) {
+        const fresh = identity !== this.identity;
+        if (fresh) {
           this.teardown();
           this.identity = identity;
           this.annotations = null;
@@ -102,15 +108,20 @@ export class App {
           this.record = this.acceptStored(identity, page, await loadSong(identity));
           this.fromCache = hasLines(this.record);
           this.prefaceCollapsed = this.fromCache && !this.record?.stop;
+          // Reading a saved edition counts as use: LRU keeps what the reader returns to.
+          if (this.fromCache) void touchSong(identity);
         } else if (!this.run) {
           // Same song: pick up what other tabs wrote, or deletions made in settings.
           this.record = this.acceptStored(identity, page, await loadSong(identity));
         }
         this.page = page;
         this.foreignLock = await this.otherLock();
-        this.avail = await availability(currentSettings().providers);
+        await this.refreshKeys();
         this.detectTheme();
         this.renderNow();
+        // Genius' own annotations API is free and same-origin (not an LLM request): fetch at
+        // idle so the grounding is ready before the tap and opened notes do not grow later.
+        if (fresh && page.songId && (hasAnyKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
       } while (this.refreshAgain);
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
@@ -125,6 +136,13 @@ export class App {
     // the exception: it explains why 日本語で読む needs a new key first).
     if (stored && !hasLines(stored) && stored.stop?.reason !== 'auth') return null;
     return stored;
+  }
+
+  private prefetchAnnotations(page: PageSong): void {
+    const idle = (window as Window & { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    const go = () => { if (this.page?.songId === page.songId) void this.loadAnnotations(page); };
+    if (idle) idle(go, { timeout: 3000 });
+    else setTimeout(go, 1500);
   }
 
   private teardown(): void {
@@ -159,7 +177,15 @@ export class App {
       });
     });
     // Any interaction dismisses the transient notice (S8f).
-    const dismiss = () => { if (this.notice) { this.notice = null; this.scheduleRender(); } };
+    // ...but only while the head row is on screen: the gesture made elsewhere is often the
+    // scroll back up to it, which must not erase the notice unseen.
+    const dismiss = () => {
+      if (!this.notice) return;
+      const r = this.head.element?.getBoundingClientRect();
+      if (!r || r.bottom <= 0 || r.top >= window.innerHeight) return;
+      this.notice = null;
+      this.scheduleRender();
+    };
     document.addEventListener('pointerdown', dismiss, true);
     document.addEventListener('keydown', dismiss, true);
 
@@ -182,16 +208,25 @@ export class App {
       const stored = await loadSong(this.identity);
       if (stored) this.record = stored;
     }
-    if (changed && !lock) this.avail = await availability(currentSettings().providers);
+    if (changed && !lock) await this.refreshKeys();
     if (changed || mirroring) this.scheduleRender();
   }
 
-  /** A lock held by another tab, or by this tab for another song. */
+  /** What the configured keys allow right now, from what is already known (no request). */
+  private async refreshKeys(): Promise<void> {
+    const providers = currentSettings().providers;
+    this.avail = await availability(providers);
+    const keyed = providers.filter((p) => p.enabled && p.apiKey.trim());
+    // An invalid-key stop applies only while no configured key is believed to work.
+    this.keyBad = !keyed.length || (await Promise.all(keyed.map((p) => keyStatus(p)))).every((st) => st.kind === 'bad');
+  }
+
+  /** A lock held by another tab. */
   private async otherLock(): Promise<Lock | null> {
+    // This tab's own request (for any song) is this.run; its lock is never "another tab",
+    // even in the moment between acquiring it and setting this.run.
     const lock = await readLock();
-    if (!lock) return null;
-    if (lock.tab === TAB_ID && this.run && lock.id === this.run.id && lock.id === this.identity) return null;
-    return lock;
+    return lock && lock.tab !== TAB_ID ? lock : null;
   }
 
   private affectsLyrics(m: MutationRecord): boolean {
@@ -341,30 +376,45 @@ export class App {
     if (!times.length) return;
     const at = Math.min(...times);
     this.wakeTimer = setTimeout(() => {
-      void availability(currentSettings().providers).then((a) => { this.avail = a; this.renderNow(); });
+      void this.refreshKeys().then(() => this.renderNow());
     }, Math.min(at - Date.now() + 500, 2 ** 31 - 1));
   }
 
-  private view(page: PageSong): { head: HeadView; lines: LinesInput } {
+  /** Everything the pure state machine (ui/state.ts) needs, read from this tab's state. */
+  private viewInput(page: PageSong): ViewInput {
     const settings = currentSettings();
     const run = this.run;
     const here = run && run.id === this.identity ? run : null;
     const shown = this.shown();
-    const total = page.source.lines.length;
-    const done = page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length;
-    const missing = total - done;
-    const mirrored = !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity);
-    const otherSong = run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null;
-    // What keeps a resume from being possible right now, said in the reader's terms.
-    const quotaUntil = this.avail.ok ? null : this.avail.until;
-    const blocker = otherSong
-      ? '別の曲を訳し終えると続きを訳せます'
-      : quotaUntil != null ? `今日の無料枠は終わりました · ${quotaUntil > Date.now() ? `${formatWhen(quotaUntil)}から訳せます` : 'あとで訳せます'}` : null;
+    const keyed = settings.providers.filter((p) => p.enabled && p.apiKey.trim());
+    const spare = settings.providers.find((p) => p.enabled && !p.apiKey.trim());
+    return {
+      now: Date.now(),
+      online: navigator.onLine,
+      streams: transportStreams(),
+      hidden: settings.hideTranslation,
+      hasKey: hasAnyKey(settings),
+      keyBad: this.keyBad,
+      onlyGemini: keyed.length === 1 && keyed[0]!.preset === 'gemini',
+      spare: spare ? { id: spare.preset, name: SERVICE_NAMES[spare.preset] ?? spare.preset } : null,
+      total: page.source.lines.length,
+      done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
+      stop: shown?.stop,
+      hasPreface: Boolean(shown?.song && (shown.song.who || shown.song.what)),
+      running: here ? (here.retranslate ? 'here-retranslate' : 'here') : 'none',
+      mirrored: !here && Boolean(this.foreignLock && this.foreignLock.id === this.identity),
+      otherSong: run && run.id !== this.identity ? run.title : this.foreignLock && this.foreignLock.id !== this.identity ? this.foreignLock.title : null,
+      avail: this.avail,
+      notice: this.notice,
+    };
+  }
 
-    const settingsAction: HeadAction = { label: '設定', onClick: (b) => this.openSettings(b) };
-    const hideAction: HeadAction = { label: settings.hideTranslation ? '訳を表示' : '訳を隠す', onClick: () => void this.toggleHidden() };
-    const stopAction: HeadAction = { label: '止める', onClick: () => this.stop() };
-    const preface = shown?.song && (shown.song.who || shown.song.what)
+  private view(page: PageSong): { head: HeadView; lines: LinesInput } {
+    const input = this.viewInput(page);
+    const d = decide(input);
+    const shown = this.shown();
+    const bind = (a: ActionSpec): HeadAction => ({ ...a, onClick: (el) => this.act(a.id, el, input) });
+    const preface = d.preface && shown?.song
       ? {
         who: shown.song.who,
         what: shown.song.what,
@@ -376,147 +426,34 @@ export class App {
         },
       }
       : null;
-    const lines: LinesInput = {
-      page, record: shown, slots: false, gaps: false, breathing: false, seam: null,
-      animate: !this.fromCache, openIndex: this.notes.openIndex,
-      onMark: (i) => void this.toggleNote(i),
-      onMarkHover: (i, on) => this.peek(i, on),
-    };
-
-    // S8: retranslating — the old edition stays readable until the new one is complete.
-    if (here?.retranslate) {
-      return { head: { status: '訳し直しています · 終わるまで今の訳を表示します', actions: [stopAction], preface }, lines };
-    }
-    // S3 / S4: this tab is writing this song.
-    if (here) {
-      // Arriving (S4) once the preface or any line is in, even if the song record was unusable.
-      const arriving = Boolean(preface) || done > 0;
-      return {
-        head: {
-          status: arriving ? '' : '曲全体を読んでいます',
-          actions: arriving ? [stopAction, hideAction, settingsAction] : [stopAction],
-          note: transportStreams() ? undefined : 'この環境では訳がまとめて届きます',
-          preface,
-        },
-        lines: { ...lines, slots: true, breathing: true },
-      };
-    }
-    // S4m: another tab is writing this song; follow it from storage.
-    if (mirrored) {
-      return {
-        head: { status: '別のタブで訳しています', actions: [{ label: '止める', onClick: () => void requestAbort() }, hideAction], preface },
-        lines: { ...lines, slots: true, breathing: true },
-      };
-    }
-
-    // S8f: a retranslation failed or could not start; the old edition is untouched.
-    if (this.notice && done) {
-      return { head: { status: this.notice.status, actions: [hideAction, settingsAction], note: this.notice.detail || undefined, preface }, lines };
-    }
-
-    const stop = this.liveStop(shown?.stop);
-    if (!done) {
-      if (!hasAnyKey(settings)) {
-        return { head: { status: '日本語訳には無料のAPIキーが必要です', actions: [{ label: 'キーを設定', primary: true, onClick: () => this.openFirstRun() }] }, lines };
-      }
-      if (otherSong) {
-        return {
-          head: { status: `別の曲（${otherSong}）を訳しています · 終わると訳せます`, actions: [{ label: 'あちらを止める', onClick: () => this.stopOther() }, settingsAction] },
-          lines,
-        };
-      }
-      if (quotaUntil != null) {
-        return { head: { status: blocker ?? '', tone: 'muted', actions: [settingsAction] }, lines };
-      }
-      if (stop && stop.reason !== 'closed') {
-        // Nothing arrived last time: say why here, with the same rule as a seam button.
-        const seam = this.seamFor(stop, null);
-        return { head: { status: seam.text, actions: [{ ...seam.button, label: seam.button.label === '続きを訳す' ? '日本語で読む' : seam.button.label, primary: true }, settingsAction] }, lines };
-      }
-      return { head: { status: '', actions: [{ label: '日本語で読む', primary: true, onClick: () => void this.translate('start') }, settingsAction] }, lines };
-    }
-
-    // S5: complete.
-    if (!missing) {
-      return { head: { status: '', actions: [hideAction, settingsAction], preface }, lines };
-    }
-    const resume: HeadAction = { label: '訳す', primary: true, disabled: Boolean(blocker), onClick: () => void this.translate('resume') };
-    // S5g: the model skipped some lines.
-    if (stop?.reason === 'gaps') {
-      return {
-        head: { status: `${missing}行が訳せていません`, actions: [resume, hideAction, settingsAction], note: blocker ?? undefined, preface },
-        lines: { ...lines, gaps: true },
-      };
-    }
-    // S7: Genius changed the lyrics since the edition was finished.
-    if (!stop) {
-      return {
-        head: { status: `歌詞が更新され、まだ訳していない行が${missing}行あります`, actions: [resume, hideAction, settingsAction], note: blocker ?? undefined, preface },
-        lines: { ...lines, slots: true },
-      };
-    }
-    // S6: interrupted; the seam sits at the first empty slot.
-    const seam = this.seamFor(stop, blocker);
+    const seam: SeamView | null = d.lines.seam
+      ? { text: d.lines.seam.text, button: { ...d.lines.seam.button, onClick: () => this.act(d.lines.seam!.button.id, null, input) } }
+      : null;
     return {
-      head: { status: `途中まで訳してあります（${done}/${total}行）`, actions: [{ ...seam.button, primary: true }, hideAction, settingsAction], preface },
-      lines: { ...lines, slots: true, seam },
+      head: { status: d.status, ...(d.tone ? { tone: d.tone } : {}), ...(d.note ? { note: d.note } : {}), actions: d.actions.map(bind), preface, state: d.state },
+      lines: {
+        page, record: shown, slots: d.lines.slots, gaps: d.lines.gaps, breathing: d.lines.breathing, seam,
+        animate: !this.fromCache, openIndex: this.notes.openIndex,
+        onMark: (i) => void this.toggleNote(i),
+        onMarkHover: (i, on) => this.peek(i, on),
+      },
     };
   }
 
-  /** A stored stop whose wait is over reads as plain "ここまで訳してあります". */
-  private liveStop(stop: StopInfo | undefined): StopInfo | undefined {
-    if (!stop) return stop;
-    if ((stop.reason === 'quota' || stop.reason === 'rate') && stop.until && stop.until <= Date.now()) return { reason: 'closed', at: stop.at };
-    return stop;
-  }
-
-  /** Why a retranslation did not finish, without promising a 続き that S8f does not offer. */
-  private failureText(stop: StopInfo): string {
-    const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : '';
-    const text: Partial<Record<StopInfo['reason'], string>> = {
-      busy: '混み合っていました',
-      rate: '短い時間に使いすぎました。1分ほどおいてから試せます',
-      quota: `今日の無料枠が終わりました${when ? `（${when}に戻ります）` : ''}`,
-      auth: 'APIキーが使えません。設定で確かめてください',
-      blocked: 'AIの安全フィルタで止められました',
-      network: '接続が切れました',
-      unusable: 'うまく受け取れない返事が来ました',
-      stopped: '止めました',
-      length: '長い曲なので、一度では訳し切れませんでした',
-    };
-    return text[stop.reason] ?? '';
-  }
-
-  private seamText(stop: StopInfo): string {
-    const when = stop.until && stop.until > Date.now() ? formatWhen(stop.until) : '';
-    const text: Record<StopInfo['reason'], string> = {
-      busy: '混み合っていて、ここで途切れました',
-      rate: '短い時間に使いすぎました。1分ほどおいてから続きを訳せます',
-      quota: `今日の無料枠が終わりました。${when ? `${when}ごろから` : 'あとで'}続きを訳せます`,
-      auth: 'APIキーが使えません。設定で確かめてください',
-      blocked: 'この先はAIの安全フィルタで止められました。別のモデルなら通ることがあります',
-      network: '接続が切れました。つながったら続きを訳せます',
-      unusable: 'うまく受け取れない返事が来ました',
-      stopped: 'ここで止めました',
-      length: '長い曲なので、ここで一度区切りました',
-      closed: 'ここまで訳してあります',
-      gaps: 'ここまで訳してあります',
-    };
-    return text[stop.reason];
-  }
-
-  /** The seam's sentence and button. `blocker` (another song running, quota spent) disables
-   *  the button and is said right there, so a tap never silently does nothing. */
-  private seamFor(stop: StopInfo, blocker: string | null): SeamView {
-    const now = Date.now();
-    const text = this.seamText(stop);
-    if (stop.reason === 'auth') return { text, button: { label: '設定を開く', onClick: () => this.openSettings(null) } };
-    let disabled = false;
-    if (stop.reason === 'rate' && stop.until && now < stop.until) disabled = true;
-    if (stop.reason === 'network' && !navigator.onLine) disabled = true;
-    if (blocker && stop.reason !== 'quota') return { text: `${text}。${blocker}`, button: { label: '続きを訳す', disabled: true, onClick: () => {} } };
-    if (blocker) disabled = true;
-    return { text, button: { label: '続きを訳す', disabled, onClick: () => void this.translate('resume') } };
+  /** Runs an action named by the state machine. */
+  private act(id: ActionId, el: HTMLElement | null, input: ViewInput): void {
+    switch (id) {
+      case 'start': void this.translate('start'); break;
+      case 'resume': void this.translate('resume'); break;
+      case 'stop': this.stop(); break;
+      case 'stopMirror': void requestAbort(); break;
+      case 'stopOther': this.stopOther(); break;
+      case 'hide': void this.toggleHidden(); break;
+      case 'settings': this.openSettings(el); break;
+      case 'firstRun': this.openFirstRun(); break;
+      case 'addKey': this.openSettings(el, input.spare?.id); break;
+      case 'noop': break;
+    }
   }
 
   /* ---------- notes ---------- */
@@ -538,6 +475,7 @@ export class App {
     this.anchored(() => this.notes.open(
       { index, key: line.key, lineNode: node, result, lineText: page.texts[index], annotations: this.annotations },
       () => void this.toggleNote(index),
+      true,
     ), node);
     this.renderNow();
     markOf(index)?.focus();
@@ -586,7 +524,7 @@ export class App {
         this.openFirstRun();
         return;
       }
-      this.avail = await availability(settings.providers);
+      await this.refreshKeys();
       if (!this.avail.ok) {
         cannotRetranslate(`今日の無料枠は終わりました${this.avail.until > Date.now() ? `（${formatWhen(this.avail.until)}に戻ります）` : ''}`);
         this.renderNow();
@@ -631,8 +569,12 @@ export class App {
       // A reload or closed tab should not leave a live-looking lock for 10 s, and what it
       // leaves behind reads "ここまで訳してあります", not "ここで止めました".
       let leaving = false;
-      const bye = () => { leaving = true; current.controller.abort(); void current.lock.release(); };
+      // Write the newest lines at once: after pagehide the async save chain may never run,
+      // and a backgrounded phone tab may be discarded without one.
+      const bye = () => { leaving = true; void current.saver.flush(); current.controller.abort(); void current.lock.release(); };
+      const hiddenNow = () => { if (document.visibilityState === 'hidden' && !retranslate) void current.saver.flush(); };
       window.addEventListener('pagehide', bye, { once: true });
+      document.addEventListener('visibilitychange', hiddenNow);
       this.renderNow();
 
       try {
@@ -650,21 +592,24 @@ export class App {
         if (retranslate) {
           // Lines the new edition skipped (or a long song cut short) keep their previous
           // translation, so a retranslation that got most of the way still lands.
-          let complete = outcome.complete;
-          if (!complete && stored && outcome.stop && ['gaps', 'length'].includes(outcome.stop.reason)) {
+          // A retranslation that was cut ('length') or skipped lines ('gaps') still lands:
+          // its holes keep the previous translation where there was one, and lines missing
+          // from both keep the stop (S5g / S6) instead of discarding the whole new edition.
+          let landed = outcome.complete;
+          if (!landed && stored && outcome.stop && ['gaps', 'length'].includes(outcome.stop.reason)) {
             for (const u of missingLines(source, record)) {
               const old = stored.lines[u.key];
-              if (old) record.lines[u.key] = old;
+              if (old?.ja) record.lines[u.key] = old;
             }
-            complete = !missingLines(source, record).length;
-            if (complete) delete record.stop;
+            if (!missingLines(source, record).length) delete record.stop;
+            landed = true;
           }
-          if (complete) {
+          if (landed) {
             await saveSong(record);
             if (this.identity === id) this.record = record;
           } else if (this.identity === id) {
             const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
-            this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: this.failureText(stop) };
+            this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: failureText(stop, Date.now()) };
           }
         } else {
           if (leaving && record.stop?.reason === 'stopped') record.stop = { reason: 'closed', at: Date.now() };
@@ -673,13 +618,14 @@ export class App {
       } catch (error) {
         console.error('[Lyric Lens]', error);
         if (retranslate) {
-          if (this.identity === id) this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: this.failureText({ reason: 'unusable', at: Date.now() }) };
+          if (this.identity === id) this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: failureText({ reason: 'unusable', at: Date.now() }, Date.now()) };
         } else {
           record.stop = { reason: 'unusable', at: Date.now() };
           await this.persist(current, record);
         }
       } finally {
         window.removeEventListener('pagehide', bye);
+        document.removeEventListener('visibilitychange', hiddenNow);
       }
     } finally {
       this.starting = false;
@@ -687,7 +633,7 @@ export class App {
       if (run) {
         this.run = null;
         this.foreignLock = await this.otherLock();
-        this.avail = await availability(currentSettings().providers);
+        await this.refreshKeys();
         this.renderNow();
       }
     }
@@ -719,18 +665,14 @@ export class App {
 
   /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
    *  offer 続きを訳す / 日本語で読む again. */
-  private async afterSheet(changed: boolean): Promise<void> {
+  /** An invalid-key stop needs no rewrite here: it stops applying (liveStop) as soon as a
+   *  configured key is believed to work, on this page or any other. */
+  private async afterSheet(): Promise<void> {
     await loadSettings();
-    const record = this.record;
-    if (changed && !this.run && record?.stop?.reason === 'auth') {
-      if (hasLines(record)) record.stop = { reason: 'closed', at: Date.now() };
-      else delete record.stop;
-      await saveSong(record);
-    }
     await this.refresh();
   }
 
-  openSettings(anchor: HTMLElement | null): void {
+  openSettings(anchor: HTMLElement | null, focusService?: string): void {
     const record = this.record;
     const id = this.identity;
     // While a request is writing (here or in another tab) there is nothing to retranslate
@@ -739,6 +681,8 @@ export class App {
     openSheet({
       mode: 'settings',
       anchor,
+      ...(focusService ? { focusService: focusService as SheetService } : {}),
+      busySongId: busy ? id : null,
       song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
       onRetranslate: () => { if (this.identity === id) void this.translate('retranslate'); },
       onDeleteSong: async () => {
@@ -747,7 +691,7 @@ export class App {
         this.record = null;
         this.renderNow();
       },
-      onClose: (changed) => void this.afterSheet(changed),
+      onClose: () => void this.afterSheet(),
     });
   }
 
@@ -755,7 +699,7 @@ export class App {
     openSheet({
       mode: 'first-run',
       onSaveAndTranslate: () => void this.translate('start'),
-      onClose: (changed) => void this.afterSheet(changed),
+      onClose: () => void this.afterSheet(),
     });
   }
 }

@@ -6,7 +6,8 @@ import { LLMError } from '../src/llm/errors';
 import type { ProviderConfig } from '../src/llm/types';
 import { memoryStorage, setJSON, setKV } from '../src/platform/storage';
 import { currentSettings, loadSettings, setProviderKey } from '../src/store/settings';
-import { storageSummary } from '../src/store/songs';
+import type { SongRecord } from '../src/core/types';
+import { exportSongs, loadSong, saveSong, storageSummary } from '../src/store/songs';
 import { closeSheet, openSheet } from '../src/ui/sheet';
 import { formatWhen } from '../src/ui/time';
 
@@ -250,9 +251,9 @@ describe('first-run sheet', () => {
     const t = text();
     for (const line of [
       '日本語訳をはじめる',
-      'Google AI Studio を開いて、無料のAPIキーを作ります',
+      'Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります',
       'キーをコピーして、下に貼り付けます',
-      'キーはこの端末のスクリプト用保存領域にだけ保存されます',
+      'キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません',
       '保存してこの曲を訳す',
       '保存だけする',
     ]) expect(t).toContain(line);
@@ -567,5 +568,329 @@ describe('settings sheet', () => {
     buttonNamed('やめる').click();
     expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+});
+
+/* ---------- a rejected key ---------- */
+
+describe('a rejected key', () => {
+  async function badGroq(): Promise<void> {
+    await setProviderKey('groq', GROQ_KEY);
+    keyStatusMock.mockImplementation(async (config: ProviderConfig) => {
+      if (config.preset === 'groq') return { kind: 'bad' };
+      return config.apiKey ? { kind: 'ok' } : { kind: 'missing' };
+    });
+  }
+
+  it('offers キーを入れ直す instead of キーを消す, only for the rejected key', async () => {
+    await setProviderKey('gemini', GEMINI_KEY);
+    await badGroq();
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    const labels = (id: string): string[] => Array.from(rowFor(id).querySelectorAll('button')).map((b) => b.textContent ?? '');
+    expect(labels('groq')).toEqual(['キーを入れ直す']);
+    expect(labels('gemini')).toEqual(['キーを消す']);
+  });
+
+  it('removing it puts the cursor in the new field, even on a phone', async () => {
+    stubMatchMedia({ desktop: false, dark: false });
+    await badGroq();
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    buttonNamed('キーを入れ直す').click();
+    await vi.waitFor(() => expect(rowFor('groq').querySelector('input')).not.toBeNull());
+    expect(shadow().activeElement).toBe(rowFor('groq').querySelector('input'));
+    expect((await loadSettings()).providers.find((p) => p.preset === 'groq')!.apiKey).toBe('');
+    expect(rowFor('groq').querySelector('.status')!.textContent).toBe('未設定');
+  });
+
+  it('a working key removed on a phone still leaves the keyboard down (focus goes to the row)', async () => {
+    stubMatchMedia({ desktop: false, dark: false });
+    await setProviderKey('gemini', GEMINI_KEY);
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    buttonNamed('キーを消す').click();
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
+    expect(shadow().activeElement).toBe(rowFor('gemini'));
+  });
+});
+
+/* ---------- emphasising a service ---------- */
+
+describe('focusService', () => {
+  let scrolled: Element[] = [];
+
+  beforeEach(() => {
+    scrolled = [];
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: function (this: Element) { scrolled.push(this); },
+    });
+  });
+
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  const marked = (): string[] => Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]')).filter((r) => r.dataset.focus === 'true').map((r) => r.dataset.service!);
+
+  it('emphasises, scrolls to and focuses the key field of that row on a desktop', async () => {
+    await setProviderKey('gemini', GEMINI_KEY);
+    openSheet({ mode: 'settings', focusService: 'openrouter' });
+    await settingsReady();
+    expect(marked()).toEqual(['openrouter']);
+    // The emphasis comes from sheet.css ([data-focus]), not inline styles.
+    expect(rowFor('openrouter').getAttribute('style')).toBeNull();
+    expect(scrolled).toEqual([rowFor('openrouter')]);
+    expect(shadow().activeElement).toBe(rowFor('openrouter').querySelector('input')); // not the first empty one (groq)
+  });
+
+  it('focuses the row itself on a phone, so the keyboard stays down', async () => {
+    stubMatchMedia({ desktop: false, dark: false });
+    openSheet({ mode: 'settings', focusService: 'groq' });
+    await settingsReady();
+    expect(marked()).toEqual(['groq']);
+    expect(scrolled).toEqual([rowFor('groq')]);
+    expect(shadow().activeElement).toBe(rowFor('groq'));
+    expect(rowFor('groq').tabIndex).toBe(-1);
+  });
+
+  it('works for a service that already has a key (the row, no field)', async () => {
+    await setProviderKey('groq', GROQ_KEY);
+    openSheet({ mode: 'settings', focusService: 'groq' });
+    await settingsReady();
+    expect(marked()).toEqual(['groq']);
+    expect(shadow().activeElement).toBe(rowFor('groq'));
+  });
+
+  it('can name the first service too', async () => {
+    openSheet({ mode: 'settings', focusService: 'gemini' });
+    await settingsReady();
+    expect(marked()).toEqual(['gemini']);
+    expect(shadow().activeElement).toBe(rowFor('gemini').querySelector('input'));
+  });
+
+  it('marks nothing and keeps the usual focus without it', async () => {
+    await setProviderKey('gemini', GEMINI_KEY);
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    expect(marked()).toEqual([]);
+    expect(scrolled).toEqual([]);
+    expect(shadow().activeElement).toBe(rowFor('groq').querySelector('input'));
+  });
+
+  it('is ignored in the first-run sheet', () => {
+    openSheet({ mode: 'first-run', focusService: 'groq' });
+    expect(shadow().querySelectorAll('[data-service]').length).toBe(0);
+    expect(shadow().activeElement).toBe(shadow().querySelector('input'));
+  });
+});
+
+/* ---------- saved data: 書き出す / 読み込む ---------- */
+
+describe('saved data export and import', () => {
+  const NOT_AN_EXPORT = '読み込めませんでした。Lyric Lens で書き出したファイルを選んでください';
+
+  function song(id: string, lines = 2): SongRecord {
+    const map: SongRecord['lines'] = {};
+    for (let i = 0; i < lines; i++) map[`line ${id} ${i}`] = { ja: `訳 ${i}`, notes: [{ kind: 'slang', phrase: 'x', text: '説明' }] };
+    return { v: 2, id, path: `/${id}`, title: `Song ${id}`, artist: 'A', lines: map, model: 'm', createdAt: 1, updatedAt: 1 };
+  }
+
+  const fileInput = (): HTMLInputElement => shadow().querySelector<HTMLInputElement>('input[type="file"]')!;
+  const dataMessage = (): HTMLElement => {
+    const section = Array.from(shadow().querySelectorAll<HTMLElement>('.section')).find((s) => s.querySelector('.section-title')?.textContent === '保存データ')!;
+    return section.querySelector<HTMLElement>('.msg')!;
+  };
+
+  /** Hands the sheet a file the way the browser's picker does. */
+  function choose(input: HTMLInputElement, content: string): void {
+    Object.defineProperty(input, 'files', { configurable: true, value: [new File([content], 'lyric-lens.json', { type: 'application/json' })] });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function readBlob(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+  }
+
+  let created: Blob[] = [];
+  let clicked: HTMLAnchorElement[] = [];
+  let anchorClick: { mockRestore(): void };
+
+  beforeEach(() => {
+    created = [];
+    clicked = [];
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: vi.fn((blob: Blob) => { created.push(blob); return 'blob:lyric-lens-test'; }) });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: vi.fn() });
+    anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicked.push(this); });
+  });
+
+  afterEach(() => {
+    anchorClick.mockRestore();
+    delete (URL as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  it('shows 書き出す, 読み込む and すべて消す, with only 読み込む available when nothing is saved', async () => {
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(text()).toContain('保存した曲：0曲'));
+    expect(text()).toContain('書き出したファイルは、別の端末でも読み込めます');
+    expect(buttonNamed('書き出す').disabled).toBe(true);
+    expect(buttonNamed('読み込む').disabled).toBe(false);
+    expect(buttonNamed('すべて消す').disabled).toBe(true);
+    const input = fileInput();
+    expect(input.getAttribute('accept')).toBe('application/json');
+    expect(input.hidden).toBe(true);
+    expect(input.tabIndex).toBe(-1);
+    expect(host()!.children.length).toBe(0); // still all inside the shadow root
+  });
+
+  it('書き出す downloads one JSON file with every saved song and says how many', async () => {
+    await saveSong(song('1'));
+    await saveSong({ ...song('2'), stop: { reason: 'length', at: 5 } });
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(buttonNamed('書き出す').disabled).toBe(false));
+    buttonNamed('書き出す').click();
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲を書き出しました'));
+
+    expect(clicked.length).toBe(1);
+    expect(clicked[0]!.getAttribute('download')).toMatch(/^lyric-lens-\d{8}\.json$/);
+    expect(clicked[0]!.getAttribute('href')).toBe('blob:lyric-lens-test');
+    expect(clicked[0]!.isConnected).toBe(false); // the link does not stay in the sheet
+    expect(created.length).toBe(1);
+    expect(created[0]!.type).toBe('application/json');
+    const file = JSON.parse(await readBlob(created[0]!)) as { app: string; v: number; songs: SongRecord[] };
+    expect(file.app).toBe('lyric-lens');
+    expect(file.songs.map((s) => s.id).sort()).toEqual(['1', '2']);
+    expect(file.songs.find((s) => s.id === '2')!.stop?.reason).toBe('length');
+    expect(buttonNamed('書き出す').disabled).toBe(false); // ready again
+  });
+
+  it('says so when the file could not be made', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (URL.createObjectURL as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('no blobs'); });
+    await saveSong(song('1'));
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(buttonNamed('書き出す').disabled).toBe(false));
+    buttonNamed('書き出す').click();
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('書き出せませんでした'));
+    expect(dataMessage().dataset.kind).toBe('error');
+    error.mockRestore();
+  });
+
+  it('読み込む opens the hidden file picker', async () => {
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    const picker = vi.spyOn(fileInput(), 'click').mockImplementation(() => {});
+    buttonNamed('読み込む').click();
+    expect(picker).toHaveBeenCalledTimes(1);
+  });
+
+  it('imports an exported file, updates the count and closes as changed', async () => {
+    await saveSong(song('1'));
+    await saveSong({ ...song('2'), stop: { reason: 'busy', at: 5 } });
+    const exported = await exportSongs();
+    setKV(memoryStorage()); // another device
+    await loadSettings();
+
+    const onClose = vi.fn();
+    openSheet({ mode: 'settings', onClose });
+    await settingsReady();
+    await vi.waitFor(() => expect(text()).toContain('保存した曲：0曲'));
+    choose(fileInput(), exported);
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲を読み込みました'));
+    expect(dataMessage().dataset.kind).toBeUndefined();
+    expect(text()).toContain('保存した曲：2曲');
+    expect((await loadSong('1'))!.title).toBe('Song 1');
+    expect((await loadSong('2'))!.stop?.reason).toBe('busy');
+    expect(buttonNamed('書き出す').disabled).toBe(false);
+    expect(buttonNamed('すべて消す').disabled).toBe(false);
+    buttonNamed('閉じる').click();
+    expect(onClose).toHaveBeenCalledWith(true);
+  });
+
+  it('refuses a file that is not a Lyric Lens export and changes nothing', async () => {
+    await saveSong(song('1'));
+    const onClose = vi.fn();
+    openSheet({ mode: 'settings', onClose });
+    await settingsReady();
+    await vi.waitFor(() => expect(text()).toContain('保存した曲：1曲'));
+
+    choose(fileInput(), '{"hello":"world"}');
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe(NOT_AN_EXPORT));
+    expect(dataMessage().dataset.kind).toBe('error');
+
+    choose(fileInput(), 'this is not json');
+    await vi.waitFor(() => expect(buttonNamed('読み込む').disabled).toBe(false));
+    expect(dataMessage().textContent).toBe(NOT_AN_EXPORT);
+    expect((await storageSummary()).count).toBe(1);
+    expect(host()).not.toBeNull(); // the sheet stays open
+    buttonNamed('閉じる').click();
+    expect(onClose).toHaveBeenCalledWith(false);
+  });
+
+  it('says when a valid file brings nothing new', async () => {
+    await saveSong(song('1'));
+    const exported = await exportSongs();
+    const onClose = vi.fn();
+    openSheet({ mode: 'settings', onClose });
+    await settingsReady();
+    await vi.waitFor(() => expect(text()).toContain('保存した曲：1曲'));
+    choose(fileInput(), exported);
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('新しく読み込める曲はありませんでした'));
+    buttonNamed('閉じる').click();
+    expect(onClose).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves the song a request is writing alone', async () => {
+    await saveSong(song('1'));
+    await saveSong(song('2'));
+    const exported = await exportSongs();
+    setKV(memoryStorage());
+    await loadSettings();
+
+    openSheet({ mode: 'settings', busySongId: '2' });
+    await settingsReady();
+    choose(fileInput(), exported);
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('1曲を読み込みました'));
+    expect(await loadSong('1')).not.toBeNull();
+    expect(await loadSong('2')).toBeNull();
+  });
+
+  it('keeps Tab inside the sheet: the hidden file input does not count as the last stop', async () => {
+    await saveSong(song('1'));
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(buttonNamed('すべて消す').disabled).toBe(false));
+    const last = buttonNamed('すべて消す');
+    last.focus();
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, composed: true });
+    last.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(true);
+    expect(shadow().activeElement).toBe(buttonNamed('閉じる'));
+  });
+
+  it('still clears everything after confirming, and the buttons come back', async () => {
+    await saveSong(song('1'));
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(buttonNamed('すべて消す').disabled).toBe(false));
+    buttonNamed('すべて消す').click();
+    expect(hasButton('書き出す')).toBe(false); // the confirm replaced the row
+    buttonNamed('消す').click();
+    await vi.waitFor(() => expect(text()).toContain('保存した曲：0曲'));
+    expect(hasButton('書き出す')).toBe(true);
+    expect(hasButton('読み込む')).toBe(true);
+    expect(buttonNamed('書き出す').disabled).toBe(true);
+    expect(buttonNamed('読み込む').disabled).toBe(false);
   });
 });

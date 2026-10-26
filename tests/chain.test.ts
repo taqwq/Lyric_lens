@@ -15,7 +15,7 @@ import {
 import { LLMError } from '../src/llm/errors';
 import type { HttpResult, StreamRequest } from '../src/platform/http';
 import { streamRequest } from '../src/platform/http';
-import { getJSON, memoryStorage, setKV } from '../src/platform/storage';
+import { getJSON, memoryStorage, setJSON, setKV } from '../src/platform/storage';
 import { newProvider } from '../src/store/settings';
 import type { ProviderConfig } from '../src/llm/types';
 
@@ -101,6 +101,12 @@ const readCooldowns = () => getJSON<Record<string, { until: number; reason: stri
 const gemini = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({ ...newProvider('gemini', 'test-key'), ...overrides });
 /** Cooldowns are kept per preset, endpoint, API key and model. */
 const cooldownKey = (model: string, config: ProviderConfig = gemini()) => cooldownId(config, model);
+
+type StoredCooldowns = Record<string, { until: number; reason: string }>;
+const seedCooldowns = (entries: StoredCooldowns) => setJSON(COOLDOWNS, entries);
+/** Pre-seeds the model list a provider would otherwise fetch, so no request is made for it. */
+const seedModels = (config: ProviderConfig, ...ids: string[]) =>
+  setJSON(`ll3:models:${cooldownId(config, '')}`, { at: Date.now(), models: ids.map((m, i) => ({ id: m, label: m, rank: 100 - i })) });
 
 interface Run {
   chunks: string[];
@@ -333,6 +339,267 @@ describe('generateWithFallback: quota cooldowns', () => {
     const cooldown = (await readCooldowns())[cooldownKey(A)]!;
     expect(cooldown.reason).toBe('not-found');
     expect(cooldown.until - Date.now()).toBeGreaterThan(2 * 24 * 3600_000);
+  });
+});
+
+describe('generateWithFallback: when every candidate is cooling down', () => {
+  const openrouter = () => newProvider('openrouter', 'ork');
+  const groq = () => newProvider('groq', 'gk');
+  const FREE = ['vendor/one:free', 'vendor/two:free', 'vendor/three:free'];
+
+  it('reports a per-minute wait as "rate", not as the daily quota, without any request', async () => {
+    const config = openrouter();
+    await seedModels(config, ...FREE);
+    const until = Date.now() + 60_000;
+    await seedCooldowns(Object.fromEntries(FREE.map((m) => [cooldownId(config, m), { until, reason: 'rate' }])));
+
+    const { error } = await settle(start([config]));
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error?.kind).toBe('rate');
+    expect(error?.retryAfterMs).toBeGreaterThan(0);
+    expect(error?.retryAfterMs).toBeLessThanOrEqual(60_000);
+    expect(error?.status).toBe(429);
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('reports the real reset: the earliest quota cooldown across providers', async () => {
+    const g = gemini();
+    const q = groq();
+    await seedModels(g, A, B, C);
+    await seedModels(q, 'groq-model');
+    const now = Date.now();
+    await seedCooldowns({
+      ...Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until: now + 10 * 3600_000, reason: 'quota' }])),
+      [cooldownId(q, 'groq-model')]: { until: now + 3 * 3600_000, reason: 'quota' },
+    });
+
+    const { error } = await settle(start([g, q]));
+    expect(error?.kind).toBe('quota');
+    expect(Math.abs(error!.retryAfterMs - 3 * 3600_000)).toBeLessThan(5_000); // Groq's, not Gemini's later one
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('a quota wait is always reported above one minute, so it is read as a reset time', async () => {
+    const g = gemini();
+    await seedModels(g, A);
+    await seedCooldowns({ [cooldownId(g, A)]: { until: Date.now() + 5_000, reason: 'quota' } });
+    const { error } = await settle(start([g]));
+    expect(error?.kind).toBe('quota');
+    expect(error?.retryAfterMs).toBeGreaterThan(60_000);
+  });
+
+  it('a short rate cooldown on one provider beats a longer quota cooldown on another', async () => {
+    const g = gemini();
+    const q = groq();
+    await seedModels(g, A, B, C);
+    await seedModels(q, 'groq-model');
+    const now = Date.now();
+    await seedCooldowns({
+      ...Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until: now + 10 * 3600_000, reason: 'quota' }])),
+      [cooldownId(q, 'groq-model')]: { until: now + 30_000, reason: 'rate' },
+    });
+
+    const { error } = await settle(start([g, q]));
+    expect(error?.kind).toBe('rate');
+    expect(error?.retryAfterMs).toBeGreaterThan(20_000);
+    expect(error?.retryAfterMs).toBeLessThanOrEqual(30_000);
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('ignores missing-model cooldowns when naming the wait', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const until = Date.now() + 3 * 24 * 3600_000;
+    await seedCooldowns(Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until, reason: 'not-found' }])));
+    const { error } = await settle(start([g]));
+    expect(error?.kind).toBe('quota'); // as before: nothing better to say
+    expect(error?.retryAfterMs).toBe(0);
+    expect(error?.message).toContain('上限');
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('a real quota error carries the reset time recorded in the cooldown table', async () => {
+    reply(A, dailyQuota());
+    reply(B, dailyQuota());
+    reply(C, dailyQuota());
+    const { error } = await settle(start([gemini()]));
+    expect(error?.kind).toBe('quota');
+    expect(error?.model).toBe(A);
+    expect(error?.provider).toBe('Google Gemini');
+    const soonest = Math.min(...Object.values(await readCooldowns()).map((c) => c.until));
+    expect(error!.retryAfterMs).toBeGreaterThan(60_000);
+    expect(Math.abs(error!.retryAfterMs - (soonest - Date.now()))).toBeLessThan(5_000);
+  });
+
+  it('a real quota error turns into a short "rate" wait when another provider returns within a minute', async () => {
+    const g = gemini();
+    const q = groq();
+    await seedModels(q, 'groq-model');
+    await seedCooldowns({ [cooldownId(q, 'groq-model')]: { until: Date.now() + 45_000, reason: 'rate' } });
+    reply(A, dailyQuota());
+    reply(B, dailyQuota());
+    reply(C, dailyQuota());
+
+    const { error } = await settle(start([g, q]));
+    expect(generated).toEqual([A, B, C]); // Groq is skipped, not tried
+    expect(error?.kind).toBe('rate');
+    expect(error?.retryAfterMs).toBeGreaterThan(30_000);
+    expect(error?.retryAfterMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it('passes an error that is not a quota error through unchanged', async () => {
+    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    const { error } = await settle(start([gemini({ model: B })]));
+    expect(error?.kind).toBe('bad-request');
+    expect(error?.retryAfterMs).toBe(0);
+    expect(error?.status).toBe(400);
+  });
+});
+
+describe('generateWithFallback: the cooldown table follows what happened', () => {
+  it('forgets a benched model once it answers, in storage as well as in memory', async () => {
+    await seedCooldowns({ [cooldownKey(A)]: { until: Date.now() + 120_000, reason: 'overloaded' } });
+    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    reply(A, ok('L1: あ\n'));
+    const first = await start([gemini()]).promise;
+    expect(generated).toEqual([B, C, A]); // the benched model goes last
+    expect(first.model).toBe(A);
+    expect(await readCooldowns()).toEqual({});
+
+    generated = [];
+    reply(A, ok('L1: い\n'));
+    await start([gemini()]).promise;
+    expect(generated).toEqual([A]); // first in line again
+  });
+
+  it('keeps the other entries when one model recovers', async () => {
+    await seedCooldowns({
+      [cooldownKey(A)]: { until: Date.now() + 120_000, reason: 'overloaded' },
+      [cooldownKey(C)]: { until: Date.now() + 3600_000, reason: 'quota' },
+    });
+    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    reply(A, ok('L1: あ\n'));
+    await start([gemini()]).promise;
+    expect(Object.keys(await readCooldowns())).toEqual([cooldownKey(C)]);
+  });
+
+  it('benches a model that broke after streaming text, so the next tap does not go back to it', async () => {
+    reply(A, {
+      status: 200,
+      body: textEvent('L1: あ\n') + ev({ error: { code: 503, status: 'UNAVAILABLE', message: 'The model is overloaded.' } }),
+    });
+    const first = await start([gemini()]).promise;
+    expect(first.error?.kind).toBe('overloaded');
+    expect(first.model).toBe(A);
+    expect(generated).toEqual([A]);
+    const cooldown = (await readCooldowns())[cooldownKey(A)];
+    expect(cooldown?.reason).toBe('overloaded');
+    expect(cooldown!.until - Date.now()).toBeGreaterThan(60_000);
+
+    generated = [];
+    reply(B, ok('L1: い\n'));
+    const second = await start([gemini()]).promise;
+    expect(generated).toEqual([B]); // A was demoted to the end
+    expect(second.model).toBe(B);
+  });
+
+  it('skips a model that hit a per-minute limit mid-stream until the limit has passed', async () => {
+    reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('rate', 'slow down', { status: 429, retryAfterMs: 5_000 }) });
+    const first = await start([gemini()]).promise;
+    expect(first.error?.kind).toBe('rate');
+    expect((await readCooldowns())[cooldownKey(A)]?.reason).toBe('rate');
+
+    generated = [];
+    reply(B, ok('L1: い\n'));
+    await start([gemini()]).promise;
+    expect(generated).toEqual([B]);
+  });
+
+  it('does not bench a model whose stream merely dropped', async () => {
+    reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'down') });
+    await start([gemini()]).promise;
+    expect(await readCooldowns()).toEqual({});
+  });
+});
+
+describe('OpenAI-compatible providers: reasoning effort', () => {
+  const REPLY: Reply = { status: 200, body: ev({ choices: [{ delta: { content: 'L1: あ\n' }, finish_reason: 'stop' }] }) };
+  const reject = (message: string): Reply => ({ status: 400, body: JSON.stringify({ error: { message, type: 'invalid_request_error' } }) });
+  const pinned = (preset: string, model: string): ProviderConfig => ({ ...newProvider(preset, 'k'), model });
+  const bodies = () =>
+    http.mock.calls.map(([r]) => r).filter((r) => r.url.endsWith('/chat/completions')).map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
+
+  it('sends the thinking level to gpt-oss on Groq and Cerebras', async () => {
+    reply('openai/gpt-oss-120b', REPLY);
+    reply('gpt-oss-120b', REPLY);
+    await start([pinned('groq', 'openai/gpt-oss-120b')]).promise; // start() thinks at "low"
+    await start([pinned('cerebras', 'gpt-oss-120b')]).promise;
+    expect(bodies().map((b) => b.reasoning_effort)).toEqual(['low', 'low']);
+  });
+
+  it('follows the reader\'s level, not a fixed one', async () => {
+    reply('openai/gpt-oss-120b', REPLY);
+    await generateWithFallback(
+      [pinned('groq', 'openai/gpt-oss-120b')],
+      { system: 's', user: 'u', maxOutputTokens: 100, thinking: 'high', onText: () => undefined },
+    );
+    expect(bodies()[0]?.reasoning_effort).toBe('high');
+  });
+
+  it('leaves other models and endpoints alone', async () => {
+    reply('llama-3.3-70b-versatile', REPLY);
+    reply('openai/gpt-oss-120b:free', REPLY);
+    reply('gpt-oss:20b', REPLY);
+    await start([pinned('groq', 'llama-3.3-70b-versatile')]).promise;
+    await start([pinned('openrouter', 'openai/gpt-oss-120b:free')]).promise;
+    await start([pinned('ollama', 'gpt-oss:20b')]).promise;
+    const sent = bodies();
+    expect(sent).toHaveLength(3);
+    for (const body of sent) expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('retries once without the field when the endpoint rejects it', async () => {
+    reply('openai/gpt-oss-120b', reject("Unsupported parameter: 'reasoning_effort' is not supported with this model."), REPLY);
+    const result = await start([pinned('groq', 'openai/gpt-oss-120b')]).promise;
+    expect(result.model).toBe('openai/gpt-oss-120b');
+    expect(result.text).toBe('L1: あ\n');
+    const sent = bodies();
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.reasoning_effort).toBe('low');
+    expect(sent[1]).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('does not retry forever: a second rejection that mentions reasoning is an error', async () => {
+    reply('openai/gpt-oss-120b', reject('reasoning_effort is invalid'), reject('reasoning is not supported'));
+    const { error } = await settle(start([pinned('groq', 'openai/gpt-oss-120b')]));
+    expect(error?.kind).toBe('bad-request');
+    expect(bodies()).toHaveLength(2);
+  });
+
+  it('still flips the token parameter name, and can do both in one call', async () => {
+    reply(
+      'openai/gpt-oss-120b',
+      reject("Unsupported parameter: 'max_completion_tokens'. Use 'max_tokens' instead."),
+      reject("Unknown parameter: 'reasoning_effort'."),
+      REPLY,
+    );
+    const result = await start([pinned('groq', 'openai/gpt-oss-120b')]).promise;
+    expect(result.text).toBe('L1: あ\n');
+    const sent = bodies();
+    expect(sent).toHaveLength(3);
+    expect(sent[0]).toMatchObject({ max_completion_tokens: 1000, reasoning_effort: 'low' });
+    expect(sent[1]).toMatchObject({ max_tokens: 1000, reasoning_effort: 'low' });
+    expect(sent[2]).toMatchObject({ max_tokens: 1000 });
+    expect(sent[2]).not.toHaveProperty('reasoning_effort');
+    expect(sent[2]).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('does not retry an unrelated bad request', async () => {
+    reply('openai/gpt-oss-120b', reject('messages: content must be a string'));
+    const { error } = await settle(start([pinned('groq', 'openai/gpt-oss-120b')]));
+    expect(error?.kind).toBe('bad-request');
+    expect(bodies()).toHaveLength(1);
   });
 });
 

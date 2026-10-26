@@ -48,6 +48,31 @@ describe('SYSTEM_PROMPT', () => {
     for (const kind of ['slang', 'wordplay', 'reference', 'idiom', 'ambiguous']) expect(SYSTEM_PROMPT).toContain(kind);
   });
 
+  it('checks subject and tense before each line, and limits the imperative to subjectless lines', () => {
+    expect(SYSTEM_PROMPT).toContain('3. 各行を訳す前に、その英文の主語と時制を確かめる');
+    expect(SYSTEM_PROMPT).toContain('主語のある英文は命令文ではない');
+    // a leading vocative and a Don't-sentence may still be imperatives
+    expect(SYSTEM_PROMPT).toContain('行頭の呼びかけ語を除くと主語が無く、動詞の原形か Don\'t で始まる文だけ');
+    expect(SYSTEM_PROMPT).toContain('無変化の過去形');
+    expect(SYSTEM_PROMPT).toContain('三人称（あの子・あいつ）');
+  });
+
+  it('keeps names as names, translates crude idioms by their meaning, and drops no words', () => {
+    expect(SYSTEM_PROMPT).toContain('訳文でもその名前のまま書く');
+    expect(SYSTEM_PROMPT).toContain('慣用の意味を同じ強さの口語で訳す');
+    expect(SYSTEM_PROMPT).toContain('原文に無い語で解釈を補わない');
+    expect(SYSTEM_PROMPT).toContain('原文の語も落とさない');
+  });
+
+  it('asks for one contiguous quoted phrase and no dictionary definitions in notes', () => {
+    expect(SYSTEM_PROMPT).toContain('q は原文の行の連続した一部をそのまま1つ');
+    expect(SYSTEM_PROMPT).toContain('文頭でも文末でも');
+  });
+
+  it('does not spell out glosses the models produced and might copy', () => {
+    for (const bad of ['高級ブランデー', '高級マスタード', 'グレード', '股間', 'ナニ']) expect(SYSTEM_PROMPT).not.toContain(bad);
+  });
+
   it('is what buildPrompt returns as system', () => {
     const source = tenLineSong();
     expect(buildPrompt(source, null, source.unique).system).toBe(SYSTEM_PROMPT);

@@ -45,9 +45,22 @@ export function parseReferents(referents: ReferentJson[]): GeniusAnnotation[] {
   return out;
 }
 
-export async function fetchAnnotations(songId: string, opts: { origin?: string; timeoutMs?: number } = {}): Promise<GeniusAnnotation[]> {
+const inflight = new Map<string, Promise<GeniusAnnotation[]>>();
+
+/** Annotations for a song, fetched once; concurrent callers (the idle prefetch, a tap,
+ *  a note) share one request. A failed fetch is not remembered, so a later call retries. */
+export function fetchAnnotations(songId: string, opts: { origin?: string; timeoutMs?: number } = {}): Promise<GeniusAnnotation[]> {
   const hit = cache.get(songId);
-  if (hit) return hit;
+  if (hit) return Promise.resolve(hit);
+  let pending = inflight.get(songId);
+  if (!pending) {
+    pending = fetchOnce(songId, opts).finally(() => inflight.delete(songId));
+    inflight.set(songId, pending);
+  }
+  return pending;
+}
+
+async function fetchOnce(songId: string, opts: { origin?: string; timeoutMs?: number }): Promise<GeniusAnnotation[]> {
   const origin = opts.origin ?? location.origin;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 6000);

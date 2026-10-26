@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateWithFallback, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
 import { LLMError, type LLMErrorKind } from '../src/llm/errors';
 import type { ProviderConfig } from '../src/llm/types';
-import { RecordBuilder, stopFromError, stripGlosses, translateSong } from '../src/core/pipeline';
+import { RecordBuilder, contiguousPhrase, stopFromError, stripGlosses, translateSong, trimDefinition, widenParens } from '../src/core/pipeline';
 import type { ProtocolEvent } from '../src/core/protocol';
 import { buildSong, emptyRecord, missingLines } from '../src/core/song';
-import type { SongMeta, SongRecord, SongSource } from '../src/core/types';
+import type { Note, NoteKind, SongMeta, SongRecord, SongSource } from '../src/core/types';
+import { locatePhrase } from '../src/genius/ranges';
 
 // Only the network-facing generateWithFallback is replaced; the Pacific-midnight maths is the real one.
 vi.mock('../src/llm/chain', async () => {
@@ -901,5 +902,164 @@ describe('stripGlosses with trailing source ad-libs', () => {
 
   it('leaves lines with parentheses mid-source alone', () => {
     expect(stripGlosses('（ああ）行くぞ（今）', '(Yeah) let us go (now) right')).toBe('（ああ）行くぞ（今）');
+  });
+});
+
+describe('widenParens', () => {
+  it('turns ASCII parentheses (and the space before them) into tight full-width ones', () => {
+    expect(widenParens('そうだ (Yeah, yeah)')).toBe('そうだ（Yeah, yeah）');
+    expect(widenParens('黙ってろ (待てよ、バカ野郎)')).toBe('黙ってろ（待てよ、バカ野郎）');
+    expect(widenParens('(よし) 行くぞ (今だ)')).toBe('（よし） 行くぞ（今だ）');
+  });
+
+  it('leaves full-width groups, unmatched brackets and English contents alone', () => {
+    expect(widenParens('座ってろ（待てよ）')).toBe('座ってろ（待てよ）');
+    expect(widenParens('半端な (かっこ')).toBe('半端な (かっこ');
+    expect(widenParens('入れ子 (外（内）)')).toBe('入れ子 (外（内）)');
+    expect(widenParens('ほら (Uh-huh)')).toBe('ほら（Uh-huh）');
+  });
+
+  it('is applied to every line the RecordBuilder accepts, after stripGlosses', () => {
+    const source = makeSource(['Go (Yeah, yeah)', 'Stay low (wait up, fool)', 'Money on my mind']);
+    const record = newRecord();
+    new RecordBuilder(source, record, [1, 2, 3]).apply([
+      { type: 'line', uid: 1, ja: '行け (Yeah, yeah)', notes: [] },
+      { type: 'line', uid: 2, ja: '低くいろ (待てよ、バカ)', notes: [] },
+      // no parentheses in the source: the gloss is stripped first, nothing is left to widen
+      { type: 'line', uid: 3, ja: '頭の中は金(お金)のこと', notes: [] },
+    ]);
+    expect(jaOf(source, record, 1)).toBe('行け（Yeah, yeah）');
+    expect(jaOf(source, record, 2)).toBe('低くいろ（待てよ、バカ）');
+    expect(jaOf(source, record, 3)).toBe('頭の中は金のこと');
+  });
+});
+
+describe('trimDefinition', () => {
+  const n = (kind: NoteKind, text: string): Note => ({ kind, phrase: 'word', text });
+
+  it('drops a slang or idiom note that only defines what the translation already says', () => {
+    expect(trimDefinition(n('slang', '旅先でもらう日当のこと。'), 'お前の日当を流してやる')).toBeNull();
+    expect(trimDefinition(n('slang', '雪＝コカインを意味するスラング'), 'コカインを売ってた')).toBeNull();
+    expect(trimDefinition(n('slang', '警察を指す言葉'), '警察が来る')).toBeNull();
+    expect(trimDefinition(n('idiom', '降参するという意味の表現の一種。'), 'もう降参だ')).toBeNull();
+    expect(trimDefinition(n('slang', 'ドラッグの売人の略語。'), '売人をやってた')).toBeNull();
+    expect(trimDefinition(n('slang', 'チーズ＝お金を意味するスラング'), '金が山積み')).toBeNull();
+  });
+
+  it('keeps the definition when the translation kept the word itself', () => {
+    for (const [text, ja] of [
+      ['チーズ＝お金を意味するスラング', 'パルメザンが山積み'],
+      ['警察を指すスラング。', 'ポポが来る'],
+      ['ずらかること。', 'ずらかるぜ'], // no kanji or katakana to compare: keep
+      ['降参するという意味の表現の一種。', '白旗だ'], // 意味, 表現 are not the meaning
+    ] as const) expect(trimDefinition(n('slang', text), ja)).toEqual(n('slang', text));
+  });
+
+  it('keeps what follows the definition when it says something about the line', () => {
+    const note = trimDefinition({ ...n('slang', '警察を指すスラング。取り締まりへの怒りがこの一語に込められている。'), conjecture: true, genius: '7' }, 'サツ、つまり警察だ');
+    expect(note).toEqual({ kind: 'slang', phrase: 'word', text: '取り締まりへの怒りがこの一語に込められている。', conjecture: true, genius: '7' });
+  });
+
+  it('drops the note when what follows is too short to stand alone', () => {
+    expect(trimDefinition(n('slang', '警察のこと。怒りがある。'), '警察め')).toBeNull();
+  });
+
+  it('leaves notes that do not start with a bare definition', () => {
+    for (const text of [
+      'チーズは金の隠語。高級な暮らしの象徴とも重ねている。',
+      'ここでは相手の度胸のなさをからかっている。',
+      '金を数えている今と、昔の貧しさを対比している。警察のこと。',
+    ]) expect(trimDefinition(n('slang', text), '金と警察と高級')).toEqual(n('slang', text));
+  });
+
+  it('keeps a definition-shaped sentence that names two readings', () => {
+    const text = '金とコカインの両方を指す。';
+    expect(trimDefinition(n('slang', text), '金とコカイン')).toEqual(n('slang', text));
+    expect(trimDefinition(n('idiom', '「降りる」の意味と、曲の展開を掛けた表現のこと。'), '降りる展開')?.text).toBe('「降りる」の意味と、曲の展開を掛けた表現のこと。');
+  });
+
+  it('never touches reference, wordplay or ambiguous notes', () => {
+    for (const kind of ['reference', 'wordplay', 'ambiguous'] as const) {
+      expect(trimDefinition(n(kind, '100ドル紙幣のこと。'), '100ドル紙幣')).toEqual(n(kind, '100ドル紙幣のこと。'));
+    }
+  });
+
+  it('runs inside the RecordBuilder: a dropped definition does not use up a slot of the cap', () => {
+    const source = makeSource();
+    const record = newRecord();
+    new RecordBuilder(source, record, [2]).apply([{
+      type: 'line', uid: 2, ja: JA[1]!, notes: [
+        { phrase: 'heat', kind: 'slang', text: '熱気のこと。', conjecture: false },
+        { phrase: 'street', kind: 'slang', text: '通りを指すスラング。ここでは育った場所への誇りを示している。', conjecture: false },
+        { phrase: 'Brought', kind: 'wordplay', text: 'one', conjecture: false },
+        { phrase: 'from', kind: 'reference', text: 'two', conjecture: false },
+      ],
+    }]);
+    expect(record.lines[source.unique[1]!.key]!.notes).toEqual([
+      { kind: 'slang', phrase: 'street', text: 'ここでは育った場所への誇りを示している。' },
+      { kind: 'wordplay', phrase: 'Brought', text: 'one' },
+      { kind: 'reference', phrase: 'from', text: 'two' },
+    ]);
+  });
+
+  it('a line whose only note was a definition is stored without notes', () => {
+    const source = makeSource();
+    const record = newRecord();
+    new RecordBuilder(source, record, [2]).apply([{
+      type: 'line', uid: 2, ja: JA[1]!, notes: [{ phrase: 'heat', kind: 'slang', text: '熱気のこと', conjecture: false }],
+    }]);
+    expect(record.lines[source.unique[1]!.key]).toEqual({ ja: JA[1] });
+  });
+});
+
+describe('contiguousPhrase', () => {
+  const LINE = 'I write my wrongs till the night turns right';
+
+  it('turns parts joined by "/" into the line text from the first part to the last', () => {
+    const phrase = contiguousPhrase('write / right', LINE);
+    expect(phrase).toBe('write my wrongs till the night turns right');
+    expect(locatePhrase(LINE, phrase)).toEqual({ start: 2, end: LINE.length });
+  });
+
+  it('does the same for "...", "…" and a full-width slash', () => {
+    const line = 'Stack the blocks up, then knock it down like a puzzle game';
+    expect(contiguousPhrase('knock it down... puzzle', line)).toBe('knock it down like a puzzle');
+    expect(contiguousPhrase('knock it down…puzzle game', line)).toBe('knock it down like a puzzle game');
+    expect(contiguousPhrase('Stack／blocks', line)).toBe('Stack the blocks');
+  });
+
+  it('matches parts with the same flexible rules as the underline (case, dropped g)', () => {
+    const line = "We was runnin' late, nothin' but the city lights";
+    expect(contiguousPhrase('Running / nothing', line)).toBe("runnin' late, nothin'");
+  });
+
+  it('keeps a phrase that already occurs in the line, slash or ellipsis included', () => {
+    expect(contiguousPhrase('AC/DC', 'Blasting AC/DC in the car')).toBe('AC/DC');
+    expect(contiguousPhrase('wait... what', 'Hold on, wait... what?')).toBe('wait... what');
+    expect(contiguousPhrase('break it down...', 'then break it down slow')).toBe('break it down...');
+  });
+
+  it('falls back to the longest part found when the parts are out of order or partly missing', () => {
+    expect(contiguousPhrase('hands / cold', 'cold heart, warm hands')).toBe('hands');
+    expect(contiguousPhrase('heart / nowhere', 'cold heart, warm hands')).toBe('heart');
+  });
+
+  it('leaves the phrase alone when no part is in the line, or there is no join', () => {
+    expect(contiguousPhrase('x / y', 'a b')).toBe('x / y');
+    expect(contiguousPhrase('not here', LINE)).toBe('not here');
+    expect(contiguousPhrase(' / ', LINE)).toBe(' / ');
+  });
+
+  it('runs inside the RecordBuilder on every note', () => {
+    const source = makeSource([LINE]);
+    const record = newRecord();
+    new RecordBuilder(source, record, [1]).apply([{
+      type: 'line', uid: 1, ja: '夜が明けるまで過ちを書く', notes: [
+        { phrase: 'write / wrongs / right', kind: 'wordplay', text: '同じ音の三語を並べている', conjecture: false },
+      ],
+    }]);
+    expect(record.lines[source.unique[0]!.key]!.notes).toEqual([
+      { kind: 'wordplay', phrase: 'write my wrongs till the night turns right', text: '同じ音の三語を並べている' },
+    ]);
   });
 });

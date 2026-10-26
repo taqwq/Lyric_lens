@@ -119,6 +119,20 @@ describe('classifyHttpError: 429 per-minute versus per-day', () => {
     expect(classifyHttpError(429, 'Too Many Requests').kind).toBe('rate');
   });
 
+  it('an OpenRouter ":free" upstream 429 is a per-minute rate limit, not the daily quota', () => {
+    // The chain reports these as a short wait ("rate") when every candidate is cooling down.
+    const body = JSON.stringify({
+      error: {
+        message: 'Provider returned error',
+        code: 429,
+        metadata: { raw: 'vendor/one:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits.', provider_name: 'Venice' },
+      },
+    });
+    const e = classifyHttpError(429, body);
+    expect(e.kind).toBe('rate');
+    expect(e.status).toBe(429);
+  });
+
   it('reads the wait from RetryInfo before the message, and from the message when there is no RetryInfo', () => {
     expect(classifyHttpError(429, geminiQuotaBody('GenerateRequestsPerMinutePerProjectPerModel-FreeTier', '41s')).retryAfterMs).toBe(41_000);
     expect(classifyHttpError(429, geminiQuotaBody('GenerateRequestsPerMinutePerProjectPerModel-FreeTier')).retryAfterMs).toBe(41_500); // from "Please retry in 41.5s"
