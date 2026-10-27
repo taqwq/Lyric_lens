@@ -4163,12 +4163,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       return stored;
     }
     prefetchAnnotations(page) {
-      const idle = window.requestIdleCallback;
-      const go = () => {
-        if (this.page?.songId === page.songId) void this.loadAnnotations(page);
-      };
-      if (idle) idle(go, { timeout: 3e3 });
-      else setTimeout(go, 1500);
+      if (this.page?.songId === page.songId) void this.loadAnnotations(page);
     }
     teardown() {
       closeSheet();
@@ -4581,7 +4576,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         document.addEventListener("visibilitychange", hiddenNow);
         this.renderNow();
         try {
-          const annotations = await this.loadAnnotations(page);
+          let waitTimer;
+          const annotations = await Promise.race([
+            this.loadAnnotations(page),
+            new Promise((resolve) => {
+              waitTimer = setTimeout(() => resolve(this.annotations ?? []), 2500);
+            })
+          ]).finally(() => clearTimeout(waitTimer));
           const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
           const outcome = await translateSong(input, record, {
             apiKey: settings.apiKey,

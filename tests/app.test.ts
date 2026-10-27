@@ -1,6 +1,6 @@
 import './setup';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SongRecord, SongSource } from '../src/core/types';
 
 const m = vi.hoisted(() => ({
@@ -252,5 +252,59 @@ describe('loadAnnotations', () => {
     for (let i = 0; i < 3; i++) expect(await inside(app).loadAnnotations(page)).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('translate: the tap does not wait long for Genius annotations', () => {
+  // 'Sit down, be humble' / 'Count the cash twice'
+  const LINES = ['Sit down, be humble', 'Count the cash twice'];
+  const referent = (n: number) => ({ id: n, fragment: `invented fragment ${n}`, annotations: [{ body: { plain: `invented note ${n}` }, votes_total: 5 }] });
+  const slowAnswer = (ms: number) => vi.fn(() => new Promise((resolve) => {
+    setTimeout(() => resolve({ ok: true, json: async () => ({ response: { referents: [referent(1), referent(2)], next_page: null } }) }), ms);
+  }));
+  const metaOf = () => (m.translateSong.mock.calls[0]![0] as SongSource).meta as { annotations?: unknown[] };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('starts the request by 2500 ms without them, and keeps the late fetch for the notes', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', slowAnswer(5000));
+    const app = appOn(pageOf(LINES, { songId: '7101' }));
+    const done = app.translate('start');
+    await vi.advanceTimersByTimeAsync(2400);
+    expect(m.translateSong).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(m.translateSong).toHaveBeenCalledTimes(1);
+    expect(metaOf().annotations).toBeUndefined();
+    await done;
+    expect(inside(app).annotations).toBeNull();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(inside(app).annotations).toHaveLength(2);
+  });
+
+  it('includes them when Genius answers within the wait', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', slowAnswer(100));
+    const app = appOn(pageOf(LINES, { songId: '7102' }));
+    const done = app.translate('start');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(m.translateSong).toHaveBeenCalledTimes(1);
+    expect(metaOf().annotations).toHaveLength(2);
+    await done;
+  });
+
+  it('leaves no timer behind once the annotations won the race', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', slowAnswer(100));
+    const app = appOn(pageOf(LINES, { songId: '7103' }));
+    const done = app.translate('start');
+    await vi.advanceTimersByTimeAsync(200);
+    await done;
+    // Let the 120 ms render debounce run out: the 2.5 s wait must not still be pending.
+    await vi.advanceTimersByTimeAsync(130);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

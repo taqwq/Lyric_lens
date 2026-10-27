@@ -138,8 +138,8 @@ export class App {
         await this.refreshKeys();
         this.detectTheme();
         this.renderNow();
-        // Genius' own annotations API is free and same-origin (not an LLM request): fetch at
-        // idle so the grounding is ready before the tap and opened notes do not grow later.
+        // Genius' own annotations API is free and same-origin (not an LLM request): fetch
+        // once so the grounding is ready before the tap and opened notes do not grow later.
         if (fresh && page.songId && (hasKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
       } while (this.refreshAgain);
     })().finally(() => { this.refreshing = null; });
@@ -158,10 +158,7 @@ export class App {
   }
 
   private prefetchAnnotations(page: PageSong): void {
-    const idle = (window as Window & { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
-    const go = () => { if (this.page?.songId === page.songId) void this.loadAnnotations(page); };
-    if (idle) idle(go, { timeout: 3000 });
-    else setTimeout(go, 1500);
+    if (this.page?.songId === page.songId) void this.loadAnnotations(page);
   }
 
   private teardown(): void {
@@ -605,7 +602,13 @@ export class App {
       this.renderNow();
 
       try {
-        const annotations = await this.loadAnnotations(page);
+        // The tap waits for Genius' annotations only so long: a slow answer still lands in
+        // this.annotations (and opened notes) later, but must not hold up the first request.
+        let waitTimer: ReturnType<typeof setTimeout> | undefined;
+        const annotations = await Promise.race([
+          this.loadAnnotations(page),
+          new Promise<GeniusAnnotation[]>((resolve) => { waitTimer = setTimeout(() => resolve(this.annotations ?? []), 2500); }),
+        ]).finally(() => clearTimeout(waitTimer));
         const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
         const outcome = await translateSong(input, record, {
           apiKey: settings.apiKey,
