@@ -471,9 +471,9 @@ export async function generateWithFallback(
   let flashNoted = false;
 
   /** How long `model` may stay silent before its first text, or null when it is Flash with less
-   *  than FLASH_MIN_ATTEMPT_MS of the budget left. The budget needs somewhere to hand over to
-   *  (`handOver`: a Flash-Lite or Gemma candidate behind it), and never applies to a pinned model
-   *  or once Flash has started writing. */
+   *  than FLASH_MIN_ATTEMPT_MS of the budget left. The budget needs somewhere faster to hand over
+   *  to (`handOver`: a Flash-Lite candidate behind it; Gemma is slower than a slow Flash), and
+   *  never applies to a pinned model or once Flash has started writing. */
   const firstTextTimeout = (model: string, handOver: boolean): number | null => {
     if (onlyModels?.length || flashSpoke || !handOver || modelTier(model) !== 0) return FIRST_TEXT_TIMEOUT_MS;
     const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt);
@@ -529,7 +529,7 @@ export async function generateWithFallback(
     for (const [index, model] of order.entries()) {
       let error: LLMError | null = null;
       let budgetCut = false;
-      const handOver = order.slice(index + 1).some((m) => modelTier(m) !== 0);
+      const handOver = order.slice(index + 1).some((m) => modelTier(m) === 1);
       const flash = modelTier(model) === 0 && !onlyModels?.length;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         const firstTextTimeoutMs = firstTextTimeout(model, handOver);
