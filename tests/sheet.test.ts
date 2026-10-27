@@ -410,7 +410,9 @@ describe('settings sheet', () => {
     const rows = Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]'));
     expect(rows.map((r) => r.dataset.service)).toEqual(['gemini']);
     expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google AI Studio（Gemini）');
-    expect(rows[0]!.querySelector('.status')!.textContent).toBe(`今日は${formatWhen(until)}まで休み`);
+    // 今日は is dropped when the reset falls tomorrow (depends on the clock the test runs at).
+    const when = formatWhen(until);
+    expect(rows[0]!.querySelector('.status')!.textContent).toBe(when.startsWith('明日') ? `${when}まで休み` : `今日は${when}まで休み`);
 
     // the saved key is masked, with キーを消す and no field
     expect(rowFor('gemini').querySelector('.mask')!.textContent).toBe('••••1234');

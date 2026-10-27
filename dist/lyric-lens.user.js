@@ -3430,7 +3430,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         side = spaceBelow >= Math.min(natural, cap) || spaceBelow >= spaceAbove ? "below" : "above";
       }
       const room = side === "below" ? spaceBelow : spaceAbove;
-      s.left = `${clamp(rect.right - width, MARGIN, vw - width - MARGIN)}px`;
+      const left = rect.left + width <= vw - MARGIN ? rect.left : rect.right - width;
+      s.left = `${clamp(left, MARGIN, vw - width - MARGIN)}px`;
       s.maxHeight = `${Math.max(MIN_HEIGHT, Math.min(cap, room))}px`;
       if (side === "below") {
         s.top = `${clamp(rect.bottom + GAP, MARGIN, vh - MIN_HEIGHT - MARGIN)}px`;
@@ -4883,7 +4884,269 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   };
 
   // src/ui/styles.css
-  var styles_default = '/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */\n\n.ll-head, .ll-line, .ll-note {\n  --ll-ink: #4A5260;\n  --ll-ink-repeat: #6B7380;\n  --ll-accent: #B0503A;\n  --ll-label: #6E7581;\n  --ll-note-bg: #F7F3EE;\n  --ll-rule: #D9DCE1;\n  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;\n}\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {\n  --ll-ink: #B8C0CB;\n  --ll-ink-repeat: #8E96A2;\n  --ll-accent: #E3876C;\n  --ll-label: #9AA1AC;\n  --ll-note-bg: #23262B;\n  --ll-rule: #3A3F46;\n}\n/* `slot` (the dotted empty-slot rule) is a separate token from `rule` (hairlines): it has to be seen. */\n.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }\nhtml.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }\nhtml { --ll-hl-bg: rgba(176, 80, 58, .08); }\nhtml.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }\n\n/* Japanese typesetting and link resets on every node we add. */\n.ll-head, .ll-line, .ll-note {\n  font-family: var(--ll-font);\n  font-style: normal;\n  font-weight: 400;\n  text-align: left;\n  text-transform: none;\n  line-break: strict;\n  word-break: normal;\n  word-break: auto-phrase;\n  overflow-wrap: anywhere;\n  font-feature-settings: "palt" 1;\n  letter-spacing: .02em;\n  text-spacing-trim: trim-start;\n  hanging-punctuation: none;\n  background: transparent !important;\n  text-decoration: none !important;\n  cursor: auto;\n  overflow-anchor: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }\n/* Marked data-exclude-from-selection for Genius\' own selection tools, but readers can\n   still copy the Japanese. */\n.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }\n\n/* ---------- head row + preface ---------- */\n.ll-head {\n  display: block;\n  margin: 0 0 22px;\n  padding: 0;\n  color: var(--ll-ink) !important;\n  font-size: 14px;\n  line-height: 1.6;\n}\n/* a quiet ruled-paper edge between the front matter and the lyrics */\n.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }\n.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }\n.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }\n.ll-status[data-tone="muted"] { color: var(--ll-label); }\n/* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */\n.ll-status:focus { outline: none; }\n/* An empty live region stays in the accessibility tree (never `hidden`) so that its next text is\n   announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap\n   and its 14em basis would push the actions to the right edge. */\n.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }\n.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }\n.ll-btn {\n  all: unset;\n  box-sizing: border-box;\n  display: inline-flex;\n  align-items: center;\n  min-height: 28px;\n  color: var(--ll-accent) !important;\n  font: 600 14px/1.3 var(--ll-font);\n  letter-spacing: .02em;\n  cursor: pointer;\n  white-space: nowrap;\n}\n/* Hover only where a pointer can hover: on touch the underline would stick to the last tapped button. */\n@media (hover: hover) { .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n.ll-btn[data-primary] { font-size: 15px; }\n.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }\n/* Pressed feedback on touch (the tap highlight is off), instant: no transition. */\n.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }\n.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {\n  outline: 2px solid var(--ll-accent);\n  outline-offset: 2px;\n  border-radius: 3px;\n}\n/* Keep keyboard-focused controls clear of Genius\' sticky nav. Not on .ll-mark: app.ts focuses it\n   without preventScroll and a margin would make the page jump after anchoring. */\n.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }\n.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }\n.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }\n.ll-head-note[data-tone="reason"] { font-size: 13px; color: var(--ll-ink); }\n.ll-preface-rows { display: block; flex: 1; min-width: 0; }\n\n.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }\n.ll-preface-toggle {\n  all: unset;\n  box-sizing: border-box;\n  position: relative;\n  flex: none;\n  padding: 0 4px;\n  color: var(--ll-label) !important;\n  font-size: 12px;\n  line-height: 1.8;\n  cursor: pointer;\n}\n.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }\n.ll-preface-row[hidden] { display: none; }\n.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }\n.ll-preface-who { font-weight: 600; }\n.ll-preface-what { margin-top: 2px; }\n\n/* ---------- lines on ruled paper ---------- */\n.ll-line {\n  display: block;\n  position: relative;\n  margin: 0;\n  padding: 2px 0 12px;\n  min-height: 1.6em;\n  color: var(--ll-ink) !important;\n  font-size: .84em;\n  line-height: 1.6;\n}\nhtml.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }\n.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }\n.ll-ja { color: inherit !important; }\n.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }\n\n.ll-line[data-state="empty"] .ll-ja,\n.ll-line[data-state="next"] .ll-ja {\n  display: block;\n  width: min(60%, 320px);\n  height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;\n}\n/* the red pen\'s frontier: the slot being written now is drawn in the accent ink */\n.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }\n.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }\n.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }\n@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }\n@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }\n\n.ll-mark {\n  all: unset;\n  box-sizing: content-box;\n  position: relative;\n  display: inline-block;\n  margin-left: .25em;\n  padding: 0 .15em;\n  color: var(--ll-accent) !important;\n  font: 600 1em/1 var(--ll-font);\n  vertical-align: baseline;\n  cursor: pointer;\n  -webkit-user-select: none;\n  user-select: none;\n}\n/* 44×44 hit area without moving the text. */\n.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }\n.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }\n.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }\n\n/* The seam: the first empty slot after an interruption says what happened, right there. */\n.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }\n/* keep the empty slot visible: the line is still untranslated; the sentence below says why */\n.ll-line[data-state="seam"]::before {\n  content: ""; display: block; width: min(60%, 320px); height: 1.6em;\n  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;\n}\n.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }\n.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }\n/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */\n.ll-adlib { color: var(--ll-label) !important; }\n\n/* ---------- notes ---------- */\n.ll-note {\n  display: grid;\n  grid-template-rows: 1fr;\n  margin: 2px 0 16px;\n  padding: 8px 12px;\n  border-left: 2px solid var(--ll-accent);\n  background: var(--ll-note-bg) !important;\n  color: var(--ll-ink) !important;\n  font-size: .78em;\n  line-height: 1.7;\n}\n/* an open note hangs from its own line: 6px under it, 16px before the next lyric */\n.ll-line:has(+ .ll-note) { padding-bottom: 4px; }\n/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */\n.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }\n@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }\n.ll-note-body { overflow: hidden; min-height: 0; }\n.ll-note-item + .ll-note-item { margin-top: 10px; }\n.ll-note-head { display: flex; align-items: center; gap: 8px; }\n.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }\n.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }\n.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }\n.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }\n.ll-note-text { display: block; margin-top: 2px; }\n.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }\n.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }\n.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }\n.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }\n.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }\n@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }\n\n::highlight(ll-phrase) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n  background-color: var(--ll-hl-bg);\n}\n::highlight(ll-phrase-peek) {\n  text-decoration: underline 1.5px;\n  text-decoration-color: #B0503A;\n  text-underline-offset: 3px;\n}\nhtml.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }\n\n@media (max-width: 599px) {\n  .ll-line { font-size: .875em; padding-bottom: 10px; }\n  /* 13px on Genius\' 16px phone lyrics */\n  .ll-note { font-size: .8125em; }\n  .ll-head-row { flex-direction: column; align-items: stretch; }\n  /* In a column the flex-basis would become a height. */\n  .ll-status { flex: none; }\n  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */\n  .ll-actions { justify-content: flex-start; margin-left: 0; }\n  .ll-btn, .ll-gn-toggle { min-height: 44px; }\n  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }\n  .ll-note[data-enter] { animation: none; }\n  .ll-line[data-ink] .ll-ja { animation: none; }\n}\n';
+  var styles_default = `/* Lyric Lens — ruled paper (docs/DESIGN.md §6). Everything we add is ink in the lyric column. */
+
+.ll-head, .ll-line, .ll-note {
+  --ll-ink: #4A5260;
+  --ll-ink-repeat: #6B7380;
+  --ll-accent: #B0503A;
+  --ll-label: #6E7581;
+  --ll-note-bg: #F7F3EE;
+  --ll-rule: #D9DCE1;
+  --ll-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+}
+html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
+  --ll-ink: #B8C0CB;
+  --ll-ink-repeat: #8E96A2;
+  --ll-accent: #E3876C;
+  --ll-label: #9AA1AC;
+  --ll-note-bg: #23262B;
+  --ll-rule: #3A3F46;
+}
+/* \`slot\` (the dotted empty-slot rule) is a separate token from \`rule\` (hairlines): it has to be seen. */
+.ll-head, .ll-line, .ll-note { --ll-slot: #A7ADB6; }
+html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note { --ll-slot: #5A616B; }
+html { --ll-hl-bg: rgba(176, 80, 58, .08); }
+html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
+
+/* Japanese typesetting and link resets on every node we add. */
+.ll-head, .ll-line, .ll-note {
+  font-family: var(--ll-font);
+  font-style: normal;
+  font-weight: 400;
+  text-align: left;
+  text-transform: none;
+  line-break: strict;
+  word-break: normal;
+  word-break: auto-phrase;
+  overflow-wrap: anywhere;
+  font-feature-settings: "palt" 1;
+  letter-spacing: .02em;
+  text-spacing-trim: trim-start;
+  hanging-punctuation: none;
+  background: transparent !important;
+  text-decoration: none !important;
+  cursor: auto;
+  overflow-anchor: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
+/* Marked data-exclude-from-selection for Genius' own selection tools, but readers can
+   still copy the Japanese. */
+.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
+
+/* ---------- head row + preface ---------- */
+.ll-head {
+  display: block;
+  margin: 0 0 22px;
+  padding: 0;
+  color: var(--ll-ink) !important;
+  font-size: 14px;
+  line-height: 1.6;
+}
+/* a quiet ruled-paper edge between the front matter and the lyrics */
+.ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }
+.ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
+/* The actions follow the sentence they answer instead of drifting to the far edge. */
+.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-ink); }
+.ll-status[data-tone="muted"] { color: var(--ll-label); }
+/* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
+.ll-status:focus { outline: none; }
+/* An empty live region stays in the accessibility tree (never \`hidden\`) so that its next text is
+   announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap
+   and its 14em basis would push the actions to the right edge. */
+.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }
+.ll-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.ll-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--ll-accent) !important;
+  font: 600 14px/1.3 var(--ll-font);
+  letter-spacing: .02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* Hover only where a pointer can hover: on touch the underline would stick to the last tapped button. */
+@media (hover: hover) { .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; } }
+/* The one next step (日本語で読む, 続きを訳す, キーを設定): a quiet hairline pill, so it reads as
+   something to press without shouting over the lyrics. Everything else stays plain text. */
+.ll-btn[data-primary] {
+  padding: 0 14px;
+  min-height: 30px;
+  border: 1px solid var(--ll-accent);
+  border-radius: 999px;
+}
+@media (hover: hover) { .ll-btn[data-primary]:not(:disabled):hover { text-decoration: none !important; background: var(--ll-hl-bg) !important; } }
+.ll-btn[data-primary]:disabled, .ll-btn[data-primary][aria-disabled="true"] { border-color: var(--ll-rule); }
+.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
+/* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
+.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }
+.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {
+  outline: 2px solid var(--ll-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+/* Keep keyboard-focused controls clear of Genius' sticky nav. Not on .ll-mark: app.ts focuses it
+   without preventScroll and a margin would make the page jump after anchoring. */
+.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
+.ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
+.ll-head-note[data-tone="reason"] { font-size: 13px; color: var(--ll-ink); }
+.ll-preface-rows { display: block; flex: 1; min-width: 0; }
+
+.ll-preface { display: flex; align-items: flex-start; gap: 8px; max-width: 38em; margin-top: 8px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
+.ll-preface-toggle {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  flex: none;
+  padding: 0 4px;
+  color: var(--ll-label) !important;
+  font-size: 12px;
+  line-height: 1.8;
+  cursor: pointer;
+}
+.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+.ll-preface-row { display: flex; gap: 10px; align-items: baseline; }
+.ll-preface-row[hidden] { display: none; }
+.ll-preface-label { flex: none; min-width: 4.2em; color: var(--ll-label); font-size: 12px; font-weight: 400; letter-spacing: .06em; }
+.ll-preface-who { font-weight: 600; }
+.ll-preface-what { margin-top: 2px; }
+
+/* ---------- lines on ruled paper ---------- */
+.ll-line {
+  display: block;
+  position: relative;
+  margin: 0;
+  padding: 2px 0 12px;
+  min-height: 1.6em;
+  color: var(--ll-ink) !important;
+  font-size: .84em;
+  line-height: 1.6;
+}
+html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
+.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }
+.ll-ja { color: inherit !important; }
+.ll-repeat { color: var(--ll-label); margin-left: .3em; font-size: .9em; }
+
+.ll-line[data-state="empty"] .ll-ja,
+.ll-line[data-state="next"] .ll-ja {
+  display: block;
+  width: min(60%, 320px);
+  height: 1.6em;
+  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x !important;
+}
+/* the red pen's frontier: the slot being written now is drawn in the accent ink */
+.ll-line[data-state="next"] .ll-ja { --ll-slot: var(--ll-accent); animation: ll-breathe 2.4s ease-in-out infinite; }
+.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }
+.ll-line[data-ink] .ll-ja { animation: ll-ink .2s ease-out; }
+@keyframes ll-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }
+
+.ll-mark {
+  all: unset;
+  box-sizing: content-box;
+  position: relative;
+  display: inline-block;
+  margin-left: .25em;
+  padding: 0 .15em;
+  color: var(--ll-accent) !important;
+  font: 600 1em/1 var(--ll-font);
+  vertical-align: baseline;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 44×44 hit area without moving the text. */
+.ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }
+.ll-mark[aria-expanded="true"] { text-decoration: underline !important; text-underline-offset: 3px; }
+
+/* The seam: the first empty slot after an interruption says what happened, right there. */
+.ll-line[data-state="seam"] { padding-top: 0; padding-bottom: 16px; }
+/* keep the empty slot visible: the line is still untranslated; the sentence below says why */
+.ll-line[data-state="seam"]::before {
+  content: ""; display: block; width: min(60%, 320px); height: 1.6em;
+  background: linear-gradient(to right, var(--ll-slot) 2px, transparent 2px) 0 calc(100% - 4px) / 6px 1px repeat-x;
+}
+.ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }
+.ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }
+/* The seam's button is the same next step as the head's primary one: the same hairline pill. */
+.ll-seam .ll-btn { padding: 0 12px; min-height: 26px; border: 1px solid var(--ll-accent); border-radius: 999px; font-size: 13px; }
+.ll-seam .ll-btn:disabled { border-color: var(--ll-rule); }
+@media (hover: hover) { .ll-seam .ll-btn:not(:disabled):hover { text-decoration: none !important; background: var(--ll-hl-bg) !important; } }
+/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */
+.ll-adlib { color: var(--ll-label) !important; }
+
+/* ---------- notes ---------- */
+.ll-note {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin: 2px 0 16px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--ll-accent);
+  background: var(--ll-note-bg) !important;
+  color: var(--ll-ink) !important;
+  font-size: .78em;
+  line-height: 1.7;
+}
+/* an open note hangs from its own line: 6px under it, 16px before the next lyric */
+.ll-line:has(+ .ll-note) { padding-bottom: 4px; }
+/* user-initiated open only (notes.ts sets data-enter briefly): 160 ms height, 0fr to 1fr */
+.ll-note[data-enter] { animation: ll-note-open .16s ease-out; }
+@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
+.ll-note-body { overflow: hidden; min-height: 0; }
+.ll-note-item + .ll-note-item { margin-top: 10px; }
+.ll-note-head { display: flex; align-items: center; gap: 8px; }
+.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.ll-note-conj { color: var(--ll-label); font-size: 11px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 1.5; }
+.ll-note-phrase { display: block; margin-top: 2px; font-family: inherit; font-style: italic; color: var(--ll-ink); font-size: .95em; }
+.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
+.ll-note-text { display: block; margin-top: 2px; }
+.ll-note-src { display: block; margin-top: 4px; color: var(--ll-label); font-size: 11px; }
+.ll-gn { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ll-rule); }
+.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; }
+.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
+.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; margin-left: 2px; padding: 10px 4px; }
+@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { text-decoration: underline !important; text-underline-offset: 3px; } }
+
+::highlight(ll-phrase) {
+  text-decoration: underline 1.5px;
+  text-decoration-color: #B0503A;
+  text-underline-offset: 3px;
+  background-color: var(--ll-hl-bg);
+}
+::highlight(ll-phrase-peek) {
+  text-decoration: underline 1.5px;
+  text-decoration-color: #B0503A;
+  text-underline-offset: 3px;
+}
+html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #E3876C; }
+
+@media (max-width: 599px) {
+  .ll-line { font-size: .875em; padding-bottom: 10px; }
+  /* 13px on Genius' 16px phone lyrics */
+  .ll-note { font-size: .8125em; }
+  .ll-head-row { flex-direction: column; align-items: stretch; }
+  /* In a column the flex-basis would become a height. */
+  .ll-status { flex: none; }
+  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */
+  .ll-actions { justify-content: flex-start; }
+  .ll-btn, .ll-gn-toggle { min-height: 44px; }
+  .ll-btn[data-primary] { min-height: 40px; padding: 0 18px; margin-block: 2px; }
+  /* Genius' phone header (nav + ad slot) is sticky and about 125px tall. */
+  .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 140px; }
+  .ll-seam .ll-btn { width: 100%; justify-content: center; min-height: 44px; font-size: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ll-line[data-state="next"] .ll-ja { animation: none; opacity: .6; }
+  .ll-note[data-enter] { animation: none; }
+  .ll-line[data-ink] .ll-ja { animation: none; }
+}
+`;
 
   // src/main.ts
   function registerMenu(label, fn) {
