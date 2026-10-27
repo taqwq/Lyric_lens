@@ -76,6 +76,13 @@ describe('SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).not.toMatch(/(?:hold up|bitch|homie)[^。]*音のままのカタカナ/);
   });
 
+  it('keeps slurs and address terms as strong as the original, adds no age, and tells different words apart', () => {
+    expect(SYSTEM_PROMPT).toContain('罵倒語・呼びかけ語（bitch／ho／girl など）は原文と同じ強さで訳し、「女」「奴」「なあ」のような中立の語に薄めない。');
+    expect(SYSTEM_PROMPT).toContain('lil\' を「ガキ」「小僧」のような年齢の語にしない（「ちっぽけな」程度か、訳さない）。');
+    expect(SYSTEM_PROMPT).toContain('英語の語が違えば訳語も分け（bitch と ho を同じにしない）、motifs と訳文で同じ訳語を使う。');
+    expect(SYSTEM_PROMPT).not.toContain('罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。');
+  });
+
   it('limits the preface to one short who and a plain, short what', () => {
     expect(SYSTEM_PROMPT).toContain('「誰が誰に」の1文（40字以内。括弧書きやMV・経歴の情報は書かない）');
     expect(SYSTEM_PROMPT).toContain('歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）');
