@@ -55,6 +55,8 @@ function cooldownFor(error: LLMError): number {
     case 'overloaded': return now + 2 * 60_000;
     // A model that never answered would hang the next tap for as long again; bench it longer than a 503.
     case 'timeout': return now + 5 * 60_000;
+    // It answered, but nothing usable: the same prompt is likely to break it again soon.
+    case 'unusable': return now + 10 * 60_000;
     case 'not-found': return now + 3 * 24 * 60 * 60_000;
     default: return 0;
   }
@@ -267,7 +269,7 @@ export interface ChainOptions {
 
 // Transient failures outrank quota: if any model was merely busy, trying again soon can work,
 // so the reader must not be told to wait until tomorrow.
-const PRIORITY: LLMErrorKind[] = ['auth', 'rate', 'overloaded', 'blocked', 'timeout', 'network', 'quota', 'bad-request', 'not-found', 'empty', 'unknown'];
+const PRIORITY: LLMErrorKind[] = ['auth', 'rate', 'overloaded', 'blocked', 'timeout', 'network', 'quota', 'bad-request', 'not-found', 'empty', 'unusable', 'unknown'];
 /** When every model is merely busy, wait and go around again before giving up. */
 const BUSY_PASS_WAITS_MS = [10_000, 25_000];
 
@@ -305,7 +307,7 @@ export async function generateWithFallback(
   const provider = new GeminiProvider(apiKey);
 
   const remember = async (model: string, error: LLMError) => {
-    if (error.kind === 'overloaded' || error.kind === 'timeout') await noteHealth(apiKey, model, 'bad');
+    if (error.kind === 'overloaded' || error.kind === 'timeout' || error.kind === 'unusable') await noteHealth(apiKey, model, 'bad');
     const until = cooldownFor(error);
     if (!until) return;
     cooldowns[cooldownId(apiKey, model)] = { until, reason: error.kind };
@@ -397,6 +399,8 @@ export async function generateWithFallback(
               if (useful === undefined || useful) produced = true;
             },
           });
+          // HTTP 200 is not success: a reply the consumer accepted no line from counts as a failure.
+          if (!produced) throw new LLMError('unusable', 'Gemini の返事から訳を読み取れませんでした。', { status: 200, detail: result.text.slice(0, 2000) });
           // A model that answered is no longer benched: write that back, or the next tap
           // (often 続きを訳す within minutes) would still try it last or skip it.
           const id = cooldownId(apiKey, model);

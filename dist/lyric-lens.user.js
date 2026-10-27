@@ -612,6 +612,9 @@ ${req.user}` : req.user }] }],
       // A model that never answered would hang the next tap for as long again; bench it longer than a 503.
       case "timeout":
         return now + 5 * 6e4;
+      // It answered, but nothing usable: the same prompt is likely to break it again soon.
+      case "unusable":
+        return now + 10 * 6e4;
       case "not-found":
         return now + 3 * 24 * 60 * 6e4;
       default:
@@ -747,7 +750,7 @@ ${req.user}` : req.user }] }],
     } catch {
     }
   }
-  var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unknown"];
+  var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unusable", "unknown"];
   var BUSY_PASS_WAITS_MS = [1e4, 25e3];
   function pickReportedError(errors) {
     return errors.slice().sort((a, b) => PRIORITY.indexOf(a.kind) - PRIORITY.indexOf(b.kind))[0] ?? new LLMError("auth", "APIキーが設定されていません。");
@@ -782,7 +785,7 @@ ${req.user}` : req.user }] }],
     const busyNow = /* @__PURE__ */ new Set();
     const provider = new GeminiProvider(apiKey);
     const remember = async (model, error) => {
-      if (error.kind === "overloaded" || error.kind === "timeout") await noteHealth(apiKey, model, "bad");
+      if (error.kind === "overloaded" || error.kind === "timeout" || error.kind === "unusable") await noteHealth(apiKey, model, "bad");
       const until = cooldownFor(error);
       if (!until) return;
       cooldowns[cooldownId(apiKey, model)] = { until, reason: error.kind };
@@ -865,6 +868,7 @@ ${req.user}` : req.user }] }],
                 if (useful === void 0 || useful) produced = true;
               }
             });
+            if (!produced) throw new LLMError("unusable", "Gemini の返事から訳を読み取れませんでした。", { status: 200, detail: result.text.slice(0, 2e3) });
             const id = cooldownId(apiKey, model);
             if (cooldowns[id]) {
               delete cooldowns[id];

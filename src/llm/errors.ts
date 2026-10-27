@@ -11,6 +11,7 @@ export type LLMErrorKind =
   | 'timeout'
   | 'aborted'
   | 'empty'
+  | 'unusable' // answered 200, but nothing in it was accepted as a line
   | 'unknown';
 
 export class LLMError extends Error {

@@ -658,6 +658,33 @@ describe('generateWithFallback: auth', () => {
   });
 });
 
+describe('generateWithFallback: a 200 that produced no accepted line', () => {
+  it('counts it as a failure, benches the model for 10 minutes and moves to the next one', async () => {
+    reply(A, ok('this is not jsonl\n'));
+    reply(B, ok('{"ok":1}\n'));
+    const run = start(gemini(), undefined, (chunks) => chunks.join('').includes('{"ok"'));
+    const result = await run.promise;
+
+    expect(generated).toEqual([A, B]);
+    expect(result.model).toBe(B);
+    const cd = (await readCooldowns())[cooldownKey(A)];
+    expect(cd?.reason).toBe('unusable');
+    expect(cd!.until - Date.now()).toBeGreaterThan(9 * 60_000);
+    expect(cd!.until - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+    const health = await getJSON<Record<string, { ok?: number; bad?: number }>>('ll3:health', {});
+    expect(health[cooldownKey(A)]?.bad).toBeGreaterThan(0);
+    expect(health[cooldownKey(A)]?.ok).toBeUndefined();
+  });
+
+  it('reports unusable when no model produced a line', async () => {
+    reply(A, ok('junk'));
+    reply(B, ok('junk'));
+    reply(C, ok('junk'));
+    const { error } = await settle(start(gemini(), undefined, () => false));
+    expect(error?.kind).toBe('unusable');
+  });
+});
+
 describe('generateWithFallback: partial output', () => {
   it('returns the result with `error` set when the stream breaks after some text, without trying other models', async () => {
     reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'ネットワークに接続できませんでした。') });
@@ -701,7 +728,7 @@ describe('generateWithFallback: partial output', () => {
   it('falls through to the next model when onText said false for everything before the error', async () => {
     reply(A, { partial: textEvent('{"t":"song"}\n') + textEvent('{"t":"song"}\n'), throws: new LLMError('overloaded', 'busy') });
     reply(B, ok('L1: あ\n'));
-    const run = start(gemini(), undefined, () => false);
+    const run = start(gemini(), undefined, (chunks) => chunks[chunks.length - 1]!.startsWith('L1'));
     const result = await run.promise;
     expect(generated).toEqual([A, B]);
     expect(result.model).toBe(B);
@@ -719,13 +746,6 @@ describe('generateWithFallback: partial output', () => {
     const result = await run.promise;
     expect(result.error?.kind).toBe('overloaded');
     expect(generated).toEqual([A]);
-  });
-
-  it('a "not yet useful" attempt that ends cleanly is still a success', async () => {
-    reply(A, ok('L1: あ\n'));
-    const result = await start(gemini(), undefined, () => false).promise;
-    expect(result.model).toBe(A);
-    expect(result.error).toBeUndefined();
   });
 
   it('gives up with the error when the models keep failing before anything useful', async () => {
