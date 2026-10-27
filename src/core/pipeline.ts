@@ -102,7 +102,7 @@ const GENERIC = new Set(['意味', '表現', '言葉', '俗語', '隠語', '略�
 function definedTerms(sentence: string): string[] {
   const body = sentence.replace(DEFINITION_TAIL, '');
   const meaning = body.split(/[＝=]/).pop()!.replace(/^[^は]{1,24}は/, '');
-  return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A0-\u30FF]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
+  return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A1-\u30FA\u30FC]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
 }
 
 /** A slang/idiom note whose first sentence only defines the word repeats the translation
