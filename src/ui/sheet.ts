@@ -341,7 +341,8 @@ function mount(options: OpenSheetOptions): Active {
 
     const vw = document.documentElement.clientWidth || window.innerWidth;
     const vh = window.innerHeight;
-    const width = Math.min(400, vw - 2 * MARGIN);
+    // The panel's width in sheet.css; the right edge must meet 設定's.
+    const width = Math.min(360, vw - 2 * MARGIN);
     const cap = vh * 0.7;
     const spaceBelow = vh - rect.bottom - GAP - MARGIN;
     const spaceAbove = rect.top - GAP - MARGIN;
