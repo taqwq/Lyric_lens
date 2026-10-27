@@ -41,19 +41,19 @@ export interface OpenSheetOptions {
 
 const COPY = {
   firstTitle: '日本語訳をはじめる',
-  step1: 'Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります',
-  step1Link: 'Google AI Studio を開く',
+  step1: 'Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります',
+  step1Link: 'Google AI Studioを開く',
   step2: 'キーをコピーして、下に貼り付けます',
   placeholder: 'ここに貼り付け',
   pasteKey: 'キーを貼り付けてください',
-  keyNote: 'キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません',
+  keyNote: 'キーはこのブラウザにだけ保存され、Google以外には送られません',
   primary: '保存してこの曲を訳す',
   secondary: '保存だけする',
   checking: '確かめています…',
   badKey: 'このキーは使えませんでした。コピーし直してください',
   network: '確かめられませんでした。接続を確認してください',
-  busyCheck: 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ',
-  settingsTitle: 'Lyric Lens の設定',
+  busyCheck: 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ',
+  settingsTitle: 'Lyric Lensの設定',
   close: '閉じる',
   services: '翻訳に使うAI',
   save: '保存',
@@ -77,7 +77,7 @@ const COPY = {
   importData: '読み込む',
   exportFailed: '書き出せませんでした',
   importNothing: '新しく読み込める曲はありませんでした',
-  importFailed: '読み込めませんでした。Lyric Lens で書き出したファイルを選んでください',
+  importFailed: '読み込めませんでした。Lyric Lensで書き出したファイルを選んでください',
   deleteAll: 'すべて消す',
   ok: '消す',
   cancel: 'やめる',
@@ -130,6 +130,21 @@ function formatSize(bytes: number): string {
   if (kb < 1) return '1 KB';
   if (kb < 1023.5) return `${Math.round(kb)} KB`;
   return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+/** A model id as a reader says it: gemini-3.5-flash-lite → "Gemini 3.5 Flash-Lite", gemma-4-31b-it
+ *  → "Gemma 4 31B IT". An id that is not a Gemini or Gemma version stays as it is. */
+export function modelLabel(id: string): string {
+  const m = /^(gemini|gemma)-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(id);
+  if (!m) return id;
+  const words: string[] = [];
+  for (const part of m[3]!.split('-').filter(Boolean)) {
+    if (part === 'lite' && words.length) words[words.length - 1] += '-Lite';
+    else if (part === 'it') words.push('IT');
+    else if (/^\d+(?:\.\d+)?[bm]$/.test(part)) words.push(part.toUpperCase());
+    else words.push(part.charAt(0).toUpperCase() + part.slice(1));
+  }
+  return [m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1), m[2]!, ...words].join(' ');
 }
 
 /** ••••abcd. A short key shows no tail at all. */
@@ -340,10 +355,9 @@ function mount(options: OpenSheetOptions): Active {
       side = spaceBelow >= Math.min(natural, cap) || spaceBelow >= spaceAbove ? 'below' : 'above';
     }
     const room = side === 'below' ? spaceBelow : spaceAbove;
-    // Hang from the button's left edge when there is room (設定 sits at the start of the lyrics
-    // column), from its right edge otherwise (the userscript menu, a button near the right).
-    const left = rect.left + width <= vw - MARGIN ? rect.left : rect.right - width;
-    s.left = `${clamp(left, MARGIN, vw - width - MARGIN)}px`;
+    // 設定 is the rightmost link of the head row: the panel hangs from the button's right edge
+    // and opens leftwards over the lyrics column (kept inside the viewport on a narrow window).
+    s.left = `${clamp(rect.right - width, MARGIN, vw - width - MARGIN)}px`;
     s.maxHeight = `${Math.max(MIN_HEIGHT, Math.min(cap, room))}px`;
     if (side === 'below') {
       s.top = `${clamp(rect.bottom + GAP, MARGIN, vh - MIN_HEIGHT - MARGIN)}px`;
@@ -694,7 +708,7 @@ function mount(options: OpenSheetOptions): Active {
       const song = options.song;
       const parts: string[] = [];
       if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(`${formatDate(song.translatedAt)}に`);
-      if (song.model) parts.push(`${song.model}で`);
+      if (song.model) parts.push(`${modelLabel(song.model)}で`);
       const zone = h('div', { class: 'zone' });
       const retranslate: HTMLButtonElement = button(COPY.retranslate, 'outline', () => {
         askInline(zone, retranslate, {
@@ -870,9 +884,9 @@ function mount(options: OpenSheetOptions): Active {
     paintSummary();
     body.append(h('section', { class: 'section' },
       h('h3', { class: 'section-title' }, COPY.data),
-      h('p', { class: 'section-lead' }, COPY.dataLead),
       summaryEl,
       zone,
+      h('p', { class: 'section-lead' }, COPY.dataLead),
       dataMsg,
       fileInput));
     void refreshSummary();

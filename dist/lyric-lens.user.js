@@ -2271,13 +2271,31 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var isStop = (id) => id === "stop" || id === "stopMirror";
   var STOP_GRACE_MS = 600;
   var SETTLE_MS = 600;
+  var SLOTS = [
+    { slot: "stop", label: "止める", takes: (id) => id === "stop" || id === "stopMirror" || id === "stopOther" },
+    { slot: "hide", label: "訳を隠す", takes: (id) => id === "hide" },
+    { slot: "settings", label: "設定", takes: (id) => id === "settings" }
+  ];
+  function entriesOf(actions) {
+    const out = actions.filter((a) => a.primary).map((action, i) => ({ slot: `p${i}`, label: action.label, action }));
+    const links = actions.filter((a) => !a.primary);
+    if (!links.length) return out;
+    const placed = /* @__PURE__ */ new Set();
+    for (const s of SLOTS) {
+      const action = links.find((a) => !placed.has(a) && s.takes(a.id)) ?? null;
+      if (action) placed.add(action);
+      out.push({ slot: s.slot, label: action?.label ?? s.label, action });
+    }
+    links.filter((a) => !placed.has(a)).forEach((action, i) => out.push({ slot: `x${i}`, label: action.label, action }));
+    return out;
+  }
+  var LIVE_BUTTON = ".ll-head-row .ll-btn:not([data-absent])";
   var HeadRow = class {
     constructor() {
       __publicField(this, "el", null);
       __publicField(this, "sig", "");
-      /** Action ids of the last render, and since when a stop action has been on screen
-       *  (null when none is): the guard follows the presence of 止める, not each rebuilt button. */
-      __publicField(this, "prevIds", []);
+      /** Since when a stop action has been on screen (null when none is): the guard follows the
+       *  presence of 止める, not each rebuilt button. */
       __publicField(this, "stopSince", null);
       /** The live region outlives every rebuild of the row: a region inserted already holding its
        *  text is not announced, one whose text changes in place is. */
@@ -2297,26 +2315,22 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
       const p = view.progress;
       const progressKind = p === "indeterminate" ? "i" : p ? `v${p.max}` : "";
-      const sig = JSON.stringify([view.status, view.tone, Boolean(view.count), progressKind, view.captions.map((c) => [c.text, c.tone]), view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+      const entries = entriesOf(view.actions);
+      const sig = JSON.stringify([view.status, view.tone, Boolean(view.count), progressKind, view.captions.map((c) => [c.text, c.tone]), entries.map((e) => [e.slot, e.action && [e.action.id, e.action.label, e.action.disabled]]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
       if (view.state) this.el.dataset.llState = view.state;
-      const ids = view.actions.map((a) => a.id ?? "");
-      const prevIds = this.prevIds;
-      const hadStop = prevIds.some(isStop);
-      this.stopSince = ids.some(isStop) ? hadStop && this.stopSince !== null ? this.stopSince : performance.now() : null;
-      this.prevIds = ids;
+      const hadStop = this.stopSince !== null;
+      const stopNow = entries.some((e) => e.action && isStop(e.action.id));
+      this.stopSince = stopNow ? hadStop ? this.stopSince : performance.now() : null;
       if (sig !== this.sig) {
         const focus = this.focusedSlot();
         this.sig = sig;
-        this.el.replaceChildren(...this.content(view));
-        if (focus) {
-          const landsOnStop = focus.kind === "action" && isStop(ids[focus.index]) && !isStop(prevIds[focus.index]);
-          if (landsOnStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
-          else this.restoreFocus(focus);
-        }
+        this.el.replaceChildren(...this.content(view, entries));
+        if (focus) this.restoreFocus(focus, entries, hadStop);
       } else {
-        this.el.querySelectorAll(".ll-head-row .ll-btn").forEach((b, i) => {
-          b.disabled = Boolean(view.actions[i]?.disabled);
-        });
+        for (const e of entries) {
+          const b = e.action ? this.el.querySelector(`.ll-head-row .ll-btn[data-slot="${e.slot}"]`) : null;
+          if (b && e.action) b.disabled = Boolean(e.action.disabled);
+        }
       }
       this.updateMeter(view);
       if (view.settle && this.settleTimer === null) this.startSettle();
@@ -2326,13 +2340,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     /** Puts keyboard focus on the first control (used when a line control vanished). */
     focusFirst() {
-      this.el?.querySelector(".ll-head-row .ll-btn:not(:disabled), .ll-preface-more")?.focus({ preventScroll: true });
+      this.el?.querySelector(`${LIVE_BUTTON}:not(:disabled), .ll-preface-more`)?.focus({ preventScroll: true });
     }
     clear() {
       this.el?.remove();
       this.el = null;
       this.sig = "";
-      this.prevIds = [];
       this.stopSince = null;
       this.statusEl = null;
       if (this.settleTimer !== null) clearTimeout(this.settleTimer);
@@ -2363,15 +2376,23 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const active2 = document.activeElement;
       if (!this.el || !active2 || !this.el.contains(active2)) return null;
       if (active2.classList.contains("ll-preface-more")) return { kind: "preface" };
-      const buttons = Array.from(this.el.querySelectorAll(".ll-head-row .ll-btn"));
-      const index = buttons.indexOf(active2);
-      return index >= 0 ? { kind: "action", index } : null;
+      const slot = active2.matches(".ll-head-row .ll-btn") ? active2.dataset.slot : void 0;
+      return slot ? { kind: "action", slot } : null;
     }
-    restoreFocus(slot) {
+    /** Focus goes back to the same control, found by its slot. If that control is gone the first
+     *  one left takes it, except a 止める that has just taken the place of the button pressed: a
+     *  second tap or a repeating key must not land on it, so the status line holds focus then. */
+    restoreFocus(focus, entries, hadStop) {
       const el = this.el;
       if (!el) return;
-      const target = slot.kind === "preface" ? el.querySelector(".ll-preface-more") : el.querySelectorAll(".ll-head-row .ll-btn")[slot.index] ?? null;
-      (target ?? el.querySelector(".ll-head-row .ll-btn"))?.focus({ preventScroll: true });
+      const same = focus.kind === "preface" ? el.querySelector(".ll-preface-more") : el.querySelector(`${LIVE_BUTTON}[data-slot="${focus.slot}"]`);
+      if (same) {
+        same.focus({ preventScroll: true });
+        return;
+      }
+      const next = entries.find((e) => e.action)?.action;
+      if (next && isStop(next.id) && !hadStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
+      else el.querySelector(LIVE_BUTTON)?.focus({ preventScroll: true });
     }
     /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
      *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
@@ -2382,11 +2403,24 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       else el.dataset.empty = "1";
       return el;
     }
-    content(view) {
-      const button = (a) => {
+    content(view, entries) {
+      const button = ({ slot, label, action: a }) => {
+        if (!a) {
+          return h("button", {
+            class: "ll-btn",
+            type: "button",
+            "data-slot": slot,
+            "data-absent": "",
+            inert: true,
+            "aria-hidden": "true",
+            tabindex: "-1",
+            style: "visibility: hidden"
+          }, label);
+        }
         const b = h("button", {
           class: "ll-btn",
           type: "button",
+          "data-slot": slot,
           disabled: Boolean(a.disabled),
           "data-primary": a.primary ? "" : null,
           onclick: (e) => {
@@ -2396,11 +2430,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             if (a.primary) b.disabled = true;
             a.onClick(b);
           }
-        }, a.label);
+        }, label);
         return b;
       };
-      const primary = view.actions.filter((a) => a.primary).map(button);
-      const links = view.actions.filter((a) => !a.primary).map(button);
+      const primary = entries.filter((e) => e.action?.primary).map(button);
+      const links = entries.filter((e) => !e.action?.primary).map(button);
       const p = view.progress;
       const row = h(
         "div",
@@ -2464,10 +2498,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     constructor() {
       __publicField(this, "nodes", /* @__PURE__ */ new Map());
       __publicField(this, "sigs", /* @__PURE__ */ new Map());
+      /** The seam's own node (it belongs to no line), what it shows, and the line whose anchor it follows. */
+      __publicField(this, "seam", null);
+      __publicField(this, "seamSig", "");
+      __publicField(this, "seamAfter", -1);
       __publicField(this, "page", null);
     }
     nodeFor(index) {
       return this.nodes.get(index);
+    }
+    /** The stop point's node while one is shown (it belongs to no line). */
+    seamNode() {
+      return this.seam;
     }
     render(input) {
       const { page, record } = input;
@@ -2486,13 +2528,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       });
       let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
       if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
+      const stopAt = input.seam && frontier >= 0 ? frontier : -1;
       page.source.lines.forEach((line, i) => {
         const anchor = page.anchors[i];
         const result = record?.lines[line.key];
         let state = null;
-        if (result?.ja) state = "filled";
-        else if (input.seam && i === frontier) state = "seam";
-        else if (input.seam && frontier >= 0 && i > frontier) state = null;
+        if (stopAt >= 0 && i >= stopAt) state = null;
+        else if (result?.ja) state = "filled";
         else if (input.gaps) state = "gap";
         else if (input.slots) state = i < frontier && lastFilled > i ? "gap" : input.breathing && i === frontier ? "next" : "empty";
         const current = this.nodes.get(i);
@@ -2512,8 +2554,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           repeat,
           notes.length,
           notes[0]?.phrase ?? "",
-          notes.map((n) => n.kind).join(","),
-          state === "seam" ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ""
+          notes.map((n) => n.kind).join(",")
         ].join("");
         let el = current;
         if (!el) {
@@ -2546,39 +2587,70 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           this.sigs.set(i, sig);
         }
         el.querySelector(".ll-mark")?.setAttribute("aria-expanded", String(open));
-        const seamButton = state === "seam" ? el.querySelector(".ll-seam .ll-btn") : null;
-        if (seamButton) seamButton.disabled = Boolean(input.seam?.button.disabled);
         if (!el.isConnected || el.previousSibling !== anchor) {
           if (!insertAfter(anchor, el)) return;
         }
         this.nodes.set(i, el);
       });
+      this.renderSeam(input.seam, page, stopAt);
       const live = new Set(this.nodes.values());
+      if (this.seam) live.add(this.seam);
       for (const container of page.containers) {
         container.querySelectorAll(".ll-line").forEach((n) => {
           if (!live.has(n)) n.remove();
         });
       }
     }
+    /** The seam is its own node, reused while it stays: right after the last translated line
+     *  (past the note open under it) so the page reads [English][Japanese][seam][English, plain].
+     *  If that line has no node it follows the line's anchor; with nothing translated before the
+     *  stop (stopAt 0) it follows the first line's anchor. */
+    renderSeam(seam, page, stopAt) {
+      if (!seam || stopAt < 0) {
+        this.seam?.remove();
+        this.seam = null;
+        this.seamSig = "";
+        this.seamAfter = -1;
+        return;
+      }
+      let el = this.seam;
+      if (!el) {
+        el = h("span", { class: "ll-line", lang: "ja", "data-state": "seam", "data-exclude-from-selection": "true" });
+        isolateClicks(el);
+        this.seam = el;
+      }
+      const sig = `${seam.text}|${seam.button.label}|${seam.button.disabled}`;
+      if (this.seamSig !== sig) {
+        el.replaceChildren(this.seamContent(seam));
+        this.seamSig = sig;
+      }
+      const button = el.querySelector(".ll-seam .ll-btn");
+      if (button) button.disabled = Boolean(seam.button.disabled);
+      const last = Math.max(stopAt - 1, 0);
+      this.seamAfter = last;
+      const lineNode = this.nodes.get(last);
+      let after = lineNode ?? page.anchors[last];
+      while (lineNode && after?.nextSibling instanceof Element && after.nextSibling.classList.contains("ll-note")) after = after.nextSibling;
+      if (after && (!el.isConnected || el.previousSibling !== after)) insertAfter(after, el);
+    }
+    seamContent(seam) {
+      const button = h("button", {
+        class: "ll-btn",
+        type: "button",
+        disabled: Boolean(seam.button.disabled),
+        onclick: (e) => {
+          e.preventDefault();
+          if (button.disabled) return;
+          button.disabled = true;
+          seam.button.onClick();
+        }
+      }, seam.button.label);
+      return h("span", { class: "ll-seam" }, h("span", { class: "ll-seam-text" }, seam.text), button);
+    }
     content(state, index, ja, noteCount, input) {
       if (state === "empty") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
       if (state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" }, h("span", { class: "ll-pen" }))];
       if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "この行は訳せていません" }, "――")];
-      if (state === "seam" && input.seam) {
-        const { seam } = input;
-        const button = h("button", {
-          class: "ll-btn",
-          type: "button",
-          disabled: Boolean(seam.button.disabled),
-          onclick: (e) => {
-            e.preventDefault();
-            if (button.disabled) return;
-            button.disabled = true;
-            seam.button.onClick();
-          }
-        }, seam.button.label);
-        return [h("span", { class: "ll-seam" }, h("span", { class: "ll-seam-text" }, seam.text), button)];
-      }
       const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
       const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
       if (noteCount) {
@@ -2619,12 +2691,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       for (const [i, el] of this.nodes) {
         if (!el.isConnected || !this.page.anchors[i]?.isConnected) return true;
       }
-      return false;
+      return Boolean(this.seam && (!this.seam.isConnected || !this.page.anchors[this.seamAfter]?.isConnected));
     }
     clear() {
       this.nodes.forEach((el) => el.remove());
       this.nodes.clear();
       this.sigs.clear();
+      this.seam = null;
+      this.seamSig = "";
+      this.seamAfter = -1;
       document.querySelectorAll(".ll-line").forEach((el) => el.remove());
       this.page = null;
     }
@@ -2733,7 +2808,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         h(
           "p",
           { class: "ll-note-head" },
-          h("span", { class: "ll-note-phrase", lang: "en" }, `“${note.phrase}”`),
+          h("span", { class: "ll-note-phrase", lang: "en" }, note.phrase),
           h("span", { class: "ll-note-kind" }, `〔${NOTE_LABELS[note.kind]}〕`),
           note.conjecture ? h("span", { class: "ll-note-conj" }, "〔推測〕") : null
         ),
@@ -2809,6 +2884,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   overflow-wrap: anywhere;
   letter-spacing: .02em;
   text-spacing-trim: trim-start;
+  text-autospace: normal;
   hanging-punctuation: none;
 }
 
@@ -2964,6 +3040,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 .line:last-child { margin-bottom: 0; }
+.section-lead, .line, .note, .msg { text-wrap: pretty; }
 .msg:empty { display: none; }
 .msg:not(:empty) { margin-top: 8px; }
 .msg[data-kind="error"] { color: var(--black); font-weight: 700; }
@@ -3001,6 +3078,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 .steps .link { display: inline-block; margin-top: 4px; }
 
+/* step 2's field and its helper sit under step 2's text, not at the sheet edge */
+.steps ~ .input, .steps ~ .msg, .steps ~ .note { margin-left: 36px; width: calc(100% - 36px); }
+.steps ~ .note { margin-top: 8px; margin-bottom: 24px; }
+
 /* ---------- controls ---------- */
 
 /* Text actions are underlined links, as everywhere on Genius. */
@@ -3010,7 +3091,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   display: inline-flex;
   align-items: center;
   margin: 0 18px 0 0;
-  min-height: 40px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -3043,7 +3124,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   text-decoration: none;
 }
 
-.btn[data-v="outline"] { font-weight: 700; }
+.btn[data-v="outline"] { font-weight: inherit; }
 
 .btn:disabled { color: var(--quiet); cursor: default; text-decoration: none; }
 .btn[data-v="solid"]:disabled { background: #333333; color: #FFFFFF; }
@@ -3128,7 +3209,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   min-width: 0;
   color: var(--black);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .status {
@@ -3144,6 +3225,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 .status[data-s="bad"] { font-weight: 700; }
 
 .controls { margin-top: 6px; }
+.controls .inline:has(.mask) { flex-wrap: wrap; gap: 0 18px; }
+.controls .inline:has(.mask) .mask { flex-basis: 100%; }
 
 .mask {
   flex: 1 1 auto;
@@ -3161,8 +3244,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 /* ---------- phone ---------- */
 
-.root[data-layout="phone"] .btn,
-.root[data-layout="phone"] .input { min-height: 44px; }
+.root[data-layout="phone"] .btn { min-height: 44px; }
+.root[data-layout="phone"] .input { min-height: 48px; }
 
 .root[data-layout="phone"] .btn[data-v="solid"] { width: 100%; min-height: 48px; }
 
@@ -3211,19 +3294,19 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   // src/ui/sheet.ts
   var COPY = {
     firstTitle: "日本語訳をはじめる",
-    step1: "Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります",
-    step1Link: "Google AI Studio を開く",
+    step1: "Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります",
+    step1Link: "Google AI Studioを開く",
     step2: "キーをコピーして、下に貼り付けます",
     placeholder: "ここに貼り付け",
     pasteKey: "キーを貼り付けてください",
-    keyNote: "キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません",
+    keyNote: "キーはこのブラウザにだけ保存され、Google以外には送られません",
     primary: "保存してこの曲を訳す",
     secondary: "保存だけする",
     checking: "確かめています…",
     badKey: "このキーは使えませんでした。コピーし直してください",
     network: "確かめられませんでした。接続を確認してください",
-    busyCheck: "Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ",
-    settingsTitle: "Lyric Lens の設定",
+    busyCheck: "Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ",
+    settingsTitle: "Lyric Lensの設定",
     close: "閉じる",
     services: "翻訳に使うAI",
     save: "保存",
@@ -3247,7 +3330,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     importData: "読み込む",
     exportFailed: "書き出せませんでした",
     importNothing: "新しく読み込める曲はありませんでした",
-    importFailed: "読み込めませんでした。Lyric Lens で書き出したファイルを選んでください",
+    importFailed: "読み込めませんでした。Lyric Lensで書き出したファイルを選んでください",
     deleteAll: "すべて消す",
     ok: "消す",
     cancel: "やめる"
@@ -3295,6 +3378,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (kb < 1) return "1 KB";
     if (kb < 1023.5) return `${Math.round(kb)} KB`;
     return `${(kb / 1024).toFixed(1)} MB`;
+  }
+  function modelLabel(id) {
+    const m = /^(gemini|gemma)-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(id);
+    if (!m) return id;
+    const words = [];
+    for (const part of m[3].split("-").filter(Boolean)) {
+      if (part === "lite" && words.length) words[words.length - 1] += "-Lite";
+      else if (part === "it") words.push("IT");
+      else if (/^\d+(?:\.\d+)?[bm]$/.test(part)) words.push(part.toUpperCase());
+      else words.push(part.charAt(0).toUpperCase() + part.slice(1));
+    }
+    return [m[1].charAt(0).toUpperCase() + m[1].slice(1), m[2], ...words].join(" ");
   }
   function maskKey(key) {
     const k = key.trim();
@@ -3474,8 +3569,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         side = spaceBelow >= Math.min(natural, cap) || spaceBelow >= spaceAbove ? "below" : "above";
       }
       const room = side === "below" ? spaceBelow : spaceAbove;
-      const left = rect.left + width <= vw - MARGIN ? rect.left : rect.right - width;
-      s.left = `${clamp(left, MARGIN, vw - width - MARGIN)}px`;
+      s.left = `${clamp(rect.right - width, MARGIN, vw - width - MARGIN)}px`;
       s.maxHeight = `${Math.max(MIN_HEIGHT, Math.min(cap, room))}px`;
       if (side === "below") {
         s.top = `${clamp(rect.bottom + GAP, MARGIN, vh - MIN_HEIGHT - MARGIN)}px`;
@@ -3850,7 +3944,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         const song = options.song;
         const parts = [];
         if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(`${formatDate(song.translatedAt)}に`);
-        if (song.model) parts.push(`${song.model}で`);
+        if (song.model) parts.push(`${modelLabel(song.model)}で`);
         const zone2 = h("div", { class: "zone" });
         const retranslate = button(COPY.retranslate, "outline", () => {
           askInline(zone2, retranslate, {
@@ -4026,9 +4120,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         "section",
         { class: "section" },
         h("h3", { class: "section-title" }, COPY.data),
-        h("p", { class: "section-lead" }, COPY.dataLead),
         summaryEl,
         zone,
+        h("p", { class: "section-lead" }, COPY.dataLead),
         dataMsg,
         fileInput
       ));
@@ -5067,15 +5161,17 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   border-bottom: 2px solid var(--ll-rule);
   color: var(--ll-black) !important;
 }
-.ll-head-row[data-tone="settled"] { border-bottom-color: transparent; }
+/* The track appears only while there is progress to show (2px kept, so nothing moves). */
+.ll-head-row { border-bottom-color: transparent; }
+.ll-head-row:has(.ll-progress) { border-bottom-color: var(--ll-rule); }
 .ll-icon {
   flex: none;
-  width: 16px;
-  height: 16px;
-  margin-right: 10px;
-  border: 1.25px solid var(--ll-black);
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  border: 1px solid var(--ll-black);
   color: var(--ll-black);
-  font: 400 10px/13.5px var(--ll-font);
+  font: 400 10px/12px var(--ll-font);
   text-align: center;
   box-sizing: border-box;
   -webkit-user-select: none;
@@ -5113,12 +5209,9 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   padding: 0;
   font-size: 15px;
   font-weight: 700;
-  text-decoration-thickness: 2px !important;
-  text-underline-offset: 6px;
 }
 @media (hover: hover) {
   .ll-btn:hover { text-decoration-thickness: 2px !important; }
-  .ll-btn[data-primary]:hover { text-decoration-thickness: 3px !important; }
 }
 .ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-quiet) !important; cursor: default; text-decoration: none !important; }
 /* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
@@ -5133,7 +5226,7 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
 
 /* progress: the row's track fills in black; while waiting, a short segment travels */
 .ll-progress { position: absolute; left: 0; bottom: -2px; height: 2px; width: calc(var(--p, 0) * 100%); background: var(--ll-black); transition: width .24s cubic-bezier(.2, 0, 0, 1); }
-.ll-progress[data-indeterminate] { width: 56px; animation: ll-travel 1.4s cubic-bezier(.4, 0, .6, 1) infinite; }
+.ll-progress[data-indeterminate] { width: 56px; animation: ll-travel .7s cubic-bezier(.4, 0, .6, 1) infinite alternate; }
 @keyframes ll-travel { from { left: 0; } to { left: calc(100% - 56px); } }
 /* completion, once per translation: the track fills, then the row settles into a plain label */
 .ll-head-row[data-settle] .ll-status { animation: ll-settle .36s cubic-bezier(.4, 0, .2, 1) both; }
@@ -5174,10 +5267,11 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
 /* 訳を隠す gives back plain Genius: lines, notes and the preface all go. */
 html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { display: none !important; }
 .ll-ja { color: inherit !important; }
+.ll-ja, .ll-preface-what, .ll-note-text, .ll-caption, .ll-seam-text { text-wrap: pretty; }
 .ll-line[data-repeat] { color: var(--ll-quiet) !important; }
 .ll-adlib { color: var(--ll-quiet) !important; }
 /* not yet written: reserved, blank (no dots, no bars); the line being written holds the pen */
-.ll-line[data-state="empty"] .ll-ja, .ll-line[data-state="next"] .ll-ja { display: block; height: 26px; }
+.ll-line[data-state="empty"] .ll-ja, .ll-line[data-state="next"] .ll-ja { display: flow-root; height: 26px; }
 .ll-pen { display: block; width: 1.5px; height: 17px; margin-top: 5px; background: var(--ll-black); animation: ll-breathe 1.4s ease-in-out infinite; }
 @keyframes ll-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 /* the parting: on the tap, the space for the Japanese opens under the lines near the viewport */
@@ -5194,8 +5288,8 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-left: .15em;
-  vertical-align: -3px;
+  margin-left: 0;
+  vertical-align: baseline;
   color: var(--ll-black) !important;
   font: 700 15px/1 var(--ll-font);
   cursor: pointer;
@@ -5211,13 +5305,15 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
 .ll-line[data-state="seam"] { padding: 18px 0 22px; }
 .ll-seam { display: flex; flex-direction: column; align-items: flex-start; border-top: 2px solid var(--ll-black); padding-top: 12px; }
 .ll-seam-text { color: var(--ll-ink); font-size: 14px; line-height: 22px; }
-.ll-seam .ll-btn { min-height: 36px; padding: 0; font-size: 15px; font-weight: 700; text-decoration-thickness: 2px !important; text-underline-offset: 6px; }
+.ll-seam .ll-btn { min-height: 36px; padding: 0; font-size: 15px; font-weight: 700; }
 
 /* ---------- notes: unboxed, set two characters in ---------- */
-.ll-note { display: block; margin: 4px 0 16px; padding: 0 0 0 2em; color: var(--ll-ink) !important; font-size: 14px; line-height: 24px; letter-spacing: .02em; }
+/* a note hangs from its own line: close under it, a clear gap before the next lyric */
+.ll-line:has(+ .ll-note) { padding-bottom: 4px; }
+.ll-note { display: block; margin: 0 0 24px; padding: 0 0 0 2em; color: var(--ll-ink) !important; font-size: 14px; line-height: 24px; letter-spacing: .02em; }
 .ll-note-item + .ll-note-item { margin-top: 12px; }
 .ll-note-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 0; }
-.ll-note-phrase { padding: 0 3px; background: var(--ll-yellow) !important; color: #000 !important; font: 600 15px/22px var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif; letter-spacing: 0; }
+.ll-note-phrase { margin-left: -3px; padding: 0 3px; background: var(--ll-yellow) !important; color: #000 !important; font: 600 15px/22px var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif; letter-spacing: 0; }
 .ll-note-kind, .ll-note-conj { color: var(--ll-quiet); font-size: 13px; }
 .ll-note-text { margin: 4px 0 0; }
 .ll-note-src { margin: 2px 0 0; color: var(--ll-quiet); font-size: 13px; }
@@ -5249,6 +5345,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
   .ll-line { font-size: 15px; line-height: 24px; padding-bottom: 10px; min-height: 24px; }
   .ll-line[data-state="empty"] .ll-ja, .ll-line[data-state="next"] .ll-ja { height: 24px; }
   .ll-pen { height: 16px; margin-top: 4px; }
+  .ll-note { font-size: 13px; line-height: 22px; }
   .ll-preface-who, .ll-preface-what { font-size: 15px; line-height: 24px; }
   /* Genius' phone header (nav + ad slot) is sticky and about 125px tall. */
   .ll-btn, .ll-preface-more, .ll-gn-toggle, .ll-gn-more, .ll-note-close { scroll-margin-top: 140px; }
@@ -5258,7 +5355,8 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
   .ll-pen { animation: none; }
   .ll-line[data-enter] { animation: none; }
   .ll-progress { transition: none; }
-  .ll-progress[data-indeterminate] { animation: none; left: 0; }
+  /* a parked segment would read as 10% done: show none; the sentence says it is waiting */
+  .ll-progress[data-indeterminate] { animation: none; background: transparent; }
   .ll-head-row[data-settle] .ll-status { animation: none; }
 }
 `;

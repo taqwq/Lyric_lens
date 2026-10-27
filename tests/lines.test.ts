@@ -130,34 +130,49 @@ describe('states', () => {
     expect(states(r, page)).toEqual(['gap', 'gap', 'gap', 'gap', 'gap', 'gap']);
   });
 
-  it('seam: replaces the first missing line only', () => {
+  it('seam: its own node right after the last translated line; no line from the first missing one on', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く', 1: '夜を抜けて' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['filled', 'filled', 'filled', 'seam', null, null]);
-    const seam = r.nodeFor(3)!.querySelector('.ll-seam')!;
+    expect(states(r, page)).toEqual(['filled', 'filled', 'filled', null, null, null]);
+    const seamEl = r.seamNode()!;
+    expect(seamEl.className).toBe('ll-line');
+    expect(seamEl.dataset.state).toBe('seam');
+    expect(seamEl.getAttribute('lang')).toBe('ja');
+    expect(seamEl.getAttribute('data-exclude-from-selection')).toBe('true');
+    // [English 3][Japanese 3][seam][English 4, plain]: the translated line keeps its place under its own English.
+    expect(r.nodeFor(2)!.previousSibling).toBe(page.anchors[2]);
+    expect(r.nodeFor(2)!.nextSibling).toBe(seamEl);
+    expect(seamEl.nextSibling!.textContent).toBe('Hold on tight (Hold on, hold on)');
+    const seam = seamEl.querySelector('.ll-seam')!;
     expect(seam.querySelector('.ll-seam-text')!.textContent).toBe('ここで止めました');
     expect(seam.querySelector('button.ll-btn')!.textContent).toBe('続きを訳す');
     // reason first, then the button
     expect(seam.firstElementChild!.className).toBe('ll-seam-text');
     expect(seam.lastElementChild!.tagName).toBe('BUTTON');
+    expect(llLines()).toHaveLength(4);
   });
 
-  it('seam with nothing translated sits at line 1', () => {
+  it('seam with nothing translated: no line at all, the seam follows the first line', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['seam', null, null, null, null, null]);
+    expect(states(r, page)).toEqual([null, null, null, null, null, null]);
+    expect(r.seamNode()!.previousSibling).toBe(page.anchors[0]);
+    expect(llLines()).toHaveLength(1);
   });
 
   it('a seam is drawn even when slots are off', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 1: '夜を抜けて' }), seam: seamOf() }));
-    expect(states(r, page)).toEqual([null, 'filled', 'seam', null, null, null]);
+    expect(states(r, page)).toEqual([null, 'filled', null, null, null, null]);
+    expect(r.nodeFor(1)!.nextSibling).toBe(r.seamNode());
   });
 
   it('every line filled: nothing but translations', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'a', 1: 'b', 3: 'c', 4: 'd', 5: 'e' }), slots: true, breathing: true, seam: seamOf() }));
     expect(states(r, page)).toEqual(['filled', 'filled', 'filled', 'filled', 'filled', 'filled']);
+    expect(r.seamNode()).toBeNull();
+    expect(document.querySelector('.ll-seam')).toBeNull();
   });
 
   it('each translation sits directly after the node that ends its line', () => {
@@ -207,10 +222,11 @@ describe('the frontier rule', () => {
     expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', 'next']);
   });
 
-  it('the seam sits at that same frontier, holes before it stay gaps', () => {
+  it('the seam stops at that same frontier, holes before it stay gaps', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く', 4: '夢を見て' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', 'seam']);
+    expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', null]);
+    expect(r.nodeFor(4)!.nextSibling).toBe(r.seamNode());
   });
 
   it('when only the last line is filled the frontier falls back to the first missing line', () => {
@@ -221,10 +237,11 @@ describe('the frontier rule', () => {
     expect(states(r, page)).toEqual(['next', 'empty', 'empty', 'empty', 'empty', 'filled']);
   });
 
-  it('the fallback frontier takes the seam too', () => {
+  it('the fallback frontier takes the seam too: nothing is drawn from line 1 on, even the one translated line', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 5: '起きて' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['seam', null, null, null, null, 'filled']);
+    expect(states(r, page)).toEqual([null, null, null, null, null, null]);
+    expect(r.seamNode()!.previousSibling).toBe(page.anchors[0]);
   });
 
   it('with slots off, holes before the last filled line are not drawn at all', () => {
@@ -255,19 +272,48 @@ describe('the frontier rule', () => {
   it('a repeat filled ahead of the stop does not move the seam', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['filled', 'seam', 'filled', null, null, null]);
+    // The stop is at "Through the night"; the second "I walk alone" is translated with the first, but lies below it.
+    expect(states(r, page)).toEqual(['filled', null, null, null, null, null]);
+    expect(r.nodeFor(0)!.nextSibling).toBe(r.seamNode());
   });
 
-  it('after a seam no empty nodes are rendered; filled repeats below it still are', () => {
+  it('below the seam no node at all: not an empty slot, not a gap, not even a translated repeat', () => {
     const r = new LineRenderer();
-    r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, breathing: true, seam: seamOf() }));
-    // Line 2 repeats line 0 and is filled below the seam; 3..5 are missing and draw nothing.
-    expect(states(r, page)).toEqual(['filled', 'seam', 'filled', null, null, null]);
-    expect(llLines()).toHaveLength(3);
+    const rec = record(page, { 0: 'ひとり歩く' });
+    r.render(input(page, { record: rec, slots: true, breathing: true, seam: seamOf() }));
+    // Line 2 repeats line 0 and is filled below the stop; 1 and 3..5 are missing and draw nothing.
+    expect(states(r, page)).toEqual(['filled', null, null, null, null, null]);
+    for (let i = 1; i < 6; i += 1) expect(r.nodeFor(i)).toBeUndefined();
+    expect(llLines()).toHaveLength(2); // the first line and the seam
     expect(document.querySelectorAll('[data-state="empty"], [data-state="next"], [data-state="gap"]')).toHaveLength(0);
-    // Lifting the seam brings the slots back.
-    r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, breathing: true }));
+    expect(document.querySelectorAll('[data-state="filled"]')).toHaveLength(1);
+    // Lifting the seam brings the slots and the repeat back.
+    r.render(input(page, { record: rec, slots: true, breathing: true }));
     expect(states(r, page)).toEqual(['filled', 'next', 'filled', 'empty', 'empty', 'empty']);
+    expect(r.seamNode()).toBeNull();
+  });
+
+  it('a translated repeat that was on the page goes away when the seam arrives', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'ひとり歩く' });
+    r.render(input(page, { record: rec, slots: true }));
+    const repeat = r.nodeFor(2)!;
+    expect(repeat.dataset.state).toBe('filled');
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(repeat.isConnected).toBe(false);
+    expect(r.nodeFor(2)).toBeUndefined();
+  });
+
+  it('the seam moves on as lines arrive, the same element each time', () => {
+    const r = new LineRenderer();
+    r.render(input(page, { record: record(page, { 0: 'a', 1: 'b' }), slots: true, seam: seamOf() }));
+    const seamEl = r.seamNode()!;
+    expect(r.nodeFor(2)!.nextSibling).toBe(seamEl);
+    r.render(input(page, { record: record(page, { 0: 'a', 1: 'b', 3: 'c' }), slots: true, seam: seamOf() }));
+    expect(states(r, page)).toEqual(['filled', 'filled', 'filled', 'filled', null, null]);
+    expect(r.seamNode()).toBe(seamEl);
+    expect(r.nodeFor(3)!.nextSibling).toBe(seamEl);
+    expect(llLines()).toHaveLength(5);
   });
 });
 
@@ -509,22 +555,35 @@ describe('the seam button', () => {
     const r = new LineRenderer();
     const rec = record(page, { 0: 'a', 1: 'b' });
     r.render(input(page, { record: rec, slots: true, seam: seamOf({ disabled: true }) }));
-    const el = r.nodeFor(3)!;
+    const el = r.seamNode()!;
     expect(el.querySelector<HTMLButtonElement>('.ll-btn')!.disabled).toBe(true);
 
     r.render(input(page, { record: rec, slots: true, seam: seamOf({ disabled: false }) }));
-    expect(r.nodeFor(3)).toBe(el);
+    expect(r.seamNode()).toBe(el);
     expect(el.querySelector<HTMLButtonElement>('.ll-btn')!.disabled).toBe(false);
 
     r.render(input(page, { record: rec, slots: true, seam: seamOf({ disabled: false }, '接続が切れました') }));
+    expect(r.seamNode()).toBe(el);
     expect(el.querySelector('.ll-seam-text')!.textContent).toBe('接続が切れました');
+  });
+
+  it('the same seam keeps its button; a tapped button is unlocked again by state', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'a', 1: 'b' });
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    const button = r.seamNode()!.querySelector<HTMLButtonElement>('.ll-btn')!;
+    button.click();
+    expect(button.disabled).toBe(true);
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.seamNode()!.querySelector('.ll-btn')).toBe(button);
+    expect(button.disabled).toBe(false);
   });
 
   it('a tap calls onClick once and disables the button; a disabled button does nothing', () => {
     const r = new LineRenderer();
     const onClick = vi.fn();
     r.render(input(page, { slots: true, seam: seamOf({ onClick }) }));
-    const button = r.nodeFor(0)!.querySelector<HTMLButtonElement>('.ll-btn')!;
+    const button = r.seamNode()!.querySelector<HTMLButtonElement>('.ll-btn')!;
     button.click();
     button.click();
     expect(onClick).toHaveBeenCalledTimes(1);
@@ -533,17 +592,53 @@ describe('the seam button', () => {
     const idle = vi.fn();
     const r2 = new LineRenderer();
     r2.render(input(page, { slots: true, seam: seamOf({ onClick: idle, disabled: true }) }));
-    r2.nodeFor(0)!.querySelector<HTMLButtonElement>('.ll-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    r2.seamNode()!.querySelector<HTMLButtonElement>('.ll-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(idle).not.toHaveBeenCalled();
   });
 
-  it('the seam disappears when the seam input goes away and the slot returns', () => {
+  it('the seam disappears when the seam input goes away and the slots return', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true, seam: seamOf() }));
-    expect(r.nodeFor(0)!.dataset.state).toBe('seam');
+    const el = r.seamNode()!;
+    expect(el.dataset.state).toBe('seam');
+    expect(r.nodeFor(0)).toBeUndefined();
     r.render(input(page, { slots: true }));
     expect(r.nodeFor(0)!.dataset.state).toBe('empty');
+    expect(r.seamNode()).toBeNull();
+    expect(el.isConnected).toBe(false);
     expect(document.querySelector('.ll-seam')).toBeNull();
+  });
+
+  it('stays behind the note open under the last translated line, and does not shuffle on every render', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'a', 1: 'b' });
+    const noteEl = (): HTMLElement => {
+      const el = document.createElement('div');
+      el.className = 'll-note';
+      return el;
+    };
+    // The last translated line is line 3 (a repeat of line 1). Its note is open when the seam arrives.
+    r.render(input(page, { record: rec, slots: true }));
+    const first = noteEl();
+    r.nodeFor(2)!.after(first);
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.nodeFor(2)!.nextSibling).toBe(first);
+    expect(first.nextSibling).toBe(r.seamNode());
+    const html = page.containers[0]!.innerHTML;
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(page.containers[0]!.innerHTML).toBe(html);
+
+    // Closed again: the seam is right behind the line. A note opened later goes between them (NoteView puts
+    // it right after its line node), and the seam stays put.
+    first.remove();
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.nodeFor(2)!.nextSibling).toBe(r.seamNode());
+    const second = noteEl();
+    r.nodeFor(2)!.after(second);
+    const withNote = page.containers[0]!.innerHTML;
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(page.containers[0]!.innerHTML).toBe(withNote);
+    expect(second.nextSibling).toBe(r.seamNode());
   });
 });
 
@@ -582,15 +677,19 @@ describe('re-rendering', () => {
     const run = () => r.render(input(page, { record: rec, slots: true, breathing: true, seam: seamOf() }));
 
     run();
-    const nodes = page.source.lines.map((_, i) => r.nodeFor(i)!);
+    // Five lines are drawn; the stop is at the last one ("Wake up"), so the seam follows the fifth.
+    const nodes = [0, 1, 2, 3, 4].map((i) => r.nodeFor(i)!);
+    const seamEl = r.seamNode()!;
+    expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', null]);
     const html = page.containers[0]!.innerHTML;
     const bodies = nodes.map((n) => n.querySelector('.ll-ja'));
 
     run();
     run();
-    expect(page.source.lines.map((_, i) => r.nodeFor(i))).toEqual(nodes);
+    expect(page.source.lines.map((_, i) => r.nodeFor(i))).toEqual([...nodes, undefined]);
     nodes.forEach((n, i) => expect(r.nodeFor(i)).toBe(n));
     nodes.forEach((n, i) => expect(n.querySelector('.ll-ja')).toBe(bodies[i]));
+    expect(r.seamNode()).toBe(seamEl);
     expect(page.containers[0]!.innerHTML).toBe(html);
     expect(llLines()).toHaveLength(6);
   });
@@ -652,6 +751,19 @@ describe('re-rendering', () => {
     expect(llLines()).toHaveLength(6);
   });
 
+  it('puts a displaced seam back right after the last translated line', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'a', 1: 'b' });
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    const el = r.seamNode()!;
+    page.containers[0]!.appendChild(el);
+    expect(r.nodeFor(2)!.nextSibling).not.toBe(el);
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.seamNode()).toBe(el);
+    expect(r.nodeFor(2)!.nextSibling).toBe(el);
+    expect(llLines()).toHaveLength(4);
+  });
+
   it('survives Genius re-rendering the lyrics: damaged() flags it, the next render repairs it', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true }));
@@ -665,6 +777,33 @@ describe('re-rendering', () => {
     expect(r.damaged()).toBe(false);
     expect(llLines()).toHaveLength(6);
     reread.source.lines.forEach((_, i) => expect(r.nodeFor(i)!.previousSibling).toBe(reread.anchors[i]));
+  });
+
+  it('damaged() counts the seam too: Genius re-rendering drops it, the next render brings it back', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'a', 1: 'b' });
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.damaged()).toBe(false);
+
+    document.body.innerHTML = GENIUS;
+    expect(r.damaged()).toBe(true);
+
+    const reread = readPage()!;
+    r.render(input(reread, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.damaged()).toBe(false);
+    expect(llLines()).toHaveLength(4);
+    expect(r.nodeFor(2)!.nextSibling).toBe(r.seamNode());
+    expect(r.seamNode()!.isConnected).toBe(true);
+  });
+
+  it('damaged() flags a seam that lost its place even if the line nodes are fine', () => {
+    const r = new LineRenderer();
+    const rec = record(page, { 0: 'a', 1: 'b' });
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    r.seamNode()!.remove();
+    expect(r.damaged()).toBe(true);
+    r.render(input(page, { record: rec, slots: true, seam: seamOf() }));
+    expect(r.damaged()).toBe(false);
   });
 
   it('drops the nodes of lines that no longer exist when the lyrics shrink', () => {
@@ -704,6 +843,17 @@ describe('clear', () => {
     r.clear();
     expect(llLines()).toHaveLength(0);
     expect(r.nodeFor(0)).toBeUndefined();
+    expect(r.damaged()).toBe(false);
+  });
+
+  it('removes the seam too and forgets it', () => {
+    const r = new LineRenderer();
+    r.render(input(page, { record: record(page, { 0: 'a', 1: 'b' }), slots: true, seam: seamOf() }));
+    const el = r.seamNode()!;
+    r.clear();
+    expect(el.isConnected).toBe(false);
+    expect(r.seamNode()).toBeNull();
+    expect(llLines()).toHaveLength(0);
     expect(r.damaged()).toBe(false);
   });
 

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readPage, type PageSong } from '../src/genius/extract';
-import { HeadRow, type HeadView } from '../src/ui/head';
+import { HeadRow, type HeadAction, type HeadView } from '../src/ui/head';
 
 const GENIUS = '<div data-lyrics-container="true">[Verse 1]<br>Walking down the empty hall<br>Light under the door</div>';
 
@@ -263,6 +263,190 @@ describe('row content', () => {
     expect(text).not.toContain('誰が誰に');
     expect(text).not.toContain('この曲は');
     expect(head.element!.querySelector('.ll-head-note, .ll-actions, .ll-preface-label, .ll-preface-toggle')).toBeNull();
+  });
+});
+
+describe('link slots: the links never move', () => {
+  const stop = (onClick = vi.fn()): HeadAction => ({ id: 'stop', label: '止める', onClick });
+  const hide = (onClick = vi.fn()): HeadAction => ({ id: 'hide', label: '訳を隠す', onClick });
+  const settings = (onClick = vi.fn()): HeadAction => ({ id: 'settings', label: '設定', onClick });
+  const start: HeadAction = { id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true };
+  const resume: HeadAction = { id: 'resume', label: '続きを訳す', onClick: vi.fn(), primary: true };
+  const links = () => Array.from(head.element!.querySelectorAll<HTMLButtonElement>('.ll-links .ll-btn'));
+  /** Where each live link stands in the row, by its label (absent slots are not counted). */
+  const places = () => Object.fromEntries(links().flatMap((b, i) => (b.hasAttribute('data-absent') ? [] : [[b.textContent!, i]])));
+
+  const S3: HeadAction[] = [stop()];
+  const S4: HeadAction[] = [stop(), hide(), settings()];
+  const S5: HeadAction[] = [hide(), settings()];
+  const S2: HeadAction[] = [start, settings()];
+
+  it('three slots in one DOM order, 止める 訳を隠す 設定, in a stop-only, a running, a finished and an idle view', () => {
+    for (const [state, actions] of [['S3', S3], ['S4', S4], ['S5', S5], ['S2', S2]] as const) {
+      head.render(page, view({ state, actions: [...actions] }));
+      expect(links().map((b) => b.dataset.slot)).toEqual(['stop', 'hide', 'settings']);
+      expect(links().map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定']);
+      expect(head.element!.querySelectorAll('.ll-links')).toHaveLength(1);
+    }
+  });
+
+  it('a link stands in the same place whichever of the others are there', () => {
+    head.render(page, view({ actions: S3 }));
+    expect(places()).toEqual({ 止める: 0 });
+    head.render(page, view({ actions: S4 }));
+    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1, 設定: 2 });
+    head.render(page, view({ actions: S5 }));
+    expect(places()).toEqual({ 訳を隠す: 1, 設定: 2 });
+    head.render(page, view({ actions: S2 }));
+    expect(places()).toEqual({ 設定: 2 });
+    // The order the view lists them in does not matter either.
+    head.render(page, view({ actions: [settings(), hide(), stop()] }));
+    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1, 設定: 2 });
+    // 訳を表示 (hidden) is the same slot as 訳を隠す.
+    head.render(page, view({ actions: [{ id: 'hide', label: '訳を表示', onClick: vi.fn() }, settings()] }));
+    expect(places()).toEqual({ 訳を表示: 1, 設定: 2 });
+  });
+
+  it('the live links keep their order in the document, so nothing is ever left of where it was', () => {
+    head.render(page, view({ actions: S4 }));
+    const [a, b, c] = links();
+    expect(a!.compareDocumentPosition(b!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(b!.compareDocumentPosition(c!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The primary button stays in front of all of them.
+    head.render(page, view({ actions: [resume, hide(), settings()] }));
+    const row = head.element!.querySelector('.ll-head-row')!;
+    expect(Array.from(row.querySelectorAll('.ll-btn')).map((x) => x.textContent)).toEqual(['続きを訳す', '止める', '訳を隠す', '設定']);
+  });
+
+  it('an absent slot is an inert, hidden placeholder with the usual label, so it keeps its width', () => {
+    head.render(page, view({ actions: S3 }));
+    const [live, ...absent] = links();
+    expect(live!.hasAttribute('data-absent')).toBe(false);
+    expect(live!.hasAttribute('inert')).toBe(false);
+    expect(live!.hasAttribute('aria-hidden')).toBe(false);
+    expect(live!.style.visibility).toBe('');
+    expect(absent.map((b) => b.textContent)).toEqual(['訳を隠す', '設定']);
+    for (const b of absent) {
+      expect(b.tagName).toBe('BUTTON');
+      expect(b.hasAttribute('data-absent')).toBe(true);
+      expect(b.hasAttribute('inert')).toBe(true);
+      expect(b.getAttribute('aria-hidden')).toBe('true');
+      expect(b.getAttribute('tabindex')).toBe('-1');
+      expect(b.style.visibility).toBe('hidden');
+    }
+  });
+
+  it('an absent slot does nothing when clicked and never takes focus', () => {
+    const onStop = vi.fn();
+    head.render(page, view({ actions: [stop(onStop)] }));
+    const [, noHide, noSettings] = links();
+    noHide!.click();
+    noSettings!.click();
+    expect(onStop).not.toHaveBeenCalled();
+
+    // Only 訳を隠す: the first button in the document is 止める's empty slot, but it is not where focus goes.
+    const onHide = vi.fn();
+    head.render(page, view({ actions: [hide(onHide)] }));
+    expect(links()[0]!.hasAttribute('data-absent')).toBe(true);
+    links()[0]!.click();
+    links()[2]!.click();
+    expect(onHide).not.toHaveBeenCalled();
+    head.focusFirst();
+    expect(document.activeElement).toBe(links()[1]);
+    expect(document.activeElement!.textContent).toBe('訳を隠す');
+  });
+
+  it('a view with no link at all (the first run, a Japanese song) has no row of links either', () => {
+    head.render(page, view());
+    expect(head.element!.querySelector('.ll-links')).toBeNull();
+    head.render(page, view({ actions: [] }));
+    expect(head.element!.querySelector('.ll-links')).toBeNull();
+    expect(head.element!.querySelector('.ll-btn')).toBeNull();
+  });
+
+  it('止める for another tab or another song takes the same first slot', () => {
+    head.render(page, view({ actions: [{ id: 'stopMirror', label: '止める', onClick: vi.fn() }, hide()] }));
+    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1 });
+    expect(links()[2]!.hasAttribute('data-absent')).toBe(true);
+    head.render(page, view({ actions: [{ id: 'stopOther', label: 'あちらを止める', onClick: vi.fn() }] }));
+    expect(places()).toEqual({ あちらを止める: 0 });
+    expect(links().map((b) => b.textContent)).toEqual(['あちらを止める', '訳を隠す', '設定']);
+  });
+
+  it('a settings button that is the primary leaves the 設定 slot empty', () => {
+    head.render(page, view({ actions: [{ id: 'settings', label: '設定を開く', onClick: vi.fn(), primary: true }, hide()] }));
+    expect(places()).toEqual({ 訳を隠す: 1 });
+    expect(links().map((b) => b.dataset.slot)).toEqual(['stop', 'hide', 'settings']);
+    expect(links()[2]!.hasAttribute('data-absent')).toBe(true);
+    expect(head.element!.querySelector('.ll-head-row > .ll-btn')!.textContent).toBe('設定を開く');
+  });
+
+  it('any other link follows the three slots', () => {
+    const other: HeadAction = { id: 'noop', label: 'ほか', onClick: vi.fn() };
+    head.render(page, view({ actions: [other, hide()] }));
+    expect(links().map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定', 'ほか']);
+    expect(links().map((b) => b.hasAttribute('data-absent'))).toEqual([true, false, true, false]);
+  });
+
+  it('a tapped primary is locked at once; the next render of the same view lets the state decide', () => {
+    const onClick = vi.fn();
+    const v = (disabled?: boolean) => view({ actions: [{ ...start, onClick, ...(disabled ? { disabled } : {}) }, settings()] });
+    head.render(page, v());
+    const primary = head.element!.querySelector<HTMLButtonElement>('.ll-head-row > .ll-btn')!;
+    expect(primary.dataset.slot).toBe('p0');
+    primary.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(primary.disabled).toBe(true);
+    head.render(page, v());
+    expect(head.element!.querySelector('.ll-head-row > .ll-btn')).toBe(primary);
+    expect(primary.disabled).toBe(false);
+    // …and a button the state disables stays disabled, in place, while the row is not rebuilt.
+    head.render(page, v(true));
+    expect(head.element!.querySelector<HTMLButtonElement>('.ll-head-row > .ll-btn')!.disabled).toBe(true);
+    const locked = head.element!.querySelector<HTMLButtonElement>('.ll-head-row > .ll-btn')!;
+    head.render(page, v(true));
+    expect(head.element!.querySelector('.ll-head-row > .ll-btn')).toBe(locked);
+    expect(locked.disabled).toBe(true);
+  });
+
+  describe('focus follows the slot', () => {
+    it('stays on 訳を隠す when the row changes around it (a primary arrives, 止める leaves)', () => {
+      head.render(page, view({ actions: S4 }));
+      links()[1]!.focus();
+      expect(document.activeElement!.textContent).toBe('訳を隠す');
+      head.render(page, view({ actions: [resume, hide(), settings()] }));
+      expect(document.activeElement).toBe(links()[1]);
+      expect(document.activeElement!.textContent).toBe('訳を隠す');
+      head.render(page, view({ actions: S3 }));
+      // 訳を隠す is gone; 止める is new here, so the status line keeps focus rather than 止める.
+      expect(document.activeElement).toBe(statusOf());
+    });
+
+    it('stays on 設定 between the idle, running and finished rows', () => {
+      head.render(page, view({ actions: S2 }));
+      links()[2]!.focus();
+      head.render(page, view({ actions: S5 }));
+      expect(document.activeElement).toBe(links()[2]);
+      expect(document.activeElement!.textContent).toBe('設定');
+      head.render(page, view({ actions: S4 }));
+      expect(document.activeElement).toBe(links()[2]);
+    });
+
+    it('never lands on an empty slot: when its own control is gone the first live one takes it', () => {
+      head.render(page, view({ actions: S4 }));
+      links()[0]!.focus();
+      head.render(page, view({ actions: S5 }));
+      expect(links()[0]!.hasAttribute('data-absent')).toBe(true);
+      expect(document.activeElement).toBe(links()[1]);
+      expect(document.activeElement!.hasAttribute('data-absent')).toBe(false);
+    });
+
+    it('a 止める that appears does not receive focus from a link that went: the status line keeps it', () => {
+      head.render(page, view({ actions: S2 }));
+      links()[2]!.focus();
+      head.render(page, view({ actions: S3 }));
+      expect(document.activeElement).toBe(statusOf());
+    });
   });
 });
 

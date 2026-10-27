@@ -1,7 +1,8 @@
 /*
  * The head (docs/design-plan-v4.md): one ruled row (icon, the primary action or the status,
  * the count, the links, a hairline progress bar), quiet captions under it, then the preface.
- * It sits at the top of the first lyrics block, after Genius' own lyrics header.
+ * It sits at the top of the first lyrics block, after Genius' own lyrics header. The links
+ * never move: each owns a slot in every state (see SLOTS).
  */
 import { isOwnNode, type PageSong } from '../genius/extract';
 import { h, isolateClicks } from './dom';
@@ -28,7 +29,8 @@ export interface HeadView {
   /** A run in this session just completed: the row settles once (600 ms). */
   settle?: boolean;
   captions: { text: string; tone?: 'reason' }[];
-  /** The optional primary first, then the links in their fixed order. */
+  /** The optional primary first, then the links. A link takes its slot (SLOTS) wherever it
+   *  comes in this list; a slot with no action here stays as an invisible placeholder. */
   actions: HeadAction[];
   preface?: { who: string; what: string; collapsed: boolean; onToggle: () => void } | null;
 }
@@ -41,12 +43,49 @@ const isStop = (id?: string): boolean => id === 'stop' || id === 'stopMirror';
 const STOP_GRACE_MS = 600;
 const SETTLE_MS = 600;
 
+/** The links in their places, left to right. A link that is absent in a view still holds its
+ *  slot (an invisible, inert placeholder with the usual label), so 止める never jumps left when
+ *  訳を隠す and 設定 arrive or leave. Any other link follows the last slot. */
+const SLOTS: { slot: string; label: string; takes: (id?: string) => boolean }[] = [
+  { slot: 'stop', label: '止める', takes: (id) => id === 'stop' || id === 'stopMirror' || id === 'stopOther' },
+  { slot: 'hide', label: '訳を隠す', takes: (id) => id === 'hide' },
+  { slot: 'settings', label: '設定', takes: (id) => id === 'settings' },
+];
+
+/** A button of the row, in DOM order. `slot` names where it sits ('p0' the primary, a SLOTS
+ *  name, 'x0' another link); the same slot is the same place from one view to the next, which
+ *  is how focus finds its way back. No `action`: the slot is empty in this view. */
+interface Entry {
+  slot: string;
+  label: string;
+  action: HeadAction | null;
+}
+
+function entriesOf(actions: HeadAction[]): Entry[] {
+  const out: Entry[] = actions.filter((a) => a.primary).map((action, i) => ({ slot: `p${i}`, label: action.label, action }));
+  const links = actions.filter((a) => !a.primary);
+  // No link at all (the first run, a Japanese song): no row of placeholders either.
+  if (!links.length) return out;
+  const placed = new Set<HeadAction>();
+  for (const s of SLOTS) {
+    const action = links.find((a) => !placed.has(a) && s.takes(a.id)) ?? null;
+    if (action) placed.add(action);
+    out.push({ slot: s.slot, label: action?.label ?? s.label, action });
+  }
+  links.filter((a) => !placed.has(a)).forEach((action, i) => out.push({ slot: `x${i}`, label: action.label, action }));
+  return out;
+}
+
+type Focus = { kind: 'action'; slot: string } | { kind: 'preface' };
+
+/** Every control of the row that can take focus (a placeholder cannot). */
+const LIVE_BUTTON = '.ll-head-row .ll-btn:not([data-absent])';
+
 export class HeadRow {
   private el: HTMLElement | null = null;
   private sig = '';
-  /** Action ids of the last render, and since when a stop action has been on screen
-   *  (null when none is): the guard follows the presence of 止める, not each rebuilt button. */
-  private prevIds: string[] = [];
+  /** Since when a stop action has been on screen (null when none is): the guard follows the
+   *  presence of 止める, not each rebuilt button. */
   private stopSince: number | null = null;
   /** The live region outlives every rebuild of the row: a region inserted already holding its
    *  text is not announced, one whose text changes in place is. */
@@ -69,27 +108,24 @@ export class HeadRow {
     // so the bar's width transition runs and nothing is rebuilt (or loses focus) per line.
     const p = view.progress;
     const progressKind = p === 'indeterminate' ? 'i' : p ? `v${p.max}` : '';
-    const sig = JSON.stringify([view.status, view.tone, Boolean(view.count), progressKind, view.captions.map((c) => [c.text, c.tone]), view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+    const entries = entriesOf(view.actions);
+    const sig = JSON.stringify([view.status, view.tone, Boolean(view.count), progressKind, view.captions.map((c) => [c.text, c.tone]), entries.map((e) => [e.slot, e.action && [e.action.id, e.action.label, e.action.disabled]]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
     if (view.state) this.el.dataset.llState = view.state;
-    const ids = view.actions.map((a) => a.id ?? '');
-    const prevIds = this.prevIds;
-    const hadStop = prevIds.some(isStop);
-    this.stopSince = ids.some(isStop) ? (hadStop && this.stopSince !== null ? this.stopSince : performance.now()) : null;
-    this.prevIds = ids;
+    const hadStop = this.stopSince !== null;
+    const stopNow = entries.some((e) => e.action && isStop(e.action.id));
+    this.stopSince = stopNow ? (hadStop ? this.stopSince : performance.now()) : null;
     if (sig !== this.sig) {
       // Rebuilding destroys the focused control: remember which one it was.
       const focus = this.focusedSlot();
       this.sig = sig;
-      this.el.replaceChildren(...this.content(view));
-      if (focus) {
-        // Focus must not slide onto a 止める that took the place of the button just pressed.
-        const landsOnStop = focus.kind === 'action' && isStop(ids[focus.index]) && !isStop(prevIds[focus.index]);
-        if (landsOnStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
-        else this.restoreFocus(focus);
-      }
+      this.el.replaceChildren(...this.content(view, entries));
+      if (focus) this.restoreFocus(focus, entries, hadStop);
     } else {
       // A tapped button was locked in place; state decides whether it stays locked.
-      this.el.querySelectorAll<HTMLButtonElement>('.ll-head-row .ll-btn').forEach((b, i) => { b.disabled = Boolean(view.actions[i]?.disabled); });
+      for (const e of entries) {
+        const b = e.action ? this.el.querySelector<HTMLButtonElement>(`.ll-head-row .ll-btn[data-slot="${e.slot}"]`) : null;
+        if (b && e.action) b.disabled = Boolean(e.action.disabled);
+      }
     }
     this.updateMeter(view);
     if (view.settle && this.settleTimer === null) this.startSettle();
@@ -102,14 +138,13 @@ export class HeadRow {
 
   /** Puts keyboard focus on the first control (used when a line control vanished). */
   focusFirst(): void {
-    this.el?.querySelector<HTMLElement>('.ll-head-row .ll-btn:not(:disabled), .ll-preface-more')?.focus({ preventScroll: true });
+    this.el?.querySelector<HTMLElement>(`${LIVE_BUTTON}:not(:disabled), .ll-preface-more`)?.focus({ preventScroll: true });
   }
 
   clear(): void {
     this.el?.remove();
     this.el = null;
     this.sig = '';
-    this.prevIds = [];
     this.stopSince = null;
     this.statusEl = null;
     if (this.settleTimer !== null) clearTimeout(this.settleTimer);
@@ -139,22 +174,30 @@ export class HeadRow {
     }
   }
 
-  private focusedSlot(): { kind: 'action'; index: number } | { kind: 'preface' } | null {
+  private focusedSlot(): Focus | null {
     const active = document.activeElement;
     if (!this.el || !active || !this.el.contains(active)) return null;
     if (active.classList.contains('ll-preface-more')) return { kind: 'preface' };
-    const buttons = Array.from(this.el.querySelectorAll('.ll-head-row .ll-btn'));
-    const index = buttons.indexOf(active);
-    return index >= 0 ? { kind: 'action', index } : null;
+    const slot = active.matches('.ll-head-row .ll-btn') ? (active as HTMLElement).dataset.slot : undefined;
+    return slot ? { kind: 'action', slot } : null;
   }
 
-  private restoreFocus(slot: { kind: 'action'; index: number } | { kind: 'preface' }): void {
+  /** Focus goes back to the same control, found by its slot. If that control is gone the first
+   *  one left takes it, except a 止める that has just taken the place of the button pressed: a
+   *  second tap or a repeating key must not land on it, so the status line holds focus then. */
+  private restoreFocus(focus: Focus, entries: Entry[], hadStop: boolean): void {
     const el = this.el;
     if (!el) return;
-    const target = slot.kind === 'preface'
+    const same = focus.kind === 'preface'
       ? el.querySelector<HTMLElement>('.ll-preface-more')
-      : el.querySelectorAll<HTMLElement>('.ll-head-row .ll-btn')[slot.index] ?? null;
-    (target ?? el.querySelector<HTMLElement>('.ll-head-row .ll-btn'))?.focus({ preventScroll: true });
+      : el.querySelector<HTMLElement>(`${LIVE_BUTTON}[data-slot="${focus.slot}"]`);
+    if (same) {
+      same.focus({ preventScroll: true });
+      return;
+    }
+    const next = entries.find((e) => e.action)?.action;
+    if (next && isStop(next.id) && !hadStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
+    else el.querySelector<HTMLElement>(LIVE_BUTTON)?.focus({ preventScroll: true });
   }
 
   /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
@@ -167,11 +210,25 @@ export class HeadRow {
     return el;
   }
 
-  private content(view: HeadView): Node[] {
-    const button = (a: HeadAction): HTMLButtonElement => {
+  private content(view: HeadView, entries: Entry[]): Node[] {
+    const button = ({ slot, label, action: a }: Entry): HTMLButtonElement => {
+      // An empty slot: the usual label keeps its width, but it cannot be seen, read, reached or pressed.
+      if (!a) {
+        return h('button', {
+          class: 'll-btn',
+          type: 'button',
+          'data-slot': slot,
+          'data-absent': '',
+          inert: true,
+          'aria-hidden': 'true',
+          tabindex: '-1',
+          style: 'visibility: hidden',
+        }, label);
+      }
       const b: HTMLButtonElement = h('button', {
         class: 'll-btn',
         type: 'button',
+        'data-slot': slot,
         disabled: Boolean(a.disabled),
         'data-primary': a.primary ? '' : null,
         onclick: (e: Event) => {
@@ -182,11 +239,11 @@ export class HeadRow {
           if (a.primary) b.disabled = true;
           a.onClick(b);
         },
-      }, a.label);
+      }, label);
       return b;
     };
-    const primary = view.actions.filter((a) => a.primary).map(button);
-    const links = view.actions.filter((a) => !a.primary).map(button);
+    const primary = entries.filter((e) => e.action?.primary).map(button);
+    const links = entries.filter((e) => !e.action?.primary).map(button);
     const p = view.progress;
     const row = h('div', { class: 'll-head-row', dataset: { tone: view.tone } },
       h('span', { class: 'll-icon', 'aria-hidden': 'true' }),

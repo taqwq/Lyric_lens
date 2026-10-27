@@ -133,7 +133,7 @@ export class NoteView {
     const cited = Boolean(match?.cited);
     return h('div', { class: 'll-note-item' },
       h('p', { class: 'll-note-head' },
-        h('span', { class: 'll-note-phrase', lang: 'en' }, `“${note.phrase}”`),
+        h('span', { class: 'll-note-phrase', lang: 'en' }, note.phrase),
         h('span', { class: 'll-note-kind' }, `〔${NOTE_LABELS[note.kind]}〕`),
         note.conjecture ? h('span', { class: 'll-note-conj' }, '〔推測〕') : null,
       ),
