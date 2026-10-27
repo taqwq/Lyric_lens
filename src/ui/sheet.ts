@@ -734,11 +734,11 @@ function mount(options: OpenSheetOptions): Active {
       const edition = song.edition !== false;
       body.append(h('section', { class: 'section' },
         h('h3', { class: 'section-title' }, COPY.song),
-        edition && parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.join(' · ')}`) : null,
+        edition && parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.length > 1 ? `${parts[0]}（${parts[1]}）` : parts[0]}`) : null,
         song.lastError
           ? h('details', { class: 'error-detail' },
             h('summary', {}, COPY.lastError),
-            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join(' · ')),
+            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join('／')),
             song.lastError.text ? h('p', { class: 'error-text' }, song.lastError.text) : null)
           : null,
         edition ? zone : null));
@@ -852,7 +852,7 @@ function mount(options: OpenSheetOptions): Active {
     zone.append(dataActions);
 
     function paintSummary(): void {
-      summaryEl.textContent = summary ? `保存した曲：${summary.count}曲 · ${formatSize(summary.bytes)}` : '保存した曲：…';
+      summaryEl.textContent = summary ? `保存した曲：${summary.count}曲（${formatSize(summary.bytes)}）` : '保存した曲：…';
       const none = !summary || summary.count === 0;
       exportButton.disabled = none || dataBusy();
       importButton.disabled = dataBusy();
