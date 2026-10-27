@@ -450,6 +450,27 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     expect(http).not.toHaveBeenCalled();
   });
 
+  it('an all-benched unusable error carries the wait that is left, so the stop knows when it can be tried again', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const now = Date.now();
+    await seedCooldowns({
+      [cooldownId(g, A)]: { until: now + 24 * 3600_000, reason: 'quota' },
+      [cooldownId(g, B)]: { until: now + 600_000, reason: 'unusable' },
+      [cooldownId(g, C)]: { until: now + 600_000, reason: 'unusable' },
+    });
+
+    const { error } = await settle(start(g));
+    expect(error?.kind).toBe('unusable');
+    expect(error?.status).toBe(200);
+    expect(error?.retryAfterMs).toBeGreaterThanOrEqual(590_000);
+    expect(error?.retryAfterMs).toBeLessThanOrEqual(600_000);
+    const stop = stopFromError(error!, now);
+    expect(stop.reason).toBe('unusable');
+    expect(stop.until).toBeGreaterThanOrEqual(now + 590_000);
+    expect(http).not.toHaveBeenCalled();
+  });
+
   it('a non-quota cooldown beats quota ones, even a longer one', async () => {
     const g = gemini();
     await seedModels(g, A, B, C);

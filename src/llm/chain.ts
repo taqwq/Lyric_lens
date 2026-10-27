@@ -454,7 +454,7 @@ export async function generateWithFallback(
     const { reason, until } = soonest.cooldown;
     let error: LLMError;
     if (reason === 'bad-request') error = new LLMError('bad-request', 'Gemini がこの依頼を受け付けませんでした。', { status: 400 });
-    else if (reason === 'unusable') error = new LLMError('unusable', 'Gemini の返事から訳を読み取れませんでした。', { status: 200 });
+    else if (reason === 'unusable') error = new LLMError('unusable', 'Gemini の返事から訳を読み取れませんでした。', { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
     else error = new LLMError('rate', '使えるモデルがすべて上限に達しています。', { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
     error.model = soonest.model;
     return error;

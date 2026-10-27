@@ -900,7 +900,7 @@ ${req.user}` : req.user }] }],
       const { reason, until } = soonest.cooldown;
       let error;
       if (reason === "bad-request") error = new LLMError("bad-request", "Gemini がこの依頼を受け付けませんでした。", { status: 400 });
-      else if (reason === "unusable") error = new LLMError("unusable", "Gemini の返事から訳を読み取れませんでした。", { status: 200 });
+      else if (reason === "unusable") error = new LLMError("unusable", "Gemini の返事から訳を読み取れませんでした。", { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
       else error = new LLMError("rate", "使えるモデルがすべて上限に達しています。", { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
       error.model = soonest.model;
       return error;
@@ -1433,6 +1433,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         return { reason: "no-model", at: now };
       case "empty":
         return { reason: "empty", at: now };
+      case "unusable":
+        return error.retryAfterMs > 6e4 ? { reason: "unusable", at: now, until: now + error.retryAfterMs } : { reason: "unusable", at: now };
       default:
         return { reason: "unusable", at: now };
     }
@@ -3957,14 +3959,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (!stop) return stop;
     if (stop.reason === "auth" && !i.keyBad) return { reason: "closed", at: stop.at };
     if (stop.reason === "quota" && i.avail.ok) return { reason: "closed", at: stop.at };
-    if ((stop.reason === "quota" || stop.reason === "rate") && stop.until && stop.until <= i.now) return { reason: "closed", at: stop.at };
+    if ((stop.reason === "quota" || stop.reason === "rate" || stop.reason === "unusable") && stop.until && stop.until <= i.now) return { reason: "closed", at: stop.at };
     return stop;
   }
   function seamText(stop, i) {
     const at = when(stop.until, i.now);
+    const long = stop.until !== void 0 && stop.until - i.now > 9e4 && at !== "";
     const text2 = {
       busy: "AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます",
-      rate: "AIの回数制限にかかりました。1分ほどおいてから続きを訳せます",
+      rate: long ? `AIの回数制限にかかりました。${at}ごろから続きを訳せます` : "AIの回数制限にかかりました。1分ほどおいてから続きを訳せます",
       quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}続きを訳せます`,
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
@@ -3973,7 +3976,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       rejected: "AIがこの先を訳しませんでした。もう一度試すと通ることがあります",
       "no-model": "AIをいま使えません。少しおいてから続きを訳せます",
       empty: "AIの返事が空のまま、ここで途切れました。もう一度試せます",
-      unusable: "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
+      unusable: long ? `AIの返事をうまく読み取れず、ここで途切れました。${at}ごろからもう一度試せます` : "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
       stopped: "ここで止めました",
       length: "長い曲なので、ここで一度区切りました",
       closed: "ここまで訳してあります",
@@ -3983,9 +3986,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
   function startFailText(stop, i) {
     const at = when(stop.until, i.now);
+    const long = stop.until !== void 0 && stop.until - i.now > 9e4 && at !== "";
     const text2 = {
       busy: "AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ",
-      rate: "AIの回数制限にかかりました。1分ほどおいてから訳せます",
+      rate: long ? `AIの回数制限にかかりました。${at}ごろから訳せます` : "AIの回数制限にかかりました。1分ほどおいてから訳せます",
       quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}訳せます`,
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
@@ -3994,7 +3998,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       rejected: "AIがこの曲を訳しませんでした。もう一度試すと通ることがあります",
       "no-model": "AIをいま使えません。少しおいてからもう一度どうぞ",
       empty: "AIから空の返事が返ってきました。もう一度試せます",
-      unusable: "AIの返事をうまく読み取れませんでした。もう一度試せます",
+      unusable: long ? `AIの返事をうまく読み取れませんでした。${at}ごろからもう一度試せます` : "AIの返事をうまく読み取れませんでした。もう一度試せます",
       length: "長い曲なので、一度では訳し切れませんでした"
     };
     return text2[stop.reason] ?? "";
@@ -4031,6 +4035,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     let disabled = Boolean(blocker);
     if (stop.reason === "rate" && stop.until && i.now < stop.until) disabled = true;
+    if (stop.reason === "unusable" && stop.until && i.now < stop.until) disabled = true;
     if (stop.reason === "network" && !i.online) disabled = true;
     return { text: text2, button: { id: "resume", label: "続きを訳す", disabled } };
   }
