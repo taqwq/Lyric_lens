@@ -117,8 +117,13 @@ export interface StopDetail {
 
 /** What is persisted per song. Lines are keyed by normalized text, so a Genius edit
  *  to one line leaves every other translation in place. */
+/** Version of the line-key normalisation (lineKey) the record's `lines` are keyed with. */
+export const KEY_VERSION = 1;
+
 export interface SongRecord {
   v: 2;
+  /** Key normalisation version; a missing value reads as 1. */
+  keyVersion?: number;
   /** Song identity: Genius song id when known, else the canonical path. */
   id: string;
   path: string;

@@ -1,5 +1,5 @@
 import { getJSON, getRaw, listKeys, remove, setJSON } from '../platform/storage';
-import { NOTE_KINDS, type LineResult, type Note, type SongContext, type SongRecord, type StopInfo, type StopReason } from '../core/types';
+import { KEY_VERSION, NOTE_KINDS, type LineResult, type Note, type SongContext, type SongRecord, type StopInfo, type StopReason } from '../core/types';
 
 const SONG_PREFIX = 'll3:s:';
 const INDEX_KEY = 'll3:index';
@@ -21,15 +21,24 @@ function isRecord(value: unknown): value is SongRecord {
   return Boolean(r) && typeof r === 'object' && r!.v === 2 && typeof r!.lines === 'object' && r!.lines !== null && !Array.isArray(r!.lines);
 }
 
+/** Brings a record's line keys up to KEY_VERSION. The entry point for a future change of
+ *  the key normalisation (re-key `lines` here, per version step); version 1 is current, so
+ *  it only fills in a missing version. */
+export function migrateRecord(record: SongRecord): SongRecord {
+  if (typeof record.keyVersion !== 'number' || !(record.keyVersion >= 1)) record.keyVersion = 1;
+  return record;
+}
+
 export async function loadSong(id: string): Promise<SongRecord | null> {
   const record = await getJSON<SongRecord | null>(songKey(id), null);
-  return isRecord(record) ? record : null;
+  return isRecord(record) ? migrateRecord(record) : null;
 }
 
 /** Saves a record and evicts the least recently used finished songs beyond the cap.
  *  A partial song is never evicted: it holds work the reader may still resume. */
 export async function saveSong(record: SongRecord): Promise<void> {
   record.updatedAt = Date.now();
+  record.keyVersion = KEY_VERSION;
   await setJSON(songKey(record.id), record);
   const index = await getJSON<Index>(INDEX_KEY, {});
   index[record.id] = [record.updatedAt, record.stop ? 1 : 0];
@@ -155,8 +164,9 @@ function cleanRecord(raw: unknown): SongRecord | null {
   const updatedAt = stamp(raw.updatedAt, now);
   const song = cleanContext(raw.song);
   const stop = cleanStop(raw.stop, updatedAt);
-  return {
+  return migrateRecord({
     v: 2,
+    ...(typeof raw.keyVersion === 'number' ? { keyVersion: raw.keyVersion } : {}),
     id: raw.id,
     path: str(raw.path),
     title: str(raw.title),
@@ -167,7 +177,7 @@ function cleanRecord(raw: unknown): SongRecord | null {
     ...(typeof raw.model === 'string' && raw.model ? { model: raw.model } : {}),
     createdAt: stamp(raw.createdAt, updatedAt),
     updatedAt,
-  };
+  });
 }
 
 /** The edition worth keeping: more translated lines first, then a finished one over a cut one,
