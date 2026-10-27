@@ -38,6 +38,7 @@
   overflow-wrap: anywhere;
   letter-spacing: .02em;
   text-spacing-trim: trim-start;
+  text-autospace: normal;
   hanging-punctuation: none;
 }
 
@@ -193,6 +194,7 @@
 }
 
 .line:last-child { margin-bottom: 0; }
+.section-lead, .line, .note, .msg { text-wrap: pretty; }
 .msg:empty { display: none; }
 .msg:not(:empty) { margin-top: 8px; }
 .msg[data-kind="error"] { color: var(--black); font-weight: 700; }
@@ -230,6 +232,10 @@
 
 .steps .link { display: inline-block; margin-top: 4px; }
 
+/* step 2's field and its helper sit under step 2's text, not at the sheet edge */
+.steps ~ .input, .steps ~ .msg, .steps ~ .note { margin-left: 36px; width: calc(100% - 36px); }
+.steps ~ .note { margin-top: 8px; margin-bottom: 24px; }
+
 /* ---------- controls ---------- */
 
 /* Text actions are underlined links, as everywhere on Genius. */
@@ -239,7 +245,7 @@
   display: inline-flex;
   align-items: center;
   margin: 0 18px 0 0;
-  min-height: 40px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -272,7 +278,7 @@
   text-decoration: none;
 }
 
-.btn[data-v="outline"] { font-weight: 700; }
+.btn[data-v="outline"] { font-weight: inherit; }
 
 .btn:disabled { color: var(--quiet); cursor: default; text-decoration: none; }
 .btn[data-v="solid"]:disabled { background: #333333; color: #FFFFFF; }
@@ -357,7 +363,7 @@
   min-width: 0;
   color: var(--black);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .status {
@@ -373,6 +379,8 @@
 .status[data-s="bad"] { font-weight: 700; }
 
 .controls { margin-top: 6px; }
+.controls .inline:has(.mask) { flex-wrap: wrap; gap: 0 18px; }
+.controls .inline:has(.mask) .mask { flex-basis: 100%; }
 
 .mask {
   flex: 1 1 auto;
@@ -390,8 +398,8 @@
 
 /* ---------- phone ---------- */
 
-.root[data-layout="phone"] .btn,
-.root[data-layout="phone"] .input { min-height: 44px; }
+.root[data-layout="phone"] .btn { min-height: 44px; }
+.root[data-layout="phone"] .input { min-height: 48px; }
 
 .root[data-layout="phone"] .btn[data-v="solid"] { width: 100%; min-height: 48px; }
 

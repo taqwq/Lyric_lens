@@ -7,7 +7,7 @@ import { memoryStorage, setJSON, setKV } from '../src/platform/storage';
 import { currentSettings, loadSettings, setApiKey } from '../src/store/settings';
 import type { SongRecord } from '../src/core/types';
 import { exportSongs, loadSong, saveSong, storageSummary } from '../src/store/songs';
-import { closeSheet, openSheet } from '../src/ui/sheet';
+import { closeSheet, modelLabel, openSheet } from '../src/ui/sheet';
 import { formatWhen } from '../src/ui/time';
 
 vi.mock('../src/llm/chain', () => ({
@@ -185,6 +185,35 @@ describe('host', () => {
     expect(panel.style.bottom).toBe('28px'); // 800 - 780 + 8
   });
 
+  it('hangs from the button’s right edge (設定 is the rightmost link), kept inside the window', () => {
+    const anchor = document.createElement('button');
+    document.body.append(anchor);
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+    const at = (left: number, right: number): void => {
+      anchor.getBoundingClientRect = () => ({ top: 100, bottom: 130, left, right, width: right - left, height: 30, x: left, y: 100, toJSON: () => ({}) });
+    };
+    const leftOf = (): string => {
+      openSheet({ mode: 'first-run', anchor });
+      const left = shadow().querySelector<HTMLElement>('.panel')!.style.left;
+      closeSheet();
+      return left;
+    };
+
+    // Room on both sides: the panel's right edge meets the button's (the left edge no longer decides).
+    at(540, 600);
+    expect(leftOf()).toBe('200px'); // 600 - 400
+    // Near the right of the window: the same rule, still inside it.
+    at(940, 1000);
+    expect(leftOf()).toBe('600px'); // 1000 - 400
+    // Past what the window can hold: clamped to the right margin (1024 - 400 - 8).
+    at(980, 1040);
+    expect(leftOf()).toBe('616px');
+    // A button near the left edge: clamped to the left margin.
+    at(20, 80);
+    expect(leftOf()).toBe('8px');
+  });
+
   it('centres on desktop without an anchor', () => {
     openSheet({ mode: 'first-run' });
     expect(shadow().querySelector('.root')!.getAttribute('data-layout')).toBe('desktop');
@@ -245,13 +274,13 @@ describe('first-run sheet', () => {
     const t = text();
     for (const line of [
       '日本語訳をはじめる',
-      'Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります',
+      'Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります',
       'キーをコピーして、下に貼り付けます',
-      'キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません',
+      'キーはこのブラウザにだけ保存され、Google以外には送られません',
       '保存してこの曲を訳す',
       '保存だけする',
     ]) expect(t).toContain(line);
-    const link = Array.from(shadow().querySelectorAll('a')).find((a) => a.textContent === 'Google AI Studio を開く')!;
+    const link = Array.from(shadow().querySelectorAll('a')).find((a) => a.textContent === 'Google AI Studioを開く')!;
     expect(link.getAttribute('href')).toBe('https://aistudio.google.com/app/apikey');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toContain('noopener');
@@ -346,7 +375,7 @@ describe('first-run sheet', () => {
     buttonNamed('保存だけする').click();
     await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
-    expect(text()).toContain('Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    expect(text()).toContain('Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
     expect(text()).not.toContain('接続を確認してください');
   });
 
@@ -365,14 +394,14 @@ describe('first-run sheet', () => {
     };
 
     type(input, 'AIzaTESTKEY0000000000000000000');
-    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
     expect(markKeyMock).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe('');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect(onClose).not.toHaveBeenCalled();
 
-    await check(new LLMError('rate', 'x', { status: 429 }), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
-    await check(new Error('boom'), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new LLMError('rate', 'x', { status: 429 }), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new Error('boom'), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
     await check(new LLMError('network', 'x'), '確かめられませんでした。接続を確認してください');
     await check(new LLMError('auth', 'x', { status: 400 }), 'このキーは使えませんでした。コピーし直してください');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
@@ -405,7 +434,7 @@ describe('settings sheet', () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
 
-    expect(shadow().querySelector('.title')!.textContent).toBe('Lyric Lens の設定');
+    expect(shadow().querySelector('.title')!.textContent).toBe('Lyric Lensの設定');
     expect(text()).toContain('翻訳に使うAI');
     expect(text()).not.toMatch(/Groq|OpenRouter|上から順に/);
 
@@ -504,7 +533,7 @@ describe('settings sheet', () => {
     modelsForMock.mockRejectedValue(new LLMError('overloaded', 'x', { status: 503 }));
     type(input, 'AIzaTESTKEY0000000000000000000');
     Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
-    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ'));
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ'));
     expect(rowFor('gemini').textContent).not.toContain('接続を確認してください');
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
@@ -552,7 +581,9 @@ describe('settings sheet', () => {
     openSheet({ mode: 'settings', song: { title: 'HUMBLE.', model: 'gemini-3.5-flash', translatedAt }, onRetranslate, onClose });
     await settingsReady();
 
-    expect(text()).toContain('2026年3月5日にgemini-3.5-flashで訳しました');
+    // The model reads as a name, not as an id.
+    expect(text()).toContain('2026年3月5日にGemini 3.5 Flashで訳しました');
+    expect(text()).not.toContain('gemini-3.5-flash');
 
     buttonNamed('この曲を訳し直す').click();
     expect(text()).toContain('今の訳を残したまま訳し直します。終わると入れ替わります');
@@ -574,7 +605,7 @@ describe('settings sheet', () => {
   it('omits the unknown part of the song line', async () => {
     openSheet({ mode: 'settings', song: { title: 'x', model: 'gemma-4' } });
     await settingsReady();
-    expect(text()).toContain('gemma-4で訳しました');
+    expect(text()).toContain('Gemma 4で訳しました');
     expect(text()).not.toContain('に訳しました');
     closeSheet();
 
@@ -683,7 +714,7 @@ describe('a rejected key', () => {
 /* ---------- saved data: 書き出す / 読み込む ---------- */
 
 describe('saved data export and import', () => {
-  const NOT_AN_EXPORT = '読み込めませんでした。Lyric Lens で書き出したファイルを選んでください';
+  const NOT_AN_EXPORT = '読み込めませんでした。Lyric Lensで書き出したファイルを選んでください';
 
   function song(id: string, lines = 2): SongRecord {
     const map: SongRecord['lines'] = {};
@@ -728,6 +759,20 @@ describe('saved data export and import', () => {
     anchorClick.mockRestore();
     delete (URL as { createObjectURL?: unknown }).createObjectURL;
     delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  it('reads top to bottom: the status line, the actions, the explanation, then the message line', async () => {
+    await saveSong(song('1'));
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    await vi.waitFor(() => expect(text()).toMatch(/1曲を保存しています（\d+ KB）/));
+    const section = Array.from(shadow().querySelectorAll<HTMLElement>('.section')).find((s) => s.querySelector('.section-title')?.textContent === '保存データ')!;
+    expect(Array.from(section.children).map((c) => c.className || c.tagName.toLowerCase())).toEqual(['section-title', 'line', 'zone', 'section-lead', 'msg', 'input']);
+    const [, status, actions, lead, message] = Array.from(section.children);
+    expect(status!.textContent).toMatch(/^1曲を保存しています（\d+ KB）$/);
+    expect(Array.from(actions!.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['書き出す', '読み込む', 'すべて消す']);
+    expect(lead!.textContent).toBe('書き出したファイルは、別の端末でも読み込めます');
+    expect(message!.textContent).toBe('');
   });
 
   it('shows 書き出す, 読み込む and すべて消す, with only 読み込む available when nothing is saved', async () => {
@@ -885,5 +930,30 @@ describe('saved data export and import', () => {
     expect(hasButton('読み込む')).toBe(true);
     expect(buttonNamed('書き出す').disabled).toBe(true);
     expect(buttonNamed('読み込む').disabled).toBe(false);
+  });
+});
+
+/* ---------- model names ---------- */
+
+describe('modelLabel', () => {
+  it('turns a model id into the name a reader says', () => {
+    expect(modelLabel('gemini-3.8-flash')).toBe('Gemini 3.8 Flash');
+    expect(modelLabel('gemini-3-flash-preview')).toBe('Gemini 3 Flash Preview');
+    expect(modelLabel('gemini-3.5-flash-lite')).toBe('Gemini 3.5 Flash-Lite');
+    expect(modelLabel('gemma-4-31b-it')).toBe('Gemma 4 31B IT');
+  });
+
+  it('reads the other ids of the same kind the same way', () => {
+    expect(modelLabel('gemini-2.5-flash')).toBe('Gemini 2.5 Flash');
+    expect(modelLabel('gemini-3.1-flash-lite')).toBe('Gemini 3.1 Flash-Lite');
+    expect(modelLabel('gemini-2.5-pro')).toBe('Gemini 2.5 Pro');
+    expect(modelLabel('gemma-3-27b-it')).toBe('Gemma 3 27B IT');
+    expect(modelLabel('gemma-4')).toBe('Gemma 4');
+  });
+
+  it('leaves an id it does not know exactly as it is', () => {
+    for (const id of ['', 'm', 'gemini-test', 'gemini-flash-latest', 'gemma-3n-e4b-it', 'Gemini-3-Flash', 'gpt-4o', 'models/gemini-3-flash']) {
+      expect(modelLabel(id)).toBe(id);
+    }
   });
 });

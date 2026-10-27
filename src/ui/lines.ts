@@ -1,7 +1,8 @@
 /*
  * The ruled paper: one node under every lyric line (docs/DESIGN.md §2 row 3). A node is an
- * empty slot, the next slot (breathing), a filled translation, a gap, or the seam where an
- * interrupted translation stopped. Rendering is idempotent: nodes are reused in place.
+ * empty slot, the next slot (breathing), a filled translation or a gap. Where an interrupted
+ * translation stopped, one more node, the seam, sits between the last translated line and the
+ * plain English that follows. Rendering is idempotent: nodes are reused in place.
  */
 import { splitAdlibs } from '../core/adlib';
 import { NOTE_LABELS, type SongRecord } from '../core/types';
@@ -22,7 +23,8 @@ export interface LinesInput {
   gaps: boolean;
   /** The first empty slot breathes while a request is in flight. */
   breathing: boolean;
-  /** Replaces the first missing line's slot. */
+  /** The stop point: drawn after the last translated line; from the first missing line on,
+   *  nothing is drawn (the English stays plain until the reader resumes). */
   seam: SeamView | null;
   /** Fade newly filled lines in (never on a cached render). */
   animate: boolean;
@@ -34,7 +36,7 @@ export interface LinesInput {
   onMarkHover?: (index: number, on: boolean) => void;
 }
 
-type State = 'empty' | 'next' | 'filled' | 'gap' | 'seam';
+type State = 'empty' | 'next' | 'filled' | 'gap';
 
 /** Within the viewport ±600 px: only those slots are worth animating. */
 function nearViewport(anchor: Node): boolean {
@@ -53,10 +55,19 @@ function insertAfter(anchor: Node, el: Node): boolean {
 export class LineRenderer {
   private readonly nodes = new Map<number, HTMLElement>();
   private readonly sigs = new Map<number, string>();
+  /** The seam's own node (it belongs to no line), what it shows, and the line whose anchor it follows. */
+  private seam: HTMLElement | null = null;
+  private seamSig = '';
+  private seamAfter = -1;
   private page: PageSong | null = null;
 
   nodeFor(index: number): HTMLElement | undefined {
     return this.nodes.get(index);
+  }
+
+  /** The stop point's node while one is shown (it belongs to no line). */
+  seamNode(): HTMLElement | null {
+    return this.seam;
   }
 
   render(input: LinesInput): void {
@@ -79,14 +90,15 @@ export class LineRenderer {
     page.source.lines.forEach((line, i) => { if (line.occurrence === 0 && filled(i)) lastFilled = i; });
     let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
     if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
+    // With a seam to show, writing stopped at the frontier: from there on the page is plain
+    // English, even where a repeat is already translated, until the reader resumes.
+    const stopAt = input.seam && frontier >= 0 ? frontier : -1;
     page.source.lines.forEach((line, i) => {
       const anchor = page.anchors[i];
       const result = record?.lines[line.key];
       let state: State | null = null;
-      if (result?.ja) state = 'filled';
-      else if (input.seam && i === frontier) state = 'seam';
-      // Below the seam nothing is drawn: the page stays quiet until the reader resumes.
-      else if (input.seam && frontier >= 0 && i > frontier) state = null;
+      if (stopAt >= 0 && i >= stopAt) state = null;
+      else if (result?.ja) state = 'filled';
       else if (input.gaps) state = 'gap';
       else if (input.slots) state = i < frontier && lastFilled > i ? 'gap' : input.breathing && i === frontier ? 'next' : 'empty';
 
@@ -103,8 +115,7 @@ export class LineRenderer {
       // `open` is deliberately not part of the signature: rebuilding would destroy the
       // focused ※ button. aria-expanded is synced in place below.
       const sig = [state, line.key, result?.ja ?? '', repeat, notes.length, notes[0]?.phrase ?? '',
-        notes.map((n) => n.kind).join(','),
-        state === 'seam' ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ''].join('\u0001');
+        notes.map((n) => n.kind).join(',')].join('\u0001');
 
       let el = current;
       if (!el) {
@@ -133,8 +144,6 @@ export class LineRenderer {
         this.sigs.set(i, sig);
       }
       el.querySelector('.ll-mark')?.setAttribute('aria-expanded', String(open));
-      const seamButton = state === 'seam' ? el.querySelector<HTMLButtonElement>('.ll-seam .ll-btn') : null;
-      if (seamButton) seamButton.disabled = Boolean(input.seam?.button.disabled);
       if (!el.isConnected || el.previousSibling !== anchor) {
         // On a stale page the anchor may be detached: keep the node, the next refresh
         // (triggered by damaged()) moves it to the new anchor.
@@ -143,32 +152,70 @@ export class LineRenderer {
       this.nodes.set(i, el);
     });
 
+    this.renderSeam(input.seam, page, stopAt);
+
     // Remove our nodes that no line owns any more (Genius re-render, lyric edits).
     const live = new Set(this.nodes.values());
+    if (this.seam) live.add(this.seam);
     for (const container of page.containers) {
       container.querySelectorAll<HTMLElement>('.ll-line').forEach((n) => { if (!live.has(n)) n.remove(); });
     }
+  }
+
+  /** The seam is its own node, reused while it stays: right after the last translated line
+   *  (past the note open under it) so the page reads [English][Japanese][seam][English, plain].
+   *  If that line has no node it follows the line's anchor; with nothing translated before the
+   *  stop (stopAt 0) it follows the first line's anchor. */
+  private renderSeam(seam: SeamView | null, page: PageSong, stopAt: number): void {
+    if (!seam || stopAt < 0) {
+      this.seam?.remove();
+      this.seam = null;
+      this.seamSig = '';
+      this.seamAfter = -1;
+      return;
+    }
+    let el = this.seam;
+    if (!el) {
+      el = h('span', { class: 'll-line', lang: 'ja', 'data-state': 'seam', 'data-exclude-from-selection': 'true' });
+      isolateClicks(el);
+      this.seam = el;
+    }
+    const sig = `${seam.text}|${seam.button.label}|${seam.button.disabled}`;
+    if (this.seamSig !== sig) {
+      el.replaceChildren(this.seamContent(seam));
+      this.seamSig = sig;
+    }
+    const button = el.querySelector<HTMLButtonElement>('.ll-seam .ll-btn');
+    if (button) button.disabled = Boolean(seam.button.disabled);
+
+    const last = Math.max(stopAt - 1, 0);
+    this.seamAfter = last;
+    const lineNode = this.nodes.get(last);
+    let after: Node | undefined = lineNode ?? page.anchors[last];
+    while (lineNode && after?.nextSibling instanceof Element && after.nextSibling.classList.contains('ll-note')) after = after.nextSibling;
+    // A detached anchor (stale page): keep the node, damaged() has the next refresh move it.
+    if (after && (!el.isConnected || el.previousSibling !== after)) insertAfter(after, el);
+  }
+
+  private seamContent(seam: SeamView): HTMLElement {
+    const button: HTMLButtonElement = h('button', {
+      class: 'll-btn',
+      type: 'button',
+      disabled: Boolean(seam.button.disabled),
+      onclick: (e: Event) => {
+        e.preventDefault();
+        if (button.disabled) return;
+        button.disabled = true; // a tap sends at most one request
+        seam.button.onClick();
+      },
+    }, seam.button.label);
+    return h('span', { class: 'll-seam' }, h('span', { class: 'll-seam-text' }, seam.text), button);
   }
 
   private content(state: State, index: number, ja: string, noteCount: number, input: LinesInput): Node[] {
     if (state === 'empty') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
     if (state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' }, h('span', { class: 'll-pen' }))];
     if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'この行は訳せていません' }, '――')];
-    if (state === 'seam' && input.seam) {
-      const { seam } = input;
-      const button: HTMLButtonElement = h('button', {
-        class: 'll-btn',
-        type: 'button',
-        disabled: Boolean(seam.button.disabled),
-        onclick: (e: Event) => {
-          e.preventDefault();
-          if (button.disabled) return;
-          button.disabled = true; // a tap sends at most one request
-          seam.button.onClick();
-        },
-      }, seam.button.label);
-      return [h('span', { class: 'll-seam' }, h('span', { class: 'll-seam-text' }, seam.text), button)];
-    }
     // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
     const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');
     const out: Node[] = [h('span', { class: 'll-ja' }, main, tail ? h('span', { class: 'll-adlib' }, tail) : null)];
@@ -208,13 +255,16 @@ export class LineRenderer {
     for (const [i, el] of this.nodes) {
       if (!el.isConnected || !this.page.anchors[i]?.isConnected) return true;
     }
-    return false;
+    return Boolean(this.seam && (!this.seam.isConnected || !this.page.anchors[this.seamAfter]?.isConnected));
   }
 
   clear(): void {
     this.nodes.forEach((el) => el.remove());
     this.nodes.clear();
     this.sigs.clear();
+    this.seam = null;
+    this.seamSig = '';
+    this.seamAfter = -1;
     document.querySelectorAll('.ll-line').forEach((el) => el.remove());
     this.page = null;
   }
