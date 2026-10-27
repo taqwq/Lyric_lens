@@ -3948,7 +3948,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   function seamFor(stop, i, blocker) {
     const text2 = seamText(stop, i);
     if (stop.reason === "auth") return { text: text2, button: { id: "settings", label: "設定を開く" } };
-    if (blocker && stop.reason !== "quota") return { text: `${text2.split("。")[0]}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };
+    if (blocker && stop.reason !== "quota") {
+      const transient = stop.reason === "rate" || stop.reason === "busy" || stop.reason === "no-model";
+      const quotaBlocker = !i.otherSong;
+      const head = transient && quotaBlocker ? "ここで途切れました" : text2.split("。")[0];
+      return { text: `${head}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };
+    }
     let disabled = Boolean(blocker);
     if (stop.reason === "rate" && stop.until && i.now < stop.until) disabled = true;
     if (stop.reason === "network" && !i.online) disabled = true;
