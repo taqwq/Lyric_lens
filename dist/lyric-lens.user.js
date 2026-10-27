@@ -565,7 +565,7 @@ ${req.user}` : req.user }] }],
         headers: this.headers(),
         body: JSON.stringify(body),
         signal: req.signal,
-        firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS,
+        firstByteTimeoutMs: req.firstTextTimeoutMs ?? FIRST_TEXT_TIMEOUT_MS,
         idleTimeoutMs: 9e4,
         onText: (chunk) => {
           for (const payload of sse.feed(chunk)) handle(payload);
@@ -705,6 +705,39 @@ ${req.user}` : req.user }] }],
     const table = await loadHealth();
     return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(apiKey, id)]])));
   }
+  var FLASH_BUDGET_MS = 2e4;
+  var FLASH_MIN_ATTEMPT_MS = 8e3;
+  var FLASH_DEGRADED_MS = 10 * 6e4;
+  var FLASH_DEGRADED_KEY = "ll3:flashdegraded";
+  async function loadFlashDegraded() {
+    try {
+      const all = await getJSON(FLASH_DEGRADED_KEY, {});
+      if (!all || typeof all !== "object" || Array.isArray(all)) return {};
+      const now = Date.now();
+      for (const [k, until] of Object.entries(all)) if (!(until > now)) delete all[k];
+      return all;
+    } catch {
+      return {};
+    }
+  }
+  async function setFlashDegraded(apiKey, until) {
+    try {
+      const table = await loadFlashDegraded();
+      const id = cooldownId(apiKey, "");
+      if (until === null) {
+        if (!(id in table)) return;
+        delete table[id];
+      } else {
+        table[id] = until;
+      }
+      await setJSON(FLASH_DEGRADED_KEY, table);
+    } catch {
+    }
+  }
+  function flashBehindLite(ids) {
+    const tier = (t) => ids.filter((id) => modelTier(id) === t);
+    return [...tier(1), ...tier(0), ...tier(2)];
+  }
   var BAD_KEY_PREFIX = "ll3:badkey:";
   async function keyStatus(apiKey) {
     if (!apiKey.trim()) return { kind: "missing" };
@@ -759,6 +792,11 @@ ${req.user}` : req.user }] }],
     "gemma-4-31b-it"
   ];
   async function candidateModels(apiKey, signal) {
+    const ordered = await rankedCandidates(apiKey, signal);
+    const until = (await loadFlashDegraded())[cooldownId(apiKey, "")];
+    return until !== void 0 && until > Date.now() ? flashBehindLite(ordered) : ordered;
+  }
+  async function rankedCandidates(apiKey, signal) {
     try {
       const models = await modelsFor(apiKey, { signal });
       const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
@@ -775,7 +813,7 @@ ${req.user}` : req.user }] }],
         if (k.startsWith(MODELS_KEY) && !k.startsWith(MODELS_KEY + keep)) await remove(k);
         else if (k.startsWith(BAD_KEY_PREFIX) && k !== BAD_KEY_PREFIX + keyTag(apiKey)) await remove(k);
       }
-      for (const key of [COOLDOWN_KEY, HEALTH_KEY]) {
+      for (const key of [COOLDOWN_KEY, HEALTH_KEY, FLASH_DEGRADED_KEY]) {
         const table = await getJSON(key, null);
         if (!table || typeof table !== "object" || Array.isArray(table)) continue;
         const ids = Object.keys(table);
@@ -816,6 +854,7 @@ ${req.user}` : req.user }] }],
   async function generateWithFallback(apiKey, request, options = {}) {
     const { signal, onStatus, onlyModels } = options;
     if (!apiKey.trim()) throw new LLMError("auth", "APIキーが設定されていません。");
+    const startedCallAt = Date.now();
     const cooldowns = await loadCooldowns();
     const errors = [];
     let models;
@@ -868,6 +907,19 @@ ${req.user}` : req.user }] }],
     };
     let keyRejected = false;
     let silentInARow = 0;
+    let flashSpoke = false;
+    let flashTried = false;
+    let flashNoted = false;
+    const firstTextTimeout = (model, handOver) => {
+      if (onlyModels?.length || flashSpoke || !handOver || modelTier(model) !== 0) return FIRST_TEXT_TIMEOUT_MS;
+      const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt);
+      return left < FLASH_MIN_ATTEMPT_MS ? null : Math.min(left, FIRST_TEXT_TIMEOUT_MS);
+    };
+    const noteFlashDegraded = async () => {
+      if (flashNoted) return;
+      flashNoted = true;
+      await setFlashDegraded(apiKey, Date.now() + FLASH_DEGRADED_MS);
+    };
     for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
       if (pass > 0) {
         const wait = BUSY_PASS_WAITS_MS[pass - 1];
@@ -905,12 +957,22 @@ ${req.user}` : req.user }] }],
       }
       order.push(...busyLast);
       let blocked = 0;
-      for (const model of order) {
+      for (const [index, model] of order.entries()) {
         let error = null;
+        let budgetCut = false;
+        const handOver = order.slice(index + 1).some((m) => modelTier(m) !== 0);
+        const flash = modelTier(model) === 0 && !onlyModels?.length;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
+          const firstTextTimeoutMs = firstTextTimeout(model, handOver);
+          if (firstTextTimeoutMs === null) {
+            if (flashTried) await noteFlashDegraded();
+            break;
+          }
           onStatus?.(`Google Gemini · ${shortModel(model)}`);
           options.onAttempt?.();
           let produced = false;
+          budgetCut = false;
+          if (flash) flashTried = true;
           const startedAt = Date.now();
           let firstTextMs = null;
           try {
@@ -918,8 +980,10 @@ ${req.user}` : req.user }] }],
               ...request,
               model,
               signal,
+              firstTextTimeoutMs,
               onText: (chunk) => {
                 if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
+                if (flash && chunk) flashSpoke = true;
                 const useful = request.onText(chunk);
                 if (useful === void 0 || useful) produced = true;
               }
@@ -931,6 +995,7 @@ ${req.user}` : req.user }] }],
               await setJSON(COOLDOWN_KEY, cooldowns);
             }
             await noteHealth(apiKey, model, { ms: firstTextMs ?? Date.now() - startedAt });
+            if (flash) await setFlashDegraded(apiKey, null);
             return { ...result, model };
           } catch (raw) {
             if (!(raw instanceof LLMError)) throw raw;
@@ -941,6 +1006,7 @@ ${req.user}` : req.user }] }],
               await remember(model, error);
               return { finish: "unknown", finishDetail: error.kind, text: "", model, error };
             }
+            budgetCut = error.kind === "timeout" && firstTextMs === null && firstTextTimeoutMs < FIRST_TEXT_TIMEOUT_MS;
             if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
               for (let left = Math.ceil((error.retryAfterMs + 500) / 1e3); left > 0; left -= 1) {
                 onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
@@ -959,7 +1025,8 @@ ${req.user}` : req.user }] }],
         if (!error) continue;
         passErrors.push(error);
         await remember(model, error);
-        silentInARow = error.kind === "timeout" ? silentInARow + 1 : 0;
+        if (budgetCut) await noteFlashDegraded();
+        else silentInARow = error.kind === "timeout" ? silentInARow + 1 : 0;
         if (silentInARow >= MAX_SILENT_IN_A_ROW) throw error;
         if (error.kind === "overloaded") busyNow.add(cooldownId(apiKey, model));
         else busyNow.delete(cooldownId(apiKey, model));

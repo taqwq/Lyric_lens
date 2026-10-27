@@ -4,6 +4,8 @@ export interface GenerateRequest {
   model: string;
   maxOutputTokens: number;
   signal?: AbortSignal;
+  /** How long this attempt may stay silent before its first text; the provider's own default when unset. */
+  firstTextTimeoutMs?: number;
   /** Receives visible answer text incrementally (never reasoning/thought text). Returns
    *  true once the text so far contains usable output (the chain then keeps this attempt
    *  even if the stream breaks later). */

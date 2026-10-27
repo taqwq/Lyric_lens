@@ -24,7 +24,8 @@ export function rankGeminiModel(id: string): number {
 }
 
 /** How long a model may stay silent before its first text. A model that hangs (measured: 90 s
- *  and more) should hand over to the next one sooner. */
+ *  and more) should hand over to the next one sooner. The chain may shorten it per attempt
+ *  (the Flash budget); this is also the longest it ever allows. */
 export const FIRST_TEXT_TIMEOUT_MS = 30_000;
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com';
@@ -120,7 +121,7 @@ export class GeminiProvider implements Provider {
       headers: this.headers(),
       body: JSON.stringify(body),
       signal: req.signal,
-      firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS,
+      firstByteTimeoutMs: req.firstTextTimeoutMs ?? FIRST_TEXT_TIMEOUT_MS,
       idleTimeoutMs: 90_000,
       onText: (chunk) => { for (const payload of sse.feed(chunk)) handle(payload); },
     });

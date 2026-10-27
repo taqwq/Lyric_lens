@@ -6,7 +6,7 @@
  */
 import { getJSON, listKeys, remove, setJSON } from '../platform/storage';
 import { LLMError, errorDetail, type LLMErrorKind } from './errors';
-import { GEMINI_BASE, GeminiProvider, rankGeminiModel } from './gemini';
+import { FIRST_TEXT_TIMEOUT_MS, GEMINI_BASE, GeminiProvider, rankGeminiModel } from './gemini';
 import type { GenerateRequest, GenerateResult, ModelInfo } from './types';
 
 const COOLDOWN_KEY = 'll3:cooldowns';
@@ -184,6 +184,53 @@ async function orderedByHealth(apiKey: string, ids: string[]): Promise<string[]>
   return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(apiKey, id)]])));
 }
 
+/* ---------- Flash time budget ---------- */
+
+/** Flash gets this long, from the start of a call, to put out its first line; then Flash-Lite
+ *  takes over. Measured live: Flash flaps (503s, 30 s silences) while Flash-Lite answers in ~1.5 s. */
+export const FLASH_BUDGET_MS = 20_000;
+/** A Flash attempt with less budget left than this is not started: a 503 or a silence would eat it. */
+const FLASH_MIN_ATTEMPT_MS = 8_000;
+/** After a call left Flash for lack of time, the calls of the next while put Flash-Lite first. */
+const FLASH_DEGRADED_MS = 10 * 60_000;
+/** `flashDegradedUntil` (epoch ms) per key, keyed like the health table. */
+const FLASH_DEGRADED_KEY = 'll3:flashdegraded';
+type FlashDegraded = Record<string, number>;
+
+async function loadFlashDegraded(): Promise<FlashDegraded> {
+  try {
+    const all = await getJSON<FlashDegraded>(FLASH_DEGRADED_KEY, {});
+    if (!all || typeof all !== 'object' || Array.isArray(all)) return {};
+    const now = Date.now();
+    for (const [k, until] of Object.entries(all)) if (!(until > now)) delete all[k];
+    return all;
+  } catch {
+    return {};
+  }
+}
+
+/** Remembers (`until`) or clears (null) that Flash was too slow for this key. Advice only: a
+ *  storage failure must never turn a good answer into an error. */
+async function setFlashDegraded(apiKey: string, until: number | null): Promise<void> {
+  try {
+    const table = await loadFlashDegraded();
+    const id = cooldownId(apiKey, '');
+    if (until === null) {
+      if (!(id in table)) return;
+      delete table[id];
+    } else {
+      table[id] = until;
+    }
+    await setJSON(FLASH_DEGRADED_KEY, table);
+  } catch { /* advice only */ }
+}
+
+/** Flash-Lite first, then Flash, then Gemma; every tier keeps its given order. */
+export function flashBehindLite(ids: string[]): string[] {
+  const tier = (t: number) => ids.filter((id) => modelTier(id) === t);
+  return [...tier(1), ...tier(0), ...tier(2)];
+}
+
 const BAD_KEY_PREFIX = 'll3:badkey:';
 
 export type KeyStatus = { kind: 'missing' } | { kind: 'bad' } | { kind: 'resting'; until: number } | { kind: 'ok' };
@@ -262,7 +309,14 @@ const FALLBACK_GEMINI = [
   'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemma-4-31b-it',
 ];
 
+/** The ranked and health-ordered candidates; while Flash is remembered as too slow, Flash-Lite goes first. */
 async function candidateModels(apiKey: string, signal?: AbortSignal): Promise<string[]> {
+  const ordered = await rankedCandidates(apiKey, signal);
+  const until = (await loadFlashDegraded())[cooldownId(apiKey, '')];
+  return until !== undefined && until > Date.now() ? flashBehindLite(ordered) : ordered;
+}
+
+async function rankedCandidates(apiKey: string, signal?: AbortSignal): Promise<string[]> {
   try {
     const models = await modelsFor(apiKey, { signal });
     const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
@@ -283,7 +337,7 @@ export async function cleanOtherProviders(apiKey: string): Promise<void> {
       if (k.startsWith(MODELS_KEY) && !k.startsWith(MODELS_KEY + keep)) await remove(k);
       else if (k.startsWith(BAD_KEY_PREFIX) && k !== BAD_KEY_PREFIX + keyTag(apiKey)) await remove(k);
     }
-    for (const key of [COOLDOWN_KEY, HEALTH_KEY]) {
+    for (const key of [COOLDOWN_KEY, HEALTH_KEY, FLASH_DEGRADED_KEY]) {
       const table = await getJSON<Record<string, unknown> | null>(key, null);
       if (!table || typeof table !== 'object' || Array.isArray(table)) continue;
       const ids = Object.keys(table);
@@ -339,11 +393,12 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export async function generateWithFallback(
   apiKey: string,
-  request: Omit<GenerateRequest, 'model' | 'signal'>,
+  request: Omit<GenerateRequest, 'model' | 'signal' | 'firstTextTimeoutMs'>,
   options: ChainOptions = {},
 ): Promise<ChainResult> {
   const { signal, onStatus, onlyModels } = options;
   if (!apiKey.trim()) throw new LLMError('auth', 'APIキーが設定されていません。');
+  const startedCallAt = Date.now();
 
   const cooldowns = await loadCooldowns();
   const errors: LLMError[] = [];
@@ -406,8 +461,30 @@ export async function generateWithFallback(
   };
 
   let keyRejected = false;
-  /** Silent models in a row: two mean Gemini itself is not answering, and each costs a 30 s wait. */
+  /** Silent models in a row: two mean Gemini itself is not answering, and each costs a 30 s wait.
+   *  Only full-length silences count; one cut short by the Flash budget says nothing about Gemini. */
   let silentInARow = 0;
+  /** Flash has put out text: the budget only waits for a first line, so from then on it is moot. */
+  let flashSpoke = false;
+  /** A Flash attempt was made in this call (a budget skip is only Flash's fault after that). */
+  let flashTried = false;
+  let flashNoted = false;
+
+  /** How long `model` may stay silent before its first text, or null when it is Flash with less
+   *  than FLASH_MIN_ATTEMPT_MS of the budget left. The budget needs somewhere to hand over to
+   *  (`handOver`: a Flash-Lite or Gemma candidate behind it), and never applies to a pinned model
+   *  or once Flash has started writing. */
+  const firstTextTimeout = (model: string, handOver: boolean): number | null => {
+    if (onlyModels?.length || flashSpoke || !handOver || modelTier(model) !== 0) return FIRST_TEXT_TIMEOUT_MS;
+    const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt);
+    return left < FLASH_MIN_ATTEMPT_MS ? null : Math.min(left, FIRST_TEXT_TIMEOUT_MS);
+  };
+  /** Flash was too slow: the next calls put Flash-Lite first for a while. Written once per call. */
+  const noteFlashDegraded = async () => {
+    if (flashNoted) return;
+    flashNoted = true;
+    await setFlashDegraded(apiKey, Date.now() + FLASH_DEGRADED_MS);
+  };
   for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
     if (pass > 0) {
       const wait = BUSY_PASS_WAITS_MS[pass - 1]!;
@@ -449,12 +526,23 @@ export async function generateWithFallback(
     order.push(...busyLast);
 
     let blocked = 0;
-    for (const model of order) {
+    for (const [index, model] of order.entries()) {
       let error: LLMError | null = null;
+      let budgetCut = false;
+      const handOver = order.slice(index + 1).some((m) => modelTier(m) !== 0);
+      const flash = modelTier(model) === 0 && !onlyModels?.length;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const firstTextTimeoutMs = firstTextTimeout(model, handOver);
+        if (firstTextTimeoutMs === null) {
+          // No Flash time left: this model and the Flash models after it are passed over.
+          if (flashTried) await noteFlashDegraded();
+          break;
+        }
         onStatus?.(`Google Gemini · ${shortModel(model)}`);
         options.onAttempt?.();
         let produced = false;
+        budgetCut = false;
+        if (flash) flashTried = true;
         const startedAt = Date.now();
         let firstTextMs: number | null = null;
         try {
@@ -462,8 +550,10 @@ export async function generateWithFallback(
             ...request,
             model,
             signal,
+            firstTextTimeoutMs,
             onText: (chunk) => {
               if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
+              if (flash && chunk) flashSpoke = true;
               // Without a verdict from the consumer, any text counts as output.
               const useful = request.onText(chunk);
               if (useful === undefined || useful) produced = true;
@@ -477,6 +567,8 @@ export async function generateWithFallback(
           if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
           // A body that only arrived whole (some managers) has no earlier first text than its end.
           await noteHealth(apiKey, model, { ms: firstTextMs ?? Date.now() - startedAt });
+          // Flash answers again: no reason left to keep it behind Flash-Lite.
+          if (flash) await setFlashDegraded(apiKey, null);
           return { ...result, model };
         } catch (raw) {
           if (!(raw instanceof LLMError)) throw raw;
@@ -489,6 +581,8 @@ export async function generateWithFallback(
             await remember(model, error);
             return { finish: 'unknown', finishDetail: error.kind, text: '', model, error };
           }
+          // Silent for a shortened first-text timeout: the budget ended it, not a full 30 s of silence.
+          budgetCut = error.kind === 'timeout' && firstTextMs === null && firstTextTimeoutMs < FIRST_TEXT_TIMEOUT_MS;
           if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
             for (let left = Math.ceil((error.retryAfterMs + 500) / 1000); left > 0; left -= 1) {
               onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
@@ -508,7 +602,8 @@ export async function generateWithFallback(
       if (!error) continue;
       passErrors.push(error);
       await remember(model, error);
-      silentInARow = error.kind === 'timeout' ? silentInARow + 1 : 0;
+      if (budgetCut) await noteFlashDegraded();
+      else silentInARow = error.kind === 'timeout' ? silentInARow + 1 : 0;
       if (silentInARow >= MAX_SILENT_IN_A_ROW) throw error;
       if (error.kind === 'overloaded') busyNow.add(cooldownId(apiKey, model));
       else busyNow.delete(cooldownId(apiKey, model));
