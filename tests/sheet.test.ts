@@ -344,7 +344,37 @@ describe('first-run sheet', () => {
     buttonNamed('保存だけする').click();
     await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
-    expect(text()).toContain('確かめられませんでした。接続を確認してください');
+    expect(text()).toContain('Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    expect(text()).not.toContain('接続を確認してください');
+  });
+
+  it('a Google-side failure says Google is busy, not that the connection is bad, and saves nothing', async () => {
+    const onClose = vi.fn();
+    openSheet({ mode: 'first-run', onClose });
+    const input = shadow().querySelector('input')!;
+    const message = (): string => shadow().querySelector('.msg')!.textContent ?? '';
+    const check = async (error: unknown, expected: string): Promise<void> => {
+      modelsForMock.mockReset();
+      modelsForMock.mockRejectedValue(error);
+      buttonNamed('保存だけする').click();
+      await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
+      expect(message()).toBe(expected);
+    };
+
+    type(input, 'AIzaTESTKEY0000000000000000000');
+    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    expect(markKeyMock).not.toHaveBeenCalled();
+    expect((await loadSettings()).apiKey).toBe('');
+    expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
+    expect(onClose).not.toHaveBeenCalled();
+
+    await check(new LLMError('rate', 'x', { status: 429 }), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new Error('boom'), 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new LLMError('network', 'x'), '確かめられませんでした。接続を確認してください');
+    await check(new LLMError('auth', 'x', { status: 400 }), 'このキーは使えませんでした。コピーし直してください');
+    expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
+    expect((await loadSettings()).apiKey).toBe('');
   });
 
   it('does not save when the sheet is closed while the key is being checked', async () => {
@@ -459,6 +489,20 @@ describe('settings sheet', () => {
     save();
     await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('確かめられませんでした。接続を確認してください'));
     expect(rowFor('gemini').querySelector('input')).toBe(input);
+    expect((await loadSettings()).apiKey).toBe('');
+  });
+
+  it('a Google-side failure (503) shows the busy message in the row, keeps the field and saves nothing', async () => {
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    const input = rowFor('gemini').querySelector('input')!;
+    modelsForMock.mockRejectedValue(new LLMError('overloaded', 'x', { status: 503 }));
+    type(input, 'AIzaTESTKEY0000000000000000000');
+    Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ'));
+    expect(rowFor('gemini').textContent).not.toContain('接続を確認してください');
+    expect(rowFor('gemini').querySelector('input')).toBe(input);
+    expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect((await loadSettings()).apiKey).toBe('');
   });
 

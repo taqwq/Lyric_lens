@@ -3109,6 +3109,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     checking: "確かめています…",
     badKey: "このキーは使えませんでした。コピーし直してください",
     network: "確かめられませんでした。接続を確認してください",
+    busyCheck: "Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ",
     settingsTitle: "Lyric Lens の設定",
     close: "閉じる",
     services: "翻訳に使うAI",
@@ -3458,7 +3459,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         return "ok";
       } catch (error) {
         if (isAborted(error)) return "aborted";
-        return isAuthError(error) ? "auth" : "network";
+        if (isAuthError(error)) return "auth";
+        return error instanceof LLMError && error.kind === "network" ? "network" : "busy";
       }
     }
     function askInline(zone, trigger, spec) {
@@ -3530,7 +3532,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         if (verdict !== "ok") {
           setBusy(false);
           input.setAttribute("aria-invalid", "true");
-          say(verdict === "auth" ? COPY.badKey : COPY.network, "error");
+          say(verdict === "auth" ? COPY.badKey : verdict === "busy" ? COPY.busyCheck : COPY.network, "error");
           focusEl(input);
           return;
         }
@@ -3633,7 +3635,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         if (verdict !== "ok") {
           row.busy = false;
           row.kind = verdict === "auth" ? "bad" : "missing";
-          row.message = verdict === "auth" ? COPY.badKey : COPY.network;
+          row.message = verdict === "auth" ? COPY.badKey : verdict === "busy" ? COPY.busyCheck : COPY.network;
           paintRow(row);
           focusEl(row.input);
           return;

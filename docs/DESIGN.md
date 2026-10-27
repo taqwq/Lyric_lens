@@ -137,6 +137,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - While checking: `確かめています…`
 - Bad key: `このキーは使えませんでした。コピーし直してください`
 - Network: `確かめられませんでした。接続を確認してください`
+- Google busy or failing (503, 429, timeout): `Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ`
 
 **Settings sheet**
 - Title: `Lyric Lens の設定` · `閉じる`
