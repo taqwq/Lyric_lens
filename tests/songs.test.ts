@@ -267,7 +267,7 @@ describe('exportSongs', () => {
   });
 
   it('keeps the newer stop reasons through a save and a load', async () => {
-    for (const reason of ['rejected', 'no-model', 'empty'] as const) {
+    for (const reason of ['rejected', 'no-model', 'empty', 'silent'] as const) {
       await saveSong(rec(reason, { stop: { reason, at: 5 } }));
       expect((await loadSong(reason))!.stop?.reason).toBe(reason);
     }

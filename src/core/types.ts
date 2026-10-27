@@ -97,7 +97,7 @@ export interface SongSource {
 
 /** Why a song stopped before every line was translated (docs/DESIGN.md §3, seams). */
 export type StopReason =
-  | 'busy' | 'rate' | 'quota' | 'auth' | 'blocked' | 'network'
+  | 'busy' | 'rate' | 'quota' | 'auth' | 'blocked' | 'network' | 'silent'
   | 'rejected' | 'no-model' | 'empty' | 'unusable' | 'stopped' | 'length' | 'closed' | 'gaps';
 
 export interface StopInfo {

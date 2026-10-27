@@ -502,7 +502,7 @@ describe('translateSong: errors become a stop, never an exception', () => {
   });
 
   it('an error after partial output keeps the lines and maps the stop from the error', async () => {
-    const cases: Array<[LLMErrorKind, string]> = [['network', 'network'], ['overloaded', 'busy'], ['timeout', 'network'], ['blocked', 'blocked']];
+    const cases: Array<[LLMErrorKind, string]> = [['network', 'network'], ['overloaded', 'busy'], ['timeout', 'silent'], ['blocked', 'blocked']];
     for (const [kind, reason] of cases) {
       const source = makeSource();
       const record = newRecord();
@@ -551,7 +551,7 @@ describe('translateSong: errors become a stop, never an exception', () => {
   });
 
   it.each([
-    ['overloaded', 'busy'], ['auth', 'auth'], ['blocked', 'blocked'], ['network', 'network'], ['timeout', 'network'],
+    ['overloaded', 'busy'], ['auth', 'auth'], ['blocked', 'blocked'], ['network', 'network'], ['timeout', 'silent'],
     ['bad-request', 'rejected'], ['not-found', 'no-model'], ['empty', 'empty'], ['unknown', 'unusable'],
   ] as Array<[LLMErrorKind, string]>)('a thrown "%s" error becomes the stop reason "%s"', async (kind, reason) => {
     script({ text: '', throws: new LLMError(kind, 'x') });
@@ -578,7 +578,7 @@ describe('stopFromError', () => {
     expect(reason('auth')).toEqual({ reason: 'auth', at: 1000 });
     expect(reason('blocked')).toEqual({ reason: 'blocked', at: 1000 });
     expect(reason('network')).toEqual({ reason: 'network', at: 1000 });
-    expect(reason('timeout')).toEqual({ reason: 'network', at: 1000 });
+    expect(reason('timeout')).toEqual({ reason: 'silent', at: 1000 });
     expect(reason('aborted')).toEqual({ reason: 'stopped', at: 1000 });
     expect(reason('bad-request')).toEqual({ reason: 'rejected', at: 1000 });
     expect(reason('not-found')).toEqual({ reason: 'no-model', at: 1000 });
