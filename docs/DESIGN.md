@@ -40,10 +40,10 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | State | Head row shows | Line nodes | The reader can |
 |---|---|---|---|
 | **S0 No lyrics** (no containers, or 0 translatable lines) | Nothing. Lyric Lens is invisible. | — | — |
-| **SJ Japanese lyrics** (≥60% of lines are kana/kanji with almost no Latin letters, and nothing is stored) | `この曲は日本語の歌詞です` (label colour) | None | Nothing: no request is offered or sent. A song with a stored edition is shown as usual. |
+| **SJ Japanese lyrics** (≥60% of lines are kana/kanji with almost no Latin letters, **and** ≥30% of lines contain kana, so kana-less Chinese lyrics stay translatable; nothing is stored) | `この曲は日本語の歌詞です` (label colour) | None | Nothing: no request is offered or sent. A song with a stored edition is shown as usual. |
 | **S1 No API key** | `日本語訳には無料のAPIキーが必要です` + `キーを設定` | None | Open the first-run sheet |
 | **S2 Never read** | `日本語で読む` (primary) · `設定` | None | Start the request |
-| **S2q Quota known exhausted** (every configured model is in the engine's exhausted registry) | `今日の無料枠は終わりました。{when}から訳せます` (label colour) · `設定`. When a free service has no key yet: a second line `{service}の無料キーを足すと、今日も続けて訳せます` and `キーを足す` (opens settings at that service's row) instead of `設定`. | None | Nothing is sent. At reset the button becomes `日本語で読む` again. |
+| **S2q Quota known exhausted** (every candidate model is in a quota cooldown, see §8) | `今日の無料枠は終わりました。{when}から訳せます` (label colour) · `設定` | None | Nothing is sent. At reset the button becomes `日本語で読む` again. |
 | **S2f First request failed** (a stop is recorded and no line arrived) | The reason in a head-row sentence that points at nothing on the page (no `ここ`, no `続き`, see §4) · `日本語で読む` with the seam's button rule · `設定` (an invalid key shows only `設定を開く`) | None | Retry by tapping. A stop that no longer applies (quota reset, key fixed) reads as plain S2. |
 | **S2b Another song translating** (global lock held) | `別の曲（{title}）を訳しています · 終わると訳せます` · `あちらを止める` | None or the existing ones | Stop the other job. The button re-enables itself when the lock is released; no request is sent until the reader taps. |
 | **S3 Waiting** (before the preface) | `曲全体を読んでいます` · `止める` | An empty slot under every line; the first slot breathes | Scroll, listen, use Genius, stop |
@@ -51,7 +51,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | **S4m Mirrored** (the same song is running in another tab) | `別のタブで訳しています` · `止める` | Filled live from storage | Read, stop (this sets an abort flag the owner tab obeys) |
 | **S5 Complete** | The preface (collapsed on a return visit) · `訳を隠す` · `設定` | All filled. No animation on a return visit. | Read, open notes, hide, open settings |
 | **S5g Complete with gaps** (some lines failed to parse or align) | The preface · `{n}行が訳せていません` · `抜けた行を訳す` | Gap slots show a quiet `—` | Request only the gaps (one tap = one request) |
-| **S6 Interrupted (reason)** | The preface if it arrived · `途中まで訳してあります（{done}/{total}行）` · the seam's button | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `—`). The slots below stay dotted. With `訳を隠す` on, the seam is hidden with the translation, so the head row repeats its sentence whenever the button cannot simply be pressed (disabled, `設定を開く`, `キーを足す`). | Resume (subject to the reason's rule), hide, settings |
+| **S6 Interrupted (reason)** | The preface if it arrived · `途中まで訳してあります（{done}/{total}行）` · the seam's button | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `—`). The slots below stay dotted. With `訳を隠す` on, the seam is hidden with the translation, so the head row repeats its sentence whenever the button cannot simply be pressed (disabled, `設定を開く`). | Resume (subject to the reason's rule), hide, settings |
 | **S7 Lyrics changed since** (some stored line hashes no longer match the DOM) | `歌詞が更新され、まだ訳していない行が{n}行あります` · `新しい行を訳す` | Matching lines keep their translations; new lines show empty slots | Translate the new lines only |
 | **S8 Retranslating** | `訳し直しています · 終わるまで今の訳を表示します` · `止める` | The old edition stays. The new one is buffered out of sight and swapped in all at once when it completes. | Read the old edition, stop |
 | **S8f Retranslation failed** | `訳し直しは途中で止まりました。今の訳はそのままです` + the reason sentence | Old edition intact; the new partial is discarded | Dismiss by any interaction |
@@ -62,9 +62,12 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 |---|---|---|
 | busy (all fallbacks gave 503) | `AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
 | per-minute limit | `AIの回数制限にかかりました。1分ほどおいてから続きを訳せます` | Disabled until the limit's reset (about 60 s), then enabled. It does not fire on its own. |
-| daily quota | `今日の無料枠が終わりました。{when}ごろから続きを訳せます` | Disabled until reset, then enabled. It does not fire on its own. When a free service has no key yet, the sentence adds `{service}の無料キーを足すと、今日も続けて訳せます` and the button is `キーを足す`. |
+| daily quota | `今日の無料枠が終わりました。{when}ごろから続きを訳せます` | Disabled until reset, then enabled. It does not fire on its own. |
 | invalid key | `APIキーが使えなくなりました。設定でキーを入れ直してください` | `設定を開く` (the head row then drops its own `設定`). The stop stops applying as soon as a configured key is believed to work, whichever page fixed it. |
-| safety filter | `この先はAIの安全フィルタで止められました。` + `設定で Groq か OpenRouter のキーを足すと通ることがあります` when Gemini is the only service with a key, otherwise `もう一度試すと通ることもあります` | `続きを訳す` |
+| safety filter | `この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります` | `続きを訳す` |
+| request rejected (400s) | `AIがこの依頼を受け付けず、ここで途切れました。もう一度試すと別のモデルで訳せることがあります` | `続きを訳す`, enabled |
+| no usable model | `使えるAIのモデルが見つかりませんでした。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
+| empty answer | `AIの返事が空のまま、ここで途切れました。もう一度試せます` | `続きを訳す`, enabled |
 | network | `接続が切れました。つながったら続きを訳せます` | Disabled while `navigator.onLine` is false, enabled when the connection returns. Never fires automatically. |
 | unusable output | `AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます` | `続きを訳す` |
 | reader stopped | `ここで止めました` | `続きを訳す` |
@@ -83,13 +86,16 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 **Head row**
 - `日本語訳には無料のAPIキーが必要です` · `キーを設定`
 - `日本語で読む`
-- `今日の無料枠は終わりました。{when}から訳せます` · `{service}の無料キーを足すと、今日も続けて訳せます` · `キーを足す`
+- `今日の無料枠は終わりました。{when}から訳せます`
 - First request failed (S2f), by reason:
   - busy: `AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ`
   - rate: `AIの回数制限にかかりました。1分ほどおいてから訳せます`
   - quota: `今日の無料枠が終わりました。{when}ごろから訳せます`
   - auth: `APIキーが使えなくなりました。設定でキーを入れ直してください` · `設定を開く`
-  - blocked: `AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります` (Gemini only) / `AIの安全フィルタで止められ、訳せませんでした`
+  - blocked: `この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります`
+  - rejected: `AIがこの依頼を受け付けませんでした。もう一度試すと別のモデルで訳せることがあります`
+  - no-model: `使えるAIのモデルが見つかりませんでした。少しおいてからもう一度どうぞ`
+  - empty: `AIから空の返事が返ってきました。もう一度試せます`
   - network: `接続が切れて、訳し始められませんでした。つながったら訳せます`
   - unusable: `AIの返事をうまく読み取れませんでした。もう一度試せます`
   - length: `長い曲なので、一度では訳し切れませんでした`
@@ -104,7 +110,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `訳し直しています · 終わるまで今の訳を表示します`
 - `この曲は日本語の歌詞です` (SJ)
 - `保存できませんでした` with `この画面では読めますが、ページを閉じると消えます` (the edition could not be stored; it stays on screen and is not replaced by a same-song refresh)
-- `訳し直しは途中で止まりました。今の訳はそのままです`, with the reason on a second line: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `接続が切れました` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
+- `訳し直しは途中で止まりました。今の訳はそのままです`, with the reason on a second line: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `AIが依頼を受け付けませんでした` · `使えるモデルが見つかりませんでした` · `AIの返事が空でした` · `接続が切れました` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
 
 **Preface**
 - Labels: `誰が誰に` / `この曲は`; the content comes from the model.
@@ -132,11 +138,12 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 
 **Settings sheet**
 - Title: `Lyric Lens の設定` · `閉じる`
-- Section: `翻訳に使うサービス`, described as `上から順に使い、混雑や上限のときは自動で次に切り替えます`
-- Rows: `Google AI Studio（Gemini）` · `Groq` · `OpenRouter（無料モデル）`, each with a key field, `キーを作る`, `保存`, `キーを消す` (`キーを入れ直す` while the key is rejected; the new field is then focused)
+- Section: `翻訳に使うAI`
+- Row: `Google AI Studio（Gemini）`, with a key field, `キーを作る`, `保存`, `キーを消す` (`キーを入れ直す` while the key is rejected; the new field is then focused)
 - Row status: `使えます` · `未設定` · `今日は{when}まで休み` · `キーが使えません` · `確かめています…`
 - Section: `この曲`
   - `この曲の訳：{model} · {YYYY}年{M}月{D}日`
+  - `直近のエラー` (a collapsed disclosure, shown only when the song's stop carries detail): `{model} · {status} · {kind}` and the error text (at most 200 characters, selectable, small, label colour)
   - `この曲を訳し直す` → confirm `この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます` · `訳し直す` · `やめる`
   - `この曲の保存データを消す` → confirm `この曲の保存した訳を消しますか？` · `消す` · `やめる`
 - Section: `保存データ`
@@ -148,7 +155,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 
 ## 5. Notes
 
-**Content contract.** A note is attached to the **first occurrence** of a line. It quotes an exact phrase from that line, has one of the five kinds, a Japanese explanation of at most 2 sentences and about 80 characters, an optional conjecture flag, and an optional `g` (the id of the Genius annotation it drew on). Typical density is no more than one note per 6 lines, and zero is fine.
+**Content contract.** A note is attached to the **first occurrence** of a line. It quotes an exact phrase from that line, has one of the five kinds, a Japanese explanation of at most 2 sentences and about 80 characters, an optional conjecture flag, and an optional `g` (the id of the Genius annotation it drew on). Typical density is no more than one note per 6 lines, and zero is fine. The ceiling is per song, not per request: `max(2, round(unique lines / 6))` from the whole song, minus the notes the record already holds, so a short resume never gets a denser budget. The 2 extra wordplay/ambiguity slots are used once per song.
 
 **Resting state.** A noted line ends with a vermilion `※` after its Japanese text. There is one mark per line however many notes the line has. Nothing is marked on the English at rest; this is deliberate, to keep the page clean. Exact repeats of a noted line carry the `※` in the label colour, and it opens the same note in place.
 
@@ -231,16 +238,16 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `prefers-reduced-motion: reduce`: everything is instant, and breathing becomes a static .6.
 - A cached render has no motion at all.
 
-## 7. Settings and providers
+## 7. Settings
 
-**Where it opens:** `設定` in the head row, the userscript menu, `設定を開く` on a key-error seam, and `キーを足す` (scrolled to and tinted on the free service that would unblock the reader; on phones the row is focused, not its field, so the keyboard stays down).
+**Where it opens:** `設定` in the head row, the userscript menu, and `設定を開く` on a key-error seam.
 
-**First run (S1).** Tapping `キーを設定` opens the first-run sheet. The key is checked with the provider's model-list endpoint, never a generation call.
+**First run (S1).** Tapping `キーを設定` opens the first-run sheet. The key is checked with Gemini's model-list endpoint, never a generation call.
 - `保存してこの曲を訳す` saves the key and immediately starts this song's request. The reader's tap already expressed that intent.
 - `保存だけする` saves the key and moves to S2.
 
 **Settings layout** (one scrolling column, three sections)
-1. **翻訳に使うサービス.** Gemini, Groq and OpenRouter (free models), in that fixed order. The engine falls back down this list and within each provider across its models, and it remembers exhausted models until their reset. Each row shows its status dot and text. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM, and are shown masked (`••••abcd`).
+1. **翻訳に使うAI.** One Gemini key row; the engine chooses among Gemini's models itself (§8). The row shows its status dot and text. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM, and are shown masked (`••••abcd`).
 2. **この曲.** The model and date of this song's edition (this is the only place a model name appears), plus retranslate and delete, each with an inline confirmation.
 3. **保存データ.** The count and size of saved songs, export (`lyric-lens-YYYYMMDD.json`), import, and delete-all. Import validates every record, merges only what is strictly better (more translated lines, then finished over cut, then newer), and skips the song a request is writing. Eviction past 300 songs orders by last read and never removes a partly translated song.
 
@@ -268,15 +275,25 @@ There is no auto-translate, no note-amount setting, no font-size control (the pa
 
 **Validation.** A line record whose `head` does not match the normalized first words of that ID's line is dropped, and its slot stays empty (becoming a gap at the end). A record that fails to parse affects only that line. Each valid record is written to storage before it is rendered.
 
+**Model selection and failure handling.**
+- Candidates come from the model list per tier: Flash 6, Flash-Lite 3, Gemma 1 (so the newest Flash models never crowd out the tiers with their own quotas). One function builds the set for both the request and the pre-send availability check.
+- Order: Flash before Flash-Lite before Gemma; within a tier, models that answered within a week and have not failed since go first (fastest first-text first), unknown ones keep their rank, and models busy or silent in the last half hour go last.
+- A model silent for 30 s (first text) is given up on and the next starts at once. After two silent models in a row the call stops (stop reason network) instead of waiting out the rest.
+- A 200 response in which no line was accepted is a failure (`unusable`) and moves on to the next model.
+- Cooldowns per model: quota until the reset (or Google's stated wait), per-minute limit for its stated wait (at least 60 s), overloaded 2 min, silent 5 min, unusable 10 min, rejected request (400, after one retry without `thinking`) 6 h. Only a quota cooldown makes the head say today's quota is over; the others still allow a tap, and the chain answers it with the right sentence.
+- Model list: cached 7 days; if a refresh fails, the stale cached list of any age is used before the built-in `FALLBACK_GEMINI` ids (used only on a first run whose list cannot be fetched).
+- Each failed model is logged with `console.warn("[Lyric Lens]", {kind, model, status, detail})` (key scrubbed) and the last error is kept on the song's stop for 「直近のエラー」.
+
 **Resume.** One request. It sends the same full tagged lyrics with already-translated IDs annotated with their Japanese, plus the stored song record, and asks only for the missing IDs. A `t:"song"` record is requested only if none is stored.
 
 **Transport**
+- Gemini only (`generativelanguage.googleapis.com`, the script's only `@connect`). Thinking is fixed at low.
 - `GM.xmlHttpRequest`, which bypasses Genius' CSP and CORS.
 - Use `responseType: "stream"` where available; otherwise parse `onprogress` `responseText` incrementally.
 - Where neither is available (some iOS Userscripts builds), buffer the response and show `この環境では訳がまとめて届きます`. The slots then fill all at once.
 
 **Storage**
-- One record per song: `{songId, title, song, lines: {hash: {ja, notes}}, status, reason, model, date, lyricsHash}`.
+- One record per song: `{songId, title, song, lines: {hash: {ja, notes}}, status, reason, model, date, lyricsHash, keyVersion}` (`keyVersion` lets a future change of normalisation re-key saved lines).
 - Lines are keyed by the normalized-text hash, which is what makes S7 possible.
 - LRU eviction beyond 300 songs. A partial song is never evicted.
 
@@ -348,12 +365,12 @@ Amendments made during implementation:
 8. **The seam sits at the writing frontier** (the first missing line after the last filled one); missing lines before it are lines the model skipped and read as `—`.
 9. **The preface is text, not a button.** Only a small ▸/▾ toggle (44 px hit area) opens and closes 「この曲は」; the text stays readable, selectable and announced.
 10. **Reported errors favour what is transient.** If any model was merely busy, the reader is told it was busy, not that today's quota is gone.
-11. **Default thinking level is low.** Measured on the same song and model: first line 65 s (medium) vs 3–16 s (low) at comparable quality.
+11. **Thinking level is low** (later fixed, not configurable). Measured on the same song and model: first line 65 s (medium) vs 3–16 s (low) at comparable quality.
 12. **Genius annotations are fetched at idle when the song opens**, not after the tap (same-origin, free, not an LLM request). 日本語で読む is never held back by them, and an opened note does not grow when they arrive. Concurrent fetches for one song share a single request; a failed fetch is not cached.
 13. **The state machine is a pure function** (`src/ui/state.ts`, `decide()`), tested state by state and sentence by sentence; the controller only gathers its input and binds its action ids.
 14. **Reading a saved edition counts as use.** Storage eviction (LRU) orders by last read, not by translation time, and never evicts a partly translated song before finished ones.
 15. **Saved editions travel between devices** by export and import under 保存データ (see §7).
-16. **A free service the reader has not set up is offered at the moment it would help:** when today's quota is spent, `キーを足す` opens settings at that service's row; a safety block with only Gemini configured suggests Groq or OpenRouter in its sentence.
+16. **(Superseded by 26.)** A free service the reader had not set up was offered at the moment it would help (`キーを足す`, a Groq/OpenRouter hint on a safety block).
 17. **Pending lines are flushed when the tab is hidden or closed**, so a backgrounded phone tab keeps what already arrived.
 18. **Translation post-processing.** Half-width `(…)` become `（…）`; a note's phrase quoted in pieces (`a / b`, `a … b`) is widened to the line's own span so the underline can find it; a slang or idiom note whose first sentence only defines a meaning the translation already says is trimmed or dropped (when the translation kept the word itself, the definition stays: it is what the reader needs).
 19. **The fallback chain keeps its cooldown table honest.** A model that succeeds is un-benched; one that breaks mid-stream (503, 429) is benched. When every model is cooling down, the reader is told the real wait: a per-minute limit is not reported as today's quota.
@@ -363,6 +380,19 @@ Amendments made during implementation:
 22. **A failed Genius annotation fetch is retried** on the next tap instead of being remembered as "no annotations".
 23. **Sound-only ad-libs stay sounds** (ayy, uh, skrrt, funk → エイ, アー, スカー, ファンク): they are never given an invented meaning. The preface is held to one plain sentence for 誰が誰に (≤40 characters, no bracketed asides) and what the lyrics support for この曲は (≤80 characters); the song-wide note ceiling is enforced in code (wordplay and ambiguity may use two extra slots).
 24. **Accessibility.** The head row's status is one persistent polite live region updated in place (so streaming does not re-announce it); gap and repeat marks are labelled images; buttons dim while pressed on touch, and hover styles apply only where hover exists.
-25. **Automatically chosen Gemini models adapt to how they have behaved** (`ll3:health`, per key and model, entries older than 14 days dropped): a model that answered within the week and has not failed since goes first, fastest first-text time first; unknown models keep their rank order after those; a model that was busy or silent in the last half hour goes last. Flash always stays ahead of Flash-Lite and Gemma, and a pinned model or another provider's list is never reordered. A model silent for 30 s / 75 s / 120 s (thinking low / medium / high) is given up on, benched for five minutes like a busy one (but skipped, not tried last), and the next model starts at once.
+25. **Automatically chosen Gemini models adapt to how they have behaved** (`ll3:health`, per key and model, entries older than 14 days dropped): a model that answered within the week and has not failed since goes first, fastest first-text time first; unknown models keep their rank order after those; a model that was busy or silent in the last half hour goes last. Flash always stays ahead of Flash-Lite and Gemma. A model silent for 30 s is given up on, benched for five minutes like a busy one (but skipped, not tried last), and the next model starts at once.
+
+26. **Gemini only.** Groq, OpenRouter and every other provider are removed, along with `キーを足す`, the spare-key text and the settings focus for it; `@connect` is generativelanguage.googleapis.com alone; settings keep one key row, older stored shapes are migrated, and other services' cached lists, cooldowns and health are cleaned at start.
+27. **A 200 response with no accepted line is a failure** (`unusable`, 10 min cooldown, next model), so a model that only yields broken output gains no health.
+28. **Candidate slots are reserved per tier** (Flash 6, Flash-Lite 3, Gemma 1), shared by the request and the availability check, so exhausted Flash quota no longer hides Flash-Lite.
+29. **Two silent models in a row end the call** (stop reason network); during an outage the reader is not kept waiting minutes.
+30. **Error classes have their own copy and cooldowns:** `rejected`, `no-model`, `empty` and `unusable` read differently; a rejected request benches that model for 6 h; the safety-filter sentence is Gemini-only.
+31. **LLM errors are recorded:** logged per failed model (API key scrubbed), the last one stored on the song's stop and shown under 「直近のエラー」; a run with misaligned records warns once with the count.
+32. **A line starting with a parenthesis passes the head check** if the head matches the line with its leading parenthesised groups removed.
+33. **Kana-less CJK lyrics are not Japanese** (SJ also needs ≥30% of lines with kana).
+34. **The note ceiling is per song** (whole-song line count minus notes already stored); the 2 bonus slots are once per song.
+35. **`FALLBACK_GEMINI` was refreshed** to existing ids, and the model list is cached 7 days with the stale list preferred over the built-in one.
+36. **Records carry `keyVersion`** (current 1; `migrateRecord` is the entry point for a future re-keying).
+37. **公認 marks `verified` or `accepted` annotations;** a retranslation that carried old lines over keeps the new motifs and records `carried: n` on the record (no UI).
 
 Each of these came out of four rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.
