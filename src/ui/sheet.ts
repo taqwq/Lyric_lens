@@ -416,6 +416,9 @@ function mount(options: OpenSheetOptions): Active {
   const button = (text: string, variant: 'text' | 'outline' | 'solid', onClick: () => void): HTMLButtonElement =>
     h('button', { class: 'btn', type: 'button', 'data-v': variant, onClick }, text);
 
+  /** Deleting reads as deleting: the system's destructive red (sheet.css [data-danger]). */
+  const danger = (b: HTMLButtonElement): HTMLButtonElement => { b.dataset.danger = ''; return b; };
+
   const externalLink = (text: string, href: string): HTMLAnchorElement =>
     h('a', { class: 'link', href, target: '_blank', rel: 'noopener noreferrer' }, text);
 
@@ -464,6 +467,7 @@ function mount(options: OpenSheetOptions): Active {
       cancel.disabled = true;
       spec.onOk(() => { ok.disabled = false; cancel.disabled = false; });
     });
+    if (trigger.dataset.danger !== undefined) ok.dataset.danger = '';
     zone.replaceChildren(h('div', { class: 'confirm' },
       h('p', { class: 'confirm-text', role: 'alert' }, spec.message),
       h('div', { class: 'actions' }, ok, cancel)));
@@ -705,7 +709,7 @@ function mount(options: OpenSheetOptions): Active {
           },
         });
       });
-      const deleteSong: HTMLButtonElement = button(COPY.deleteSong, 'text', () => {
+      const deleteSong: HTMLButtonElement = danger(button(COPY.deleteSong, 'text', () => {
         askInline(zone, deleteSong, {
           message: COPY.deleteSongConfirm,
           ok: COPY.ok,
@@ -725,7 +729,7 @@ function mount(options: OpenSheetOptions): Active {
             })();
           },
         });
-      });
+      }));
       zone.append(h('div', { class: 'actions' }, retranslate, deleteSong));
       const edition = song.edition !== false;
       body.append(h('section', { class: 'section' },
@@ -816,7 +820,7 @@ function mount(options: OpenSheetOptions): Active {
       focusEl(importButton);
     }
 
-    const deleteAll: HTMLButtonElement = button(COPY.deleteAll, 'text', () => {
+    const deleteAll: HTMLButtonElement = danger(button(COPY.deleteAll, 'text', () => {
       if (!summary) return;
       const count = summary.count;
       askInline(zone, deleteAll, {
@@ -843,7 +847,7 @@ function mount(options: OpenSheetOptions): Active {
           })();
         },
       });
-    });
+    }));
     const dataActions = h('div', { class: 'actions' }, exportButton, importButton, deleteAll);
     zone.append(dataActions);
 

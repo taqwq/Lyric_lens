@@ -2,7 +2,7 @@
 
 ## 1. Thesis and principles
 
-**Thesis.** Lyric Lens works like furigana, but for meaning. The Genius page becomes a bilingual edition on ruled paper: a quiet second line of Japanese sits under every lyric, the translator's red-pen ※ marks the few places where something is hidden, and a two-line preface says who is speaking to whom. The reader came to read a song, not to operate a tool, so the page itself is the interface.
+**Thesis.** Lyric Lens works like furigana, but for meaning. The Genius page becomes a bilingual edition: a quiet second line of Japanese sits under every lyric, the translator's red-pen ※ marks the few places where something is hidden, and a two-line preface says who is speaking to whom. The reader came to read a song, not to operate a tool, so the page itself is the interface.
 
 **Principles**
 1. **Ink, not interface.** Nearly everything we add is text in the lyric column. Controls appear only when the reader has a real decision to make.
@@ -51,7 +51,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | **S4m Mirrored** (the same song is running in another tab) | `別のタブで訳しています` · `止める` | Filled live from storage | Read, stop (this sets an abort flag the owner tab obeys) |
 | **S5 Complete** | The preface (collapsed on a return visit) · `訳を隠す` · `設定` | All filled. No animation on a return visit. | Read, open notes, hide, open settings |
 | **S5g Complete with gaps** (some lines failed to parse or align) | The preface · `{n}行が訳せていません` · `抜けた行を訳す` | Gap slots show a quiet `—` | Request only the gaps (one tap = one request) |
-| **S6 Interrupted (reason)** | The preface if it arrived · `途中まで訳してあります（{done}/{total}行）` · the seam's button | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `—`). The slots below stay dotted. With `訳を隠す` on, the seam is hidden with the translation, so the head row repeats its sentence whenever the button cannot simply be pressed (disabled, `設定を開く`). | Resume (subject to the reason's rule), hide, settings |
+| **S6 Interrupted (reason)** | The preface if it arrived · `途中まで訳してあります（{done}/{total}行）` · the seam's button | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `—`). The lines below stay placeholder bars. With `訳を隠す` on, the seam is hidden with the translation, so the head row repeats its sentence whenever the button cannot simply be pressed (disabled, `設定を開く`). | Resume (subject to the reason's rule), hide, settings |
 | **S7 Lyrics changed since** (some stored line hashes no longer match the DOM) | `歌詞が更新され、まだ訳していない行が{n}行あります` · `新しい行を訳す` | Matching lines keep their translations; new lines show empty slots | Translate the new lines only |
 | **S8 Retranslating** | `訳し直しています · 終わるまで今の訳を表示します` · `止める` | The old edition stays. The new one is buffered out of sight and swapped in all at once when it completes. | Read the old edition, stop |
 | **S8f Retranslation failed** | `訳し直しは途中で止まりました。今の訳はそのままです` + the reason sentence | Old edition intact; the new partial is discarded | Dismiss by any interaction |
@@ -76,7 +76,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | tab closed or suspended (partial record found, no live lock), or a stop that no longer applies | `ここまで訳してあります` | `続きを訳す` |
 | another song holds the lock, or today's quota is known spent | The reason's first sentence, plus `別の曲を訳し終えると続きを訳せます` / `今日の無料枠は終わりました。{when}から訳せます` | Disabled until the blocker clears |
 
-The seam is written in the label colour after a short dashed slot, so it reads as a margin note, not as the translation of the lyric above it.
+The seam is a small callout card under the line's placeholder bar, so it reads as a note about the gap, not as the translation of the lyric above it.
 
 `{when}` is the next Pacific midnight, computed with `Intl` in `America/Los_Angeles` and formatted in `Asia/Tokyo` as `HH:MM`. It reads `16:00` or `17:00`, with the prefix `明日` when the reset falls on the next JST date.
 
@@ -171,12 +171,12 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 4. `aria-expanded="true"` is set.
 
 **Layout**
-- 2 px vermilion left border, note-background fill, padding 8 px × 12 px, margin 4 px 0 14 px.
+- A soft card: `fill` background, 12 px continuous-looking corners, no border, padding 12 px × 16 px, 6 px under its line and 18 px before the next lyric. It opens with a 340 ms spring (height, a 4 px drop and opacity).
 - For each note:
-  - Row 1: the kind label (11 px, accent, weight 600), then an outlined `推測` tag if flagged.
+  - Row 1: the kind label (11 px, accent, weight 600), then a small `推測` capsule if flagged.
   - Row 2: the quoted English phrase in Genius' inherited font, italic, 0.78em, wrapped in “ ”. It is always shown, so nothing is lost if the Highlight API or the phrase match fails.
   - Row 3: the explanation.
-  - Multiple notes are separated by 10 px.
+  - Multiple notes are separated by a hairline (`sep`) with 12 px above and below.
 - When `g` matches a fetched Genius annotation, a last row shows `Genius注釈より`. When a fetched annotation's fragment overlaps the quoted phrase (with or without `g`), a collapsed disclosure `Geniusの注釈（英語）▲{votes}` appears. Expanded, it shows the plain annotation text, cut at 400 characters with `続きを読む`. Only the single highest-voted overlapping annotation is shown.
 
 **Closing.** Tap `※` again, press Esc (while focus is on the mark or inside the note; focus returns to `※`), or open another note. Notes never close on scroll. When a note above the viewport closes, the scroll position is compensated.
@@ -189,28 +189,35 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 
 ## 6. Visual system
 
-**Tokens** (on `:root`, prefix `--ll-`)
+**Direction.** Content first, as in Apple's own apps: the Japanese sits under each line like quiet ruby, and the few controls live in one soft card that recedes until it is needed. Surfaces are flat fills with generous rounded corners rather than borders; there is one tint (朱); the next step is a tinted capsule; motion is short and eased like a spring. Nothing we add competes with the English.
+
+**Tokens** (prefix `--ll-`)
 
 | Token | Light | Dark |
 |---|---|---|
-| `ink` (Japanese) | `#4A5260` (7.9:1) | `#B8C0CB` |
-| `ink-repeat` | `#6B7380` (4.8:1) | `#8E96A2` |
-| `accent` (朱) | `#B0503A` | `#E3876C` |
-| `label` | `#6E7581` | `#9AA1AC` |
-| `note-bg` | `#F7F3EE` | `#23262B` |
-| `rule` (hairlines: preface edge, note dividers) | `#D9DCE1` | `#3A3F46` |
-| `slot` (empty-slot dashes) | `#A7ADB6` | `#5A616B` |
-| `hl-bg` | `rgba(176,80,58,.08)` | `rgba(227,135,108,.14)` |
-| `sheet-bg` / `sheet-ink` | `#FFFFFF` / `#1A1C20` | `#1C1E22` / `#E6E8EB` |
+| `ink` (Japanese) | `#515156` | `#C7C7CC` |
+| `ink-strong` (誰が誰に, quoted phrase) | `#1D1D1F` | `#F5F5F7` |
+| `ink-repeat` | `#78787D` | `#98989D` |
+| `accent` (朱, the one tint) | `#BA4A30` | `#F2795B` |
+| `label` (status, captions, ad-libs) | `#737378` | `#98989D` |
+| `fill` (card, note, seam) | `#F5F5F7` | `#1C1C1E` |
+| `fill-2` (placeholder bars, disabled capsule) | `#E8E8ED` | `#2C2C2E` |
+| `fill-3` (placeholder shimmer) | `#F4F4F7` | `#3A3A3C` |
+| `sep` (hairlines) | `rgba(60,60,67,.13)` | `rgba(84,84,88,.6)` |
+| `tint` / `tint-strong` (capsules, open ※) | accent at 10 % / 17 % | accent at 16 % / 26 % |
+| `hl-bg` (phrase highlight) | accent at 9 % | accent at 16 % |
+| spring | `cubic-bezier(.32,.72,0,1)` | |
+
+The sheet uses the same palette on a grouped surface: `#F2F2F7` (translucent `rgba(242,242,247,.88)` with a 30 px blur where supported) holding white 12 px groups; dark `#1C1C1E` / `#2C2C2E`. Status dots use the system green `#34C759`, amber `#FF9F0A` and red; destructive buttons (delete this song, delete all, and their confirmations) are red `#D70015`.
 
 **Dark detection.** Walk up from the first lyrics container to the first non-transparent computed `background-color`. If its relative luminance is below 0.4, set `data-ll-theme="dark"` on our nodes. The head row is tested from its own parent, because some song pages have dark headers. The sheet follows `prefers-color-scheme` unless the page itself was detected as dark. Re-check on navigation.
 
 **Type**
-- Font stack: `"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP","Yu Gothic UI","Meiryo",system-ui,sans-serif`. Gothic only, no mincho, no web fonts.
-- Japanese line: `0.84em` of Genius' 18 px (≈15 px). On phones, where Genius uses 16 px, `0.875em` (14 px). Line-height 1.6, weight 400.
-- Preface: 0.78em; the `誰が誰に` line uses weight 600 and the labels use the label colour.
+- Font stack: `-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP","Yu Gothic UI","Segoe UI",Meiryo,system-ui,sans-serif` (SF and Hiragino on Apple devices), antialiased. Gothic only, no mincho, no web fonts.
+- Japanese line: `0.84em` of Genius' 18 px (≈15 px). On phones, where Genius uses 16 px, `0.875em` (14 px). Line-height 1.65, weight 400.
+- Preface: 14 px; `誰が誰に` 15 px semibold in `ink-strong`; labels 11 px in the label colour (beside the text on desktop, above it on phones). The disclosure is a chevron that points right when closed and turns down when open.
 - Note body: 0.78em, line-height 1.7. Kind label: 11 px, letter-spacing .04em.
-- Head row: 14 px; buttons in the accent colour, weight 600. The actions follow the status sentence directly (they never drift to the far edge). The one next step (`日本語で読む`, `続きを訳す`, `キーを設定`) is a hairline accent pill (radius 999 px, 30 px tall; 40 px on phones, hover tint `hl-bg`); every other action is plain text. The seam's button is the same pill (full width on phones).
+- The card (head row): 14 px, `fill` background, 14 px corners, padding 10 px × 16 px; before there is a preface it hugs its controls. The status is 13 px in the label colour and the actions follow it directly. The one next step (`日本語で読む`, `続きを訳す`, `キーを設定`) is a tinted capsule (`tint` fill, accent text, weight 600, 32 px; 40 px on phones) that scales to .96 when pressed; every other action is plain accent text, weight 500. The seam's button is the same capsule (full width on phones).
 - Desktop settings popover hangs from the left edge of the button that opened it when there is room (設定 sits at the start of the lyrics column), from its right edge otherwise.
 - Phones: focused controls keep 140 px clear of Genius' sticky header (nav + ad slot, about 125 px).
 
@@ -219,13 +226,13 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `word-break: auto-phrase;` with a `normal` fallback
 - `overflow-wrap: anywhere;`
 - `font-feature-settings: "palt" 1;`
-- `letter-spacing: .02em;`
+- `letter-spacing: .01em;`
 - `text-spacing-trim: trim-start;` where supported
 - `hanging-punctuation: none;`
 
-**Spacing.** A line node has padding `2px 0 12px` (10 px bottom on phones) and starts at the English left edge with no indent. Repeats use `ink-repeat` plus a trailing ` ↺` in the label colour, only for exact normalized repeats.
+**Spacing.** A line node has padding `3px 0 14px` (12 px bottom on phones) and starts at the English left edge with no indent. Repeats use `ink-repeat` plus a trailing ` ↺` in the label colour, only for exact normalized repeats.
 
-**Slot.** Height `1.6em` of the Japanese size (one line). A dashed 1 px rule (2 px dash, 6 px period) in the `slot` colour spans `min(60%, 320px)` at the baseline. The next slot (the one being written) is drawn in the accent colour and breathes. It grows only if the translation wraps.
+**Placeholder.** A line not yet written is a soft rounded bar (`fill-2`, 6 px radius, .8em tall) about as long as its translation will be (from the English line's length, between 5em and 92 %). The line being written shimmers (a 1.6 s sweep of `fill-3`). A newly written line rises 3 px into place as it fades in (320 ms spring). The seam is the same bar followed by a `fill` callout card holding the reason and the capsule button.
 
 **Ad-libs.** When the English line's parentheses are all at its end, the matching trailing `（…）` groups of the translation are set in the label colour, so the eye lands on the line itself.
 
@@ -236,11 +243,11 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `ll-phrase-peek`: the same underline with no background.
 
 **Motion**
-- Ink fade: opacity 0 → 1 over 200 ms ease-out, opacity only.
-- Breathing: only the next slot, opacity .35 ↔ .7 over 2.4 s.
-- Note open: 160 ms height, using a `grid-template-rows: 0fr → 1fr` animation, only when the reader opened it (a re-render that keeps a note open never replays it).
-- Sheet: 180 ms fade, with a 12 px rise for the phone sheet.
-- `prefers-reduced-motion: reduce`: everything is instant, and breathing becomes a static .6.
+- Ink: a new line fades in and rises 3 px over 320 ms (spring).
+- Shimmer: only the placeholder being written, a 1.6 s sweep.
+- Note open: 340 ms spring (`grid-template-rows: 0fr → 1fr`, a 4 px drop, opacity), only when the reader opened it (a re-render that keeps a note open never replays it).
+- Sheet: the desktop popover pops in over 260 ms (6 px drop, .98 scale); the phone sheet rises from the bottom edge over 420 ms (spring) with a grabber.
+- `prefers-reduced-motion: reduce`: everything is instant, and the shimmer becomes a static bar.
 - A cached render has no motion at all.
 
 ## 7. Settings
@@ -407,5 +414,7 @@ Amendments made during implementation:
 41. **Insults and address terms keep their strength** (no softening to neutral words, no age added for lil'), distinct English words keep distinct renderings, and the motif rendering is reused in every repeat.
 
 42. **Design pass with real screenshots** (headless Chrome at 1280 px and 390 px, real Gemini translations): the next step became a hairline pill instead of bare red text, the head's actions sit right after the status, the seam button matches it, and the settings popover opens under 設定 instead of over the lyrics at the page edge.
+
+43. **Apple-like redesign** (after the reader asked for that direction): the head became one soft card, the next step a tinted capsule, empty slots soft placeholder bars with a shimmer, the seam a callout card, notes rounded cards, and the settings sheet a translucent grouped list with filled and tinted buttons, red destructive actions and a phone grabber. Checked with real-size screenshots on desktop and phone.
 
 Each of these came out of many rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.
