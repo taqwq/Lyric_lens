@@ -836,24 +836,72 @@ describe('modelsFor: caching', () => {
     expect(listCalls()).toBe(0);
   });
 
-  it('fetches again after a week and stores the new list', async () => {
+  const slowList = (): Reply => ({ status: 200, body: JSON.stringify(MODEL_LIST), hangMs: 5000 });
+  const storedIds = async () => (await getJSON<{ at: number; models: Array<{ id: string }> } | null>(key(), null))!.models.map((m) => m.id);
+
+  it('serves a list older than a week at once and renews it in the background', async () => {
+    vi.useFakeTimers();
     await stored(Date.now() - 8 * DAY);
-    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual(expect.arrayContaining([A, B, C]));
+    listReply = slowList();
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listCalls()).toBe(1);
+    expect(await storedIds()).toEqual([C]);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    const renewed = await getJSON<{ at: number; models: Array<{ id: string }> }>(key(), { at: 0, models: [] });
+    expect(renewed.models.map((m) => m.id)).toEqual(expect.arrayContaining([A, B, C]));
+    expect(Date.now() - renewed.at).toBeLessThan(DAY);
+  });
+
+  it('starts one background renewal for concurrent calls', async () => {
+    vi.useFakeTimers();
+    await stored(Date.now() - 8 * DAY);
+    listReply = slowList();
+    const [one, two] = await Promise.all([modelsFor('test-key'), modelsFor('test-key')]);
+    expect(one.map((m) => m.id)).toEqual([C]);
+    expect(two.map((m) => m.id)).toEqual([C]);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(listCalls()).toBe(1);
   });
 
-  it('serves the stale list of any age when the refresh fails', async () => {
+  it('swallows a failed background renewal, and tries again on a later call', async () => {
+    vi.useFakeTimers();
     await stored(Date.now() - 90 * DAY);
-    listReply = { status: 500, body: 'internal error' };
+    listReply = { status: 500, body: 'internal error', hangMs: 1000 };
     expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await storedIds()).toEqual([C]);
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(listCalls()).toBe(2);
   });
 
-  it('does not hide an auth error behind the stale list, nor an explicit refresh failing', async () => {
+  it('serves the stale list of any age even when the key is rejected; an explicit refresh still reports it', async () => {
+    vi.useFakeTimers();
     await stored(Date.now() - 90 * DAY);
     listReply = unauthorized();
-    await expect(modelsFor('test-key')).rejects.toMatchObject({ kind: 'auth' });
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(modelsFor('test-key', { refresh: true })).rejects.toMatchObject({ kind: 'auth' });
     listReply = { status: 500, body: 'internal error' };
     await expect(modelsFor('test-key', { refresh: true })).rejects.toBeInstanceOf(LLMError);
+  });
+
+  it('with no cache still waits for the list, and a rejected key shows at once', async () => {
+    vi.useFakeTimers();
+    listReply = slowList();
+    let done = false;
+    const pending = modelsFor('test-key').then((models) => { done = true; return models; });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await pending).map((m) => m.id)).toEqual(expect.arrayContaining([A, B, C]));
+    expect(await storedIds()).toEqual(expect.arrayContaining([A, B, C]));
+
+    setKV(memoryStorage());
+    listReply = unauthorized();
+    await expect(modelsFor('test-key')).rejects.toMatchObject({ kind: 'auth' });
   });
 });
 
