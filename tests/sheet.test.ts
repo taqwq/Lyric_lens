@@ -1,30 +1,26 @@
 import './setup';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProvider, keyStatus, markKey, modelsFor } from '../src/llm/chain';
+import { keyStatus, markKey, modelsFor } from '../src/llm/chain';
 import { LLMError } from '../src/llm/errors';
-import type { ProviderConfig } from '../src/llm/types';
 import { memoryStorage, setJSON, setKV } from '../src/platform/storage';
-import { currentSettings, loadSettings, setProviderKey } from '../src/store/settings';
+import { currentSettings, loadSettings, setApiKey } from '../src/store/settings';
 import type { SongRecord } from '../src/core/types';
 import { exportSongs, loadSong, saveSong, storageSummary } from '../src/store/songs';
 import { closeSheet, openSheet } from '../src/ui/sheet';
 import { formatWhen } from '../src/ui/time';
 
 vi.mock('../src/llm/chain', () => ({
-  createProvider: vi.fn(),
   modelsFor: vi.fn(),
   keyStatus: vi.fn(),
   markKey: vi.fn(),
 }));
 
-const createProviderMock = vi.mocked(createProvider);
 const modelsForMock = vi.mocked(modelsFor);
 const keyStatusMock = vi.mocked(keyStatus);
 const markKeyMock = vi.mocked(markKey);
 
 const GEMINI_KEY = 'AIzaSyExampleGeminiKey1234';
-const GROQ_KEY = 'gsk_exampleGroqKey_wxyz';
 
 /* ---------- helpers ---------- */
 
@@ -71,7 +67,7 @@ async function ready(): Promise<void> {
 
 async function settingsReady(): Promise<void> {
   await ready();
-  await vi.waitFor(() => expect(shadow().querySelectorAll('[data-service]').length).toBe(3));
+  await vi.waitFor(() => expect(shadow().querySelectorAll('[data-service]').length).toBe(1));
   // statuses of rows that have a key resolve a moment later
   await vi.waitFor(() => expect(shadow().querySelector('.dot[data-s="pending"]')).toBeNull());
 }
@@ -80,10 +76,9 @@ beforeEach(async () => {
   setKV(memoryStorage());
   await loadSettings();
   vi.resetAllMocks();
-  createProviderMock.mockImplementation((config: ProviderConfig) => ({ config, listModels: vi.fn(), generate: vi.fn() }));
   modelsForMock.mockResolvedValue([{ id: 'gemini-test', label: 'Test', rank: 1 }]);
   markKeyMock.mockResolvedValue(undefined);
-  keyStatusMock.mockImplementation(async (config: ProviderConfig) => (config.apiKey ? { kind: 'ok' } : { kind: 'missing' }));
+  keyStatusMock.mockImplementation(async (apiKey: string) => (apiKey ? { kind: 'ok' } : { kind: 'missing' }));
 });
 
 afterEach(() => {
@@ -147,11 +142,10 @@ describe('host', () => {
     expect(shadow().activeElement).toBe(shadow().querySelector('input'));
   });
 
-  it('settings goes to the first empty key field on a desktop', async () => {
-    await setProviderKey('gemini', GEMINI_KEY);
+  it('settings goes to the key field on a desktop when no key is saved', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    expect(shadow().activeElement).toBe(rowFor('groq').querySelector('input'));
+    expect(shadow().activeElement).toBe(rowFor('gemini').querySelector('input'));
   });
 
   it('follows the system dark scheme unless the page says otherwise', () => {
@@ -281,11 +275,11 @@ describe('first-run sheet', () => {
     await vi.waitFor(() => expect(onSaveAndTranslate).toHaveBeenCalledTimes(1));
     expect(modelsForMock).toHaveBeenCalledTimes(1);
     expect(modelsForMock.mock.calls[0]![1]).toEqual({ refresh: true });
-    expect(createProviderMock.mock.calls[0]![0]).toMatchObject({ preset: 'gemini', apiKey: GEMINI_KEY });
-    expect(markKeyMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: GEMINI_KEY }), false);
+    expect(modelsForMock.mock.calls[0]![0]).toBe(GEMINI_KEY);
+    expect(markKeyMock).toHaveBeenCalledWith(GEMINI_KEY, false);
     const stored = await loadSettings();
-    expect(stored.providers.find((p) => p.preset === 'gemini')!.apiKey).toBe(GEMINI_KEY);
-    expect(currentSettings().providers[0]!.apiKey).toBe(GEMINI_KEY);
+    expect(stored.apiKey).toBe(GEMINI_KEY);
+    expect(currentSettings().apiKey).toBe(GEMINI_KEY);
     expect(host()).toBeNull();
     expect(calls).toEqual(['close:true', 'translate']);
   });
@@ -298,7 +292,7 @@ describe('first-run sheet', () => {
     buttonNamed('保存だけする').click();
     await vi.waitFor(() => expect(onClose).toHaveBeenCalledWith(true));
     expect(onSaveAndTranslate).not.toHaveBeenCalled();
-    expect((await loadSettings()).providers[0]!.apiKey).toBe(GEMINI_KEY);
+    expect((await loadSettings()).apiKey).toBe(GEMINI_KEY);
   });
 
   it('an empty key just focuses the field and sends nothing', () => {
@@ -326,7 +320,7 @@ describe('first-run sheet', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(onSaveAndTranslate).not.toHaveBeenCalled();
     expect(markKeyMock).not.toHaveBeenCalled();
-    expect((await loadSettings()).providers[0]!.apiKey).toBe('');
+    expect((await loadSettings()).apiKey).toBe('');
     expect(input.value).toBe('not-a-real-key'); // kept for editing
     expect(input.disabled).toBe(false);
     expect(buttonNamed('保存してこの曲を訳す').disabled).toBe(false);
@@ -344,7 +338,7 @@ describe('first-run sheet', () => {
     await vi.waitFor(() => expect(text()).toContain('確かめられませんでした。接続を確認してください'));
     expect(host()).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
-    expect((await loadSettings()).providers[0]!.apiKey).toBe('');
+    expect((await loadSettings()).apiKey).toBe('');
 
     modelsForMock.mockRejectedValue(new LLMError('timeout', 'slow'));
     buttonNamed('保存だけする').click();
@@ -364,62 +358,60 @@ describe('first-run sheet', () => {
     release([]);
     await new Promise((r) => setTimeout(r, 10));
     expect(onSaveAndTranslate).not.toHaveBeenCalled();
-    expect((await loadSettings()).providers[0]!.apiKey).toBe('');
+    expect((await loadSettings()).apiKey).toBe('');
   });
 });
 
 /* ---------- settings ---------- */
 
 describe('settings sheet', () => {
-  it('lists the three services in order with their status', async () => {
+  it('shows the one Gemini row with its status', async () => {
     const until = Date.now() + 3 * 3600_000;
-    await setProviderKey('gemini', GEMINI_KEY);
-    await setProviderKey('openrouter', 'sk-or-v1-abcdef123456');
-    keyStatusMock.mockImplementation(async (config: ProviderConfig) => {
-      if (config.preset === 'gemini') return { kind: 'ok' };
-      if (config.preset === 'openrouter') return { kind: 'resting', until };
-      return { kind: 'missing' };
-    });
+    await setApiKey(GEMINI_KEY);
+    keyStatusMock.mockImplementation(async () => ({ kind: 'resting', until }));
 
     openSheet({ mode: 'settings' });
     await settingsReady();
 
     expect(shadow().querySelector('.title')!.textContent).toBe('Lyric Lens の設定');
-    expect(text()).toContain('翻訳に使うサービス');
-    expect(text()).toContain('上から順に使い、混雑や上限のときは自動で次に切り替えます');
+    expect(text()).toContain('翻訳に使うAI');
+    expect(text()).not.toMatch(/Groq|OpenRouter|上から順に/);
 
     const rows = Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]'));
-    expect(rows.map((r) => r.dataset.service)).toEqual(['gemini', 'groq', 'openrouter']);
-    expect(rows.map((r) => r.querySelector('.service-name')!.textContent)).toEqual([
-      'Google AI Studio（Gemini）', 'Groq', 'OpenRouter（無料モデル）',
-    ]);
-    expect(rows.map((r) => r.querySelector('.status')!.textContent)).toEqual([
-      '使えます', '未設定', `今日は${formatWhen(until)}まで休み`,
-    ]);
+    expect(rows.map((r) => r.dataset.service)).toEqual(['gemini']);
+    expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google AI Studio（Gemini）');
+    expect(rows[0]!.querySelector('.status')!.textContent).toBe(`今日は${formatWhen(until)}まで休み`);
 
-    // saved keys are masked; the empty service offers a field, 保存 and キーを作る
+    // the saved key is masked, with キーを消す and no field
     expect(rowFor('gemini').querySelector('.mask')!.textContent).toBe('••••1234');
     expect(rowFor('gemini').textContent).toContain('キーを消す');
     expect(rowFor('gemini').querySelector('input')).toBeNull();
     expect(text()).not.toContain(GEMINI_KEY);
-    expect(rowFor('groq').querySelector('input')).not.toBeNull();
-    expect(rowFor('groq').textContent).toContain('保存');
-    const make = rowFor('groq').querySelector('a')!;
+  });
+
+  it('without a key the row offers a field, 保存 and キーを作る', async () => {
+    openSheet({ mode: 'settings' });
+    await settingsReady();
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('未設定');
+    expect(rowFor('gemini').querySelector('input')).not.toBeNull();
+    expect(rowFor('gemini').textContent).toContain('保存');
+    const make = rowFor('gemini').querySelector('a')!;
     expect(make.textContent).toBe('キーを作る');
-    expect(make.getAttribute('href')).toBe('https://console.groq.com/keys');
+    expect(make.getAttribute('href')).toBe('https://aistudio.google.com/app/apikey');
     expect(make.getAttribute('target')).toBe('_blank');
+    expect(text()).not.toContain('キーを足す');
   });
 
   it('shows the bad-key status', async () => {
-    await setProviderKey('groq', GROQ_KEY);
-    keyStatusMock.mockImplementation(async (config: ProviderConfig) => (config.preset === 'groq' ? { kind: 'bad' } : { kind: 'missing' }));
+    await setApiKey(GEMINI_KEY);
+    keyStatusMock.mockImplementation(async () => ({ kind: 'bad' }));
     openSheet({ mode: 'settings' });
     await settingsReady();
-    expect(rowFor('groq').querySelector('.status')!.textContent).toBe('キーが使えません');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが使えません');
   });
 
   it('キーを消す clears the stored key and brings back the field', async () => {
-    await setProviderKey('gemini', GEMINI_KEY);
+    await setApiKey(GEMINI_KEY);
     const onClose = vi.fn();
     openSheet({ mode: 'settings', onClose });
     await settingsReady();
@@ -428,46 +420,46 @@ describe('settings sheet', () => {
     remove.click();
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
     expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('未設定');
-    expect((await loadSettings()).providers.find((p) => p.preset === 'gemini')!.apiKey).toBe('');
+    expect((await loadSettings()).apiKey).toBe('');
 
     buttonNamed('閉じる').click();
     expect(onClose).toHaveBeenCalledWith(true);
   });
 
-  it('saves a verified key for a service and shows it masked', async () => {
+  it('saves a verified key and shows it masked', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    type(rowFor('groq').querySelector('input')!, GROQ_KEY);
-    Array.from(rowFor('groq').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
-    expect(rowFor('groq').querySelector('.status')!.textContent).toBe('確かめています…');
+    type(rowFor('gemini').querySelector('input')!, GEMINI_KEY);
+    Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('確かめています…');
 
-    await vi.waitFor(() => expect(rowFor('groq').querySelector('.mask')).not.toBeNull());
-    expect(rowFor('groq').querySelector('.mask')!.textContent).toBe('••••wxyz');
-    expect(rowFor('groq').querySelector('.status')!.textContent).toBe('使えます');
-    expect(markKeyMock).toHaveBeenCalledWith(expect.objectContaining({ preset: 'groq', apiKey: GROQ_KEY }), false);
-    expect((await loadSettings()).providers.find((p) => p.preset === 'groq')!.apiKey).toBe(GROQ_KEY);
-    expect(text()).not.toContain(GROQ_KEY);
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.mask')).not.toBeNull());
+    expect(rowFor('gemini').querySelector('.mask')!.textContent).toBe('••••1234');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('使えます');
+    expect(markKeyMock).toHaveBeenCalledWith(GEMINI_KEY, false);
+    expect((await loadSettings()).apiKey).toBe(GEMINI_KEY);
+    expect(text()).not.toContain(GEMINI_KEY);
   });
 
   it('a rejected key marks the row and keeps the field; a network failure keeps it too', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    const input = rowFor('groq').querySelector('input')!;
-    const save = () => Array.from(rowFor('groq').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
+    const input = rowFor('gemini').querySelector('input')!;
+    const save = () => Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
 
     modelsForMock.mockRejectedValue(new LLMError('auth', 'bad', { status: 401 }));
     type(input, 'wrong-key');
     save();
-    await vi.waitFor(() => expect(rowFor('groq').querySelector('.status')!.textContent).toBe('キーが使えません'));
-    expect(rowFor('groq').querySelector('input')).toBe(input);
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが使えません'));
+    expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect(input.value).toBe('wrong-key');
-    expect((await loadSettings()).providers.find((p) => p.preset === 'groq')!.apiKey).toBe('');
+    expect((await loadSettings()).apiKey).toBe('');
 
     modelsForMock.mockRejectedValue(new LLMError('network', 'offline'));
     save();
-    await vi.waitFor(() => expect(rowFor('groq').textContent).toContain('確かめられませんでした。接続を確認してください'));
-    expect(rowFor('groq').querySelector('input')).toBe(input);
-    expect((await loadSettings()).providers.find((p) => p.preset === 'groq')!.apiKey).toBe('');
+    await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('確かめられませんでした。接続を確認してください'));
+    expect(rowFor('gemini').querySelector('input')).toBe(input);
+    expect((await loadSettings()).apiKey).toBe('');
   });
 
   it('has no 「この曲」 section without a song', async () => {
@@ -574,116 +566,39 @@ describe('settings sheet', () => {
 /* ---------- a rejected key ---------- */
 
 describe('a rejected key', () => {
-  async function badGroq(): Promise<void> {
-    await setProviderKey('groq', GROQ_KEY);
-    keyStatusMock.mockImplementation(async (config: ProviderConfig) => {
-      if (config.preset === 'groq') return { kind: 'bad' };
-      return config.apiKey ? { kind: 'ok' } : { kind: 'missing' };
-    });
+  async function badKey(): Promise<void> {
+    await setApiKey(GEMINI_KEY);
+    keyStatusMock.mockImplementation(async () => ({ kind: 'bad' }));
   }
 
-  it('offers キーを入れ直す instead of キーを消す, only for the rejected key', async () => {
-    await setProviderKey('gemini', GEMINI_KEY);
-    await badGroq();
+  it('offers キーを入れ直す instead of キーを消す', async () => {
+    await badKey();
     openSheet({ mode: 'settings' });
     await settingsReady();
-    const labels = (id: string): string[] => Array.from(rowFor(id).querySelectorAll('button')).map((b) => b.textContent ?? '');
-    expect(labels('groq')).toEqual(['キーを入れ直す']);
-    expect(labels('gemini')).toEqual(['キーを消す']);
+    const labels = Array.from(rowFor('gemini').querySelectorAll('button')).map((b) => b.textContent ?? '');
+    expect(labels).toEqual(['キーを入れ直す']);
   });
 
   it('removing it puts the cursor in the new field, even on a phone', async () => {
     stubMatchMedia({ desktop: false, dark: false });
-    await badGroq();
+    await badKey();
     openSheet({ mode: 'settings' });
     await settingsReady();
     buttonNamed('キーを入れ直す').click();
-    await vi.waitFor(() => expect(rowFor('groq').querySelector('input')).not.toBeNull());
-    expect(shadow().activeElement).toBe(rowFor('groq').querySelector('input'));
-    expect((await loadSettings()).providers.find((p) => p.preset === 'groq')!.apiKey).toBe('');
-    expect(rowFor('groq').querySelector('.status')!.textContent).toBe('未設定');
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
+    expect(shadow().activeElement).toBe(rowFor('gemini').querySelector('input'));
+    expect((await loadSettings()).apiKey).toBe('');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('未設定');
   });
 
   it('a working key removed on a phone still leaves the keyboard down (focus goes to the row)', async () => {
     stubMatchMedia({ desktop: false, dark: false });
-    await setProviderKey('gemini', GEMINI_KEY);
+    await setApiKey(GEMINI_KEY);
     openSheet({ mode: 'settings' });
     await settingsReady();
     buttonNamed('キーを消す').click();
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
     expect(shadow().activeElement).toBe(rowFor('gemini'));
-  });
-});
-
-/* ---------- emphasising a service ---------- */
-
-describe('focusService', () => {
-  let scrolled: Element[] = [];
-
-  beforeEach(() => {
-    scrolled = [];
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      writable: true,
-      value: function (this: Element) { scrolled.push(this); },
-    });
-  });
-
-  afterEach(() => {
-    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-  });
-
-  const marked = (): string[] => Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]')).filter((r) => r.dataset.focus === 'true').map((r) => r.dataset.service!);
-
-  it('emphasises, scrolls to and focuses the key field of that row on a desktop', async () => {
-    await setProviderKey('gemini', GEMINI_KEY);
-    openSheet({ mode: 'settings', focusService: 'openrouter' });
-    await settingsReady();
-    expect(marked()).toEqual(['openrouter']);
-    // The emphasis comes from sheet.css ([data-focus]), not inline styles.
-    expect(rowFor('openrouter').getAttribute('style')).toBeNull();
-    expect(scrolled).toEqual([rowFor('openrouter')]);
-    expect(shadow().activeElement).toBe(rowFor('openrouter').querySelector('input')); // not the first empty one (groq)
-  });
-
-  it('focuses the row itself on a phone, so the keyboard stays down', async () => {
-    stubMatchMedia({ desktop: false, dark: false });
-    openSheet({ mode: 'settings', focusService: 'groq' });
-    await settingsReady();
-    expect(marked()).toEqual(['groq']);
-    expect(scrolled).toEqual([rowFor('groq')]);
-    expect(shadow().activeElement).toBe(rowFor('groq'));
-    expect(rowFor('groq').tabIndex).toBe(-1);
-  });
-
-  it('works for a service that already has a key (the row, no field)', async () => {
-    await setProviderKey('groq', GROQ_KEY);
-    openSheet({ mode: 'settings', focusService: 'groq' });
-    await settingsReady();
-    expect(marked()).toEqual(['groq']);
-    expect(shadow().activeElement).toBe(rowFor('groq'));
-  });
-
-  it('can name the first service too', async () => {
-    openSheet({ mode: 'settings', focusService: 'gemini' });
-    await settingsReady();
-    expect(marked()).toEqual(['gemini']);
-    expect(shadow().activeElement).toBe(rowFor('gemini').querySelector('input'));
-  });
-
-  it('marks nothing and keeps the usual focus without it', async () => {
-    await setProviderKey('gemini', GEMINI_KEY);
-    openSheet({ mode: 'settings' });
-    await settingsReady();
-    expect(marked()).toEqual([]);
-    expect(scrolled).toEqual([]);
-    expect(shadow().activeElement).toBe(rowFor('groq').querySelector('input'));
-  });
-
-  it('is ignored in the first-run sheet', () => {
-    openSheet({ mode: 'first-run', focusService: 'groq' });
-    expect(shadow().querySelectorAll('[data-service]').length).toBe(0);
-    expect(shadow().activeElement).toBe(shadow().querySelector('input'));
   });
 });
 

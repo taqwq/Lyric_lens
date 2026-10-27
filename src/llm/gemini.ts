@@ -1,7 +1,7 @@
 import { streamRequest } from '../platform/http';
 import { LLMError, classifyHttpError } from './errors';
 import { SseParser } from './sse';
-import type { GenerateRequest, GenerateResult, ModelInfo, Provider, ProviderConfig, ThinkingLevel } from './types';
+import type { GenerateRequest, GenerateResult, ModelInfo, Provider } from './types';
 
 const SAFETY_OFF = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT']
   .map((category) => ({ category, threshold: 'BLOCK_NONE' }));
@@ -23,27 +23,29 @@ export function rankGeminiModel(id: string): number {
   return 0;
 }
 
-/** How long a model may stay silent before its first text. Deeper thinking legitimately takes
- *  longer, but a model that hangs (measured: 90 s and more) should hand over to the next one sooner. */
-export const FIRST_TEXT_TIMEOUT_MS: Record<ThinkingLevel, number> = { low: 30_000, medium: 75_000, high: 120_000 };
+/** How long a model may stay silent before its first text. A model that hangs (measured: 90 s
+ *  and more) should hand over to the next one sooner. */
+export const FIRST_TEXT_TIMEOUT_MS = 30_000;
 
-function thinkingConfig(model: string, level: ThinkingLevel): Record<string, unknown> | null {
+export const GEMINI_BASE = 'https://generativelanguage.googleapis.com';
+
+function thinkingConfig(model: string): Record<string, unknown> | null {
   if (model.startsWith('gemma-')) return null;
   const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(model)?.[1] ?? 0);
-  if (version >= 3) return { thinkingLevel: level };
-  if (version >= 2.5) return { thinkingBudget: level === 'low' ? 1024 : level === 'medium' ? 4096 : 12000 };
+  if (version >= 3) return { thinkingLevel: 'low' };
+  if (version >= 2.5) return { thinkingBudget: 1024 };
   return null;
 }
 
 export class GeminiProvider implements Provider {
-  constructor(readonly config: ProviderConfig) {}
+  constructor(private readonly apiKey: string) {}
 
   private get base(): string {
-    return (this.config.baseUrl || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');
+    return GEMINI_BASE;
   }
 
   private headers(): Record<string, string> {
-    return { 'Content-Type': 'application/json', 'x-goog-api-key': this.config.apiKey.trim() };
+    return { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey.trim() };
   }
 
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
@@ -74,7 +76,7 @@ export class GeminiProvider implements Provider {
 
   private async generateOnce(req: GenerateRequest, withThinking: boolean): Promise<GenerateResult> {
     const gemma = req.model.startsWith('gemma-');
-    const thinking = withThinking ? thinkingConfig(req.model, req.thinking) : null;
+    const thinking = withThinking ? thinkingConfig(req.model) : null;
     // Thinking tokens count against the output cap; a fixed budget must not eat the answer.
     const budget = typeof thinking?.thinkingBudget === 'number' ? thinking.thinkingBudget : 0;
     const generationConfig: Record<string, unknown> = { maxOutputTokens: Math.min(65_536, req.maxOutputTokens + budget) };
@@ -118,7 +120,7 @@ export class GeminiProvider implements Provider {
       headers: this.headers(),
       body: JSON.stringify(body),
       signal: req.signal,
-      firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS[req.thinking],
+      firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS,
       idleTimeoutMs: 90_000,
       onText: (chunk) => { for (const payload of sse.feed(chunk)) handle(payload); },
     });

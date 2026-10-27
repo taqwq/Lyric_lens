@@ -8,7 +8,7 @@ import type { StopInfo } from '../core/types';
 import type { Availability } from '../llm/chain';
 import { formatWhen } from './time';
 
-export type ActionId = 'start' | 'resume' | 'stop' | 'stopMirror' | 'stopOther' | 'hide' | 'settings' | 'firstRun' | 'addKey' | 'noop';
+export type ActionId = 'start' | 'resume' | 'stop' | 'stopMirror' | 'stopOther' | 'hide' | 'settings' | 'firstRun' | 'noop';
 
 export interface ActionSpec {
   id: ActionId;
@@ -31,14 +31,10 @@ export interface ViewInput {
   streams: boolean;
   /** 訳を隠す is on. */
   hidden: boolean;
-  /** Some service has a key. */
+  /** A key is saved. */
   hasKey: boolean;
-  /** Some configured key is known to be rejected (an invalid-key stop still applies). */
+  /** The key is known to be rejected (an invalid-key stop still applies). */
   keyBad: boolean;
-  /** Gemini is the only service with a key. */
-  onlyGemini: boolean;
-  /** A free service without a key yet, offered when today's quota blocks the reader. */
-  spare: { id: string; name: string } | null;
   total: number;
   done: number;
   /** Stop recorded on the edition on screen. */
@@ -93,9 +89,7 @@ export function seamText(stop: StopInfo, i: ViewInput): string {
     rate: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます',
     quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : 'あとで'}続きを訳せます`,
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
-    blocked: i.onlyGemini
-      ? 'この先はAIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります'
-      : 'この先はAIの安全フィルタで止められました。もう一度試すと通ることもあります',
+    blocked: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
     network: '接続が切れました。つながったら続きを訳せます',
     unusable: 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます',
     stopped: 'ここで止めました',
@@ -115,9 +109,7 @@ export function startFailText(stop: StopInfo, i: ViewInput): string {
     rate: 'AIの回数制限にかかりました。1分ほどおいてから訳せます',
     quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : 'あとで'}訳せます`,
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
-    blocked: i.onlyGemini
-      ? 'AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります'
-      : 'AIの安全フィルタで止められ、訳せませんでした',
+    blocked: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
     network: '接続が切れて、訳し始められませんでした。つながったら訳せます',
     unusable: 'AIの返事をうまく読み取れませんでした。もう一度試せます',
     length: '長い曲なので、一度では訳し切れませんでした',
@@ -145,15 +137,10 @@ export function failureText(stop: StopInfo, now: number): string {
 }
 
 /** The seam's sentence and button. A blocker (another song running, quota spent) disables
- *  the button and is said right there; when a free service without a key would unblock the
- *  reader today, the seam offers to add it instead. */
-export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null, spareHint: string | null): SeamSpec {
+ *  the button and is said right there. */
+export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null): SeamSpec {
   const text = seamText(stop, i);
   if (stop.reason === 'auth') return { text, button: { id: 'settings', label: '設定を開く' } };
-  if (blocker && spareHint) {
-    const reason = stop.reason === 'quota' ? text : `${text.split('。')[0]}。${blocker}`;
-    return { text: `${reason}。${spareHint}`, button: { id: 'addKey', label: 'キーを足す' } };
-  }
   if (blocker && stop.reason !== 'quota') return { text: `${text.split('。')[0]}。${blocker}`, button: { id: 'noop', label: '続きを訳す', disabled: true } };
   let disabled = Boolean(blocker);
   if (stop.reason === 'rate' && stop.until && i.now < stop.until) disabled = true;
@@ -167,7 +154,6 @@ export function decide(i: ViewInput): Decision {
   const blocker = i.otherSong
     ? '別の曲を訳し終えると続きを訳せます'
     : quotaUntil != null ? `今日の無料枠は終わりました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から訳せます` : 'あとで訳せます'}` : null;
-  const spareHint = !i.otherSong && quotaUntil != null && i.spare ? `${i.spare.name}の無料キーを足すと、今日も続けて訳せます` : null;
   const none = { slots: false, gaps: false, breathing: false, seam: null };
   const writing = { slots: true, gaps: false, breathing: true, seam: null };
   const hide = hideAction(i);
@@ -212,15 +198,14 @@ export function decide(i: ViewInput): Decision {
         state: 'S2q',
         status: blocker ?? '',
         tone: 'muted',
-        ...(spareHint ? { note: spareHint } : {}),
-        actions: [i.spare ? { id: 'addKey', label: 'キーを足す' } : SETTINGS],
+        actions: [SETTINGS],
         preface: false,
         lines: none,
       };
     }
     if (stop && stop.reason !== 'closed' && stop.reason !== 'stopped') {
       // The first request produced nothing: say why, with the seam's button rule.
-      const seam = seamFor(stop, i, null, null);
+      const seam = seamFor(stop, i, null);
       const button: ActionSpec = { ...seam.button, label: seam.button.label === '続きを訳す' ? '日本語で読む' : seam.button.label, primary: true };
       if (button.id === 'resume') button.id = 'start';
       return { state: 'S2f', status: startFailText(stop, i) || seam.text, actions: stop.reason === 'auth' ? [button] : [button, SETTINGS], preface: false, lines: none };
@@ -255,10 +240,10 @@ export function decide(i: ViewInput): Decision {
     };
   }
   // S6: interrupted; the seam sits at the writing frontier.
-  const seam = seamFor(stop, i, blocker, spareHint);
+  const seam = seamFor(stop, i, blocker);
   // The seam is a lyric-line node and hides with the translation: then say why the button
   // cannot simply be pressed in the head instead (never both, never when it just works).
-  const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === 'auth' || seam.button.id === 'addKey');
+  const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === 'auth');
   return {
     state: 'S6',
     status: `途中まで訳してあります（${i.done}/${i.total}行）`,

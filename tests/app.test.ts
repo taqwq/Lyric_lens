@@ -21,7 +21,7 @@ import { App } from '../src/app';
 import { buildSong, emptyRecord } from '../src/core/song';
 import type { PageSong } from '../src/genius/extract';
 import { memoryStorage, setKV, type KV } from '../src/platform/storage';
-import { loadSettings, setProviderKey } from '../src/store/settings';
+import { loadSettings, setApiKey } from '../src/store/settings';
 import { loadSong, saveSong } from '../src/store/songs';
 
 interface Inside {
@@ -73,7 +73,7 @@ beforeEach(async () => {
   failing.on = false;
   setKV(kv);
   await loadSettings();
-  await setProviderKey('gemini', 'test-key');
+  await setApiKey('test-key');
   m.translateSong.mockReset();
   m.acquireLock.mockReset();
   m.render.mockReset();

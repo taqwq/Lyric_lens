@@ -9,17 +9,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const watch = process.argv.includes('--watch');
 const dev = process.argv.includes('--dev');
 
-const connect = [
-  'generativelanguage.googleapis.com',
-  'api.groq.com',
-  'api.cerebras.ai',
-  'openrouter.ai',
-  'api.mistral.ai',
-  'models.github.ai',
-  'localhost',
-  '127.0.0.1',
-  '*',
-];
+const connect = ['generativelanguage.googleapis.com'];
 
 const header = [
   '// ==UserScript==',

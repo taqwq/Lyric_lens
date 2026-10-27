@@ -351,9 +351,6 @@
 
 .service { padding: 10px 0; }
 .service + .service { border-top: 1px solid var(--rule); }
-/* the row the app pointed to (focusService): the free service that would unblock the reader */
-.service[data-focus="true"] { margin: 0 -10px; padding: 10px; border-radius: 8px; background: var(--note-bg); box-shadow: inset 2px 0 0 var(--accent); }
-.service[data-focus="true"] + .service { border-top-color: transparent; }
 
 .service-head {
   display: flex;

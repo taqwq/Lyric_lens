@@ -7,7 +7,6 @@
 import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
 import { LLMError } from '../llm/errors';
-import type { ProviderConfig, ThinkingLevel } from '../llm/types';
 import { buildPrompt, noteBudget } from './prompt';
 import { ProtocolParser, type ProtocolEvent } from './protocol';
 import { headMatches, looseText, missingLines } from './song';
@@ -16,8 +15,9 @@ import type { LineResult, Note, SongRecord, SongSource, StopInfo } from './types
 const MAX_NOTES_PER_LINE = 3;
 
 export interface TranslateOptions {
-  providers: ProviderConfig[];
-  thinking: ThinkingLevel;
+  apiKey: string;
+  /** Scripts only: pin the models tried (see ChainOptions.onlyModels). */
+  onlyModels?: string[];
   signal?: AbortSignal;
   /** Called after every applied batch of records. */
   onUpdate?: (record: SongRecord) => void;
@@ -237,18 +237,17 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
   let finished = false;
 
   try {
-    const result = await generateWithFallback(options.providers, {
+    const result = await generateWithFallback(options.apiKey, {
       system: prompt.system,
       user: prompt.user,
       maxOutputTokens: outputBudget(prompt.expectedChars),
-      thinking: options.thinking,
       onText: (chunk) => {
         if (builder.apply(parser.feed(chunk))) options.onUpdate?.(record);
         // Only translated lines count as progress: a stream that dies after the song
         // record alone lets the chain fall back to another model.
         return builder.added > 0;
       },
-    }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset() });
+    }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels });
     if (builder.apply(parser.flush())) options.onUpdate?.(record);
     model = result.model;
     if (result.error) stop = stopFromError(result.error);

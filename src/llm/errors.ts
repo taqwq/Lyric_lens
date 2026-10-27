@@ -19,7 +19,6 @@ export class LLMError extends Error {
   readonly retryAfterMs: number;
   readonly detail: string;
   model = '';
-  provider = '';
 
   constructor(kind: LLMErrorKind, message: string, opts: { status?: number; retryAfterMs?: number; detail?: string } = {}) {
     super(message);

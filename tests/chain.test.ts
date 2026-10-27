@@ -2,14 +2,14 @@ import './setup';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  availability,
+  availability as availabilityOf,
+  cleanOtherProviders,
   clearCooldowns,
-  cooldownId,
+  cooldownId as cooldownIdOf,
   generateWithFallback,
-  isUsable,
-  keyStatus,
-  keyTag,
-  markKey,
+  keyStatus as keyStatusOf,
+  keyTag as keyTagOf,
+  markKey as markKeyOf,
   nextPacificMidnight,
   orderByHealth,
   type ChainResult,
@@ -19,15 +19,13 @@ import { LLMError } from '../src/llm/errors';
 import { FIRST_TEXT_TIMEOUT_MS } from '../src/llm/gemini';
 import type { HttpResult, StreamRequest } from '../src/platform/http';
 import { streamRequest } from '../src/platform/http';
-import { getJSON, memoryStorage, setJSON, setKV } from '../src/platform/storage';
-import { newProvider } from '../src/store/settings';
-import type { ProviderConfig } from '../src/llm/types';
+import { getJSON, listKeys, memoryStorage, setJSON, setKV } from '../src/platform/storage';
 
 vi.mock('../src/platform/http', () => ({ streamRequest: vi.fn() }));
 
 const http = vi.mocked(streamRequest);
 
-/* ---------- scripted Gemini / OpenAI-compatible endpoints ---------- */
+/* ---------- scripted Gemini endpoints ---------- */
 
 const A = 'gemini-3.5-flash'; // rank 1035
 const B = 'gemini-2.5-flash'; // rank 1025
@@ -58,16 +56,15 @@ function reply(model: string, ...replies: Reply[]): void {
 async function serve(req: StreamRequest): Promise<HttpResult> {
   let model: string;
   let next: Reply | undefined;
-  if (req.url.includes('/v1beta/models?') || (req.method === 'GET' && req.url.endsWith('/models'))) {
+  if (req.url.includes('/v1beta/models?') || false) {
     next = listReply;
     model = '(list)';
   } else {
     const gemini = /models\/([^:]+):streamGenerateContent/.exec(req.url);
     if (gemini) model = decodeURIComponent(gemini[1]!);
-    else if (req.url.endsWith('/chat/completions')) model = (JSON.parse(req.body ?? '{}') as { model: string }).model;
     else throw new Error(`unexpected URL ${req.url}`);
     generated.push(model);
-    generatedKeys.push(req.headers?.['x-goog-api-key'] ?? req.headers?.Authorization?.replace(/^Bearer /, '') ?? '');
+    generatedKeys.push(req.headers?.['x-goog-api-key'] ?? '');
     next = queues.get(model)?.shift();
   }
   if (!next) throw new Error(`no scripted reply left for ${model}`);
@@ -105,15 +102,22 @@ const rateLimited = (retryDelay: string) => googleError(429, 'RESOURCE_EXHAUSTED
 const COOLDOWNS = 'll3:cooldowns';
 const readCooldowns = () => getJSON<Record<string, { until: number; reason: string }>>(COOLDOWNS, {});
 
-const gemini = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({ ...newProvider('gemini', 'test-key'), ...overrides });
-/** Cooldowns are kept per preset, endpoint, API key and model. */
-const cooldownKey = (model: string, config: ProviderConfig = gemini()) => cooldownId(config, model);
+/** A run's inputs: the key, and optionally the one model pinned (scripts only: ChainOptions.onlyModels). */
+interface Cfg { apiKey: string; model?: string }
+const gemini = (overrides: Partial<Cfg> = {}): Cfg => ({ apiKey: 'test-key', ...overrides });
+const availability = (cfg: Cfg) => availabilityOf(cfg.apiKey);
+const cooldownId = (cfg: Cfg, model: string) => cooldownIdOf(cfg.apiKey, model);
+const keyStatus = (cfg: Cfg) => keyStatusOf(cfg.apiKey);
+const keyTag = (cfg: Cfg) => keyTagOf(cfg.apiKey);
+const markKey = (cfg: Cfg, bad: boolean) => markKeyOf(cfg.apiKey, bad);
+/** Cooldowns are kept per API key and model. */
+const cooldownKey = (model: string, cfg: Cfg = gemini()) => cooldownId(cfg, model);
 
 type StoredCooldowns = Record<string, { until: number; reason: string }>;
 const seedCooldowns = (entries: StoredCooldowns) => setJSON(COOLDOWNS, entries);
 /** Pre-seeds the model list a provider would otherwise fetch, so no request is made for it. */
-const seedModels = (config: ProviderConfig, ...ids: string[]) =>
-  setJSON(`ll3:models:${cooldownId(config, '')}`, { at: Date.now(), models: ids.map((m, i) => ({ id: m, label: m, rank: 100 - i })) });
+const seedModels = (cfg: Cfg, ...ids: string[]) =>
+  setJSON(`ll3:models:${cooldownId(cfg, '')}`, { at: Date.now(), models: ids.map((m, i) => ({ id: m, label: m, rank: 100 - i })) });
 
 interface Run {
   chunks: string[];
@@ -123,16 +127,16 @@ interface Run {
 
 /** `verdict` is what the consumer's onText answers for a chunk (chunks so far, including this one);
  *  by default it gives no verdict, like a consumer written before verdicts existed. */
-function start(configs: ProviderConfig[], signal?: AbortSignal, verdict?: (chunks: string[]) => boolean | void): Run {
+function start(cfg: Cfg, signal?: AbortSignal, verdict?: (chunks: string[]) => boolean | void): Run {
   const chunks: string[] = [];
   const statuses: string[] = [];
   const promise = generateWithFallback(
-    configs,
+    cfg.apiKey,
     {
-      system: 'sys', user: 'usr', maxOutputTokens: 1000, thinking: 'low',
+      system: 'sys', user: 'usr', maxOutputTokens: 1000,
       onText: (t) => { chunks.push(t); return verdict?.(chunks); },
     },
-    { onStatus: (s) => statuses.push(s), signal },
+    { onStatus: (s) => statuses.push(s), signal, ...(cfg.model ? { onlyModels: [cfg.model] } : {}) },
   );
   return { chunks, statuses, promise };
 }
@@ -162,12 +166,11 @@ describe('generateWithFallback: model fallback', () => {
   it('moves on to the next model when the first is busy (503) and says so', async () => {
     reply(A, busy());
     reply(B, ok('L1: あ\n'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     const result = await run.promise;
 
     expect(generated).toEqual([A, B]);
     expect(result.model).toBe(B);
-    expect(result.provider).toBe('Google Gemini');
     expect(result.finish).toBe('stop');
     expect(result.text).toBe('L1: あ\n');
     expect(run.chunks.join('')).toBe('L1: あ\n');
@@ -179,7 +182,7 @@ describe('generateWithFallback: model fallback', () => {
   it('does not feed an error body to onText', async () => {
     reply(A, busy());
     reply(B, ok('L1: あ\n'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     await run.promise;
     expect(run.chunks).toEqual(['L1: あ\n']);
   });
@@ -187,7 +190,7 @@ describe('generateWithFallback: model fallback', () => {
   it('remembers a busy model for two minutes and tries it last next time', async () => {
     reply(A, busy());
     reply(B, ok('L1: あ\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     const cooldowns = await readCooldowns();
     expect(cooldowns[cooldownKey(A)]?.reason).toBe('overloaded');
     expect(cooldowns[cooldownKey(A)]!.until - Date.now()).toBeGreaterThan(60_000);
@@ -197,14 +200,14 @@ describe('generateWithFallback: model fallback', () => {
     generated = [];
     reply(B, busy());
     reply(C, ok('L1: い\n'));
-    const second = await start([gemini()]).promise;
+    const second = await start(gemini()).promise;
     expect(generated).toEqual([B, C]); // A was demoted to the end and never needed
     expect(second.model).toBe(C);
   });
 
   it('uses the pinned model only, without listing models', async () => {
     reply(C, ok('L1: う\n'));
-    const result = await start([gemini({ model: C })]).promise;
+    const result = await start(gemini({ model: C })).promise;
     expect(result.model).toBe(C);
     expect(generated).toEqual([C]);
     expect(http.mock.calls.some(([r]) => r.url.includes('/v1beta/models?'))).toBe(false);
@@ -213,42 +216,20 @@ describe('generateWithFallback: model fallback', () => {
   it('falls back to a built-in model list when listing fails for a non-auth reason', async () => {
     listReply = { status: 500, body: 'internal error' };
     reply('gemini-3.8-flash', ok('L1: え\n'));
-    const result = await start([gemini()]).promise;
+    const result = await start(gemini()).promise;
     expect(result.model).toBe('gemini-3.8-flash');
-  });
-
-  it('lists models for an OpenAI-compatible provider and tries the best-ranked ones', async () => {
-    listReply = { status: 200, body: JSON.stringify({ data: [{ id: 'whisper-large-v3' }, { id: 'llama-3.3-70b-versatile' }, { id: 'openai/gpt-oss-120b' }] }) };
-    reply('openai/gpt-oss-120b', busy());
-    reply('llama-3.3-70b-versatile', {
-      status: 200,
-      body: ev({ choices: [{ delta: { content: 'L1: え\n' }, finish_reason: 'stop' }] }),
-    });
-    const result = await start([newProvider('groq', 'gk')]).promise;
-    expect(generated).toEqual(['openai/gpt-oss-120b', 'llama-3.3-70b-versatile']); // whisper is excluded, gpt-oss ranks first
-    expect(result.model).toBe('llama-3.3-70b-versatile');
-  });
-
-  // candidateModels() swallows a failed model listing and returns [] for non-Gemini providers,
-  // no error is recorded, and the chain finally throws the default "API key not set" auth error.
-  // A Groq/Ollama outage therefore looks like a missing key.
-  it('does not report a failed model listing as a missing API key', async () => {
-    listReply = { status: 500, body: 'internal error' };
-    const { error } = await settle(start([newProvider('groq', 'gk')]));
-    expect(error).toBeInstanceOf(LLMError);
-    expect(error?.kind).not.toBe('auth');
   });
 
   it('reports an auth error from the model list without trying any model', async () => {
     listReply = unauthorized();
-    const { error } = await settle(start([gemini()]));
+    const { error } = await settle(start(gemini()));
     expect(error?.kind).toBe('auth');
     expect(generated).toEqual([]);
   });
 
   it('returns finish "length" for MAX_TOKENS so the caller can report the cut', async () => {
     reply(A, { status: 200, body: textEvent('L1: あ\n') + stopEvent('MAX_TOKENS') });
-    const result = await start([gemini()]).promise;
+    const result = await start(gemini()).promise;
     expect(result.finish).toBe('length');
     expect(result.text).toBe('L1: あ\n');
   });
@@ -258,7 +239,7 @@ describe('generateWithFallback: model fallback', () => {
       status: 200,
       body: textEvent('Let me think about slang…', { thought: true }) + textEvent('L1: ') + textEvent('あ\n') + textEvent('more thinking', { thought: true }) + stopEvent(),
     });
-    const run = start([gemini()]);
+    const run = start(gemini());
     const result = await run.promise;
     expect(run.chunks).toEqual(['L1: ', 'あ\n']);
     expect(result.text).toBe('L1: あ\n');
@@ -270,7 +251,7 @@ describe('generateWithFallback: quota cooldowns', () => {
   it('stores a daily-quota cooldown and skips that model on the next call without requesting it', async () => {
     reply(A, dailyQuota());
     reply(B, ok('L1: あ\n'));
-    const first = start([gemini()]);
+    const first = start(gemini());
     await first.promise;
     expect(generated).toEqual([A, B]);
     expect(first.statuses.some((s) => s.includes('今日の上限'))).toBe(true);
@@ -282,7 +263,7 @@ describe('generateWithFallback: quota cooldowns', () => {
 
     generated = [];
     reply(B, ok('L1: い\n'));
-    const second = await start([gemini()]).promise;
+    const second = await start(gemini()).promise;
     expect(generated).toEqual([B]); // A is not requested at all
     expect(second.model).toBe(B);
   });
@@ -291,12 +272,12 @@ describe('generateWithFallback: quota cooldowns', () => {
     reply(A, dailyQuota());
     reply(B, dailyQuota());
     reply(C, dailyQuota());
-    const first = await settle(start([gemini()]));
+    const first = await settle(start(gemini()));
     expect(first.error?.kind).toBe('quota');
     expect(generated).toEqual([A, B, C]);
 
     generated = [];
-    const second = await settle(start([gemini()]));
+    const second = await settle(start(gemini()));
     expect(second.error?.kind).toBe('quota');
     expect(second.error?.status).toBe(429);
     expect(second.error?.message).toContain('上限');
@@ -305,11 +286,11 @@ describe('generateWithFallback: quota cooldowns', () => {
 
   it('does not skip a model the user pinned, even when a cooldown is stored', async () => {
     reply(A, dailyQuota());
-    const first = await settle(start([gemini({ model: A })]));
+    const first = await settle(start(gemini({ model: A })));
     expect(first.error?.kind).toBe('quota');
 
     reply(A, ok('L1: あ\n'));
-    const second = await start([gemini({ model: A })]).promise;
+    const second = await start(gemini({ model: A })).promise;
     expect(second.model).toBe(A);
     expect(generated).toEqual([A, A]);
   });
@@ -317,12 +298,12 @@ describe('generateWithFallback: quota cooldowns', () => {
   it('clearCooldowns() makes skipped models eligible again', async () => {
     reply(A, dailyQuota());
     reply(B, ok('L1: あ\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     await clearCooldowns();
     generated = [];
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field')); // B answered last time, so it is still asked first
     reply(A, ok('L1: い\n'));
-    const result = await start([gemini()]).promise;
+    const result = await start(gemini()).promise;
     expect(generated).toEqual([B, A]); // A is no longer skipped
     expect(result.model).toBe(A);
   });
@@ -330,7 +311,7 @@ describe('generateWithFallback: quota cooldowns', () => {
   it('parks a per-minute limit with a long retry delay for at least that long, without waiting', async () => {
     reply(A, rateLimited('120s'));
     reply(B, ok('L1: あ\n'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     const result = await run.promise;
     expect(generated).toEqual([A, B]);
     expect(result.model).toBe(B);
@@ -343,7 +324,7 @@ describe('generateWithFallback: quota cooldowns', () => {
   it('remembers a missing model (404) for days', async () => {
     reply(A, googleError(404, 'NOT_FOUND', 'models/gemini-3.5-flash is not found for API version v1beta'));
     reply(B, ok('L1: あ\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     const cooldown = (await readCooldowns())[cooldownKey(A)]!;
     expect(cooldown.reason).toBe('not-found');
     expect(cooldown.until - Date.now()).toBeGreaterThan(2 * 24 * 3600_000);
@@ -351,17 +332,15 @@ describe('generateWithFallback: quota cooldowns', () => {
 });
 
 describe('generateWithFallback: when every candidate is cooling down', () => {
-  const openrouter = () => newProvider('openrouter', 'ork');
-  const groq = () => newProvider('groq', 'gk');
   const FREE = ['vendor/one:free', 'vendor/two:free', 'vendor/three:free'];
 
   it('reports a per-minute wait as "rate", not as the daily quota, without any request', async () => {
-    const config = openrouter();
+    const config = gemini();
     await seedModels(config, ...FREE);
     const until = Date.now() + 60_000;
     await seedCooldowns(Object.fromEntries(FREE.map((m) => [cooldownId(config, m), { until, reason: 'rate' }])));
 
-    const { error } = await settle(start([config]));
+    const { error } = await settle(start(config));
     expect(error).toBeInstanceOf(LLMError);
     expect(error?.kind).toBe('rate');
     expect(error?.retryAfterMs).toBeGreaterThan(0);
@@ -370,20 +349,19 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     expect(http).not.toHaveBeenCalled();
   });
 
-  it('reports the real reset: the earliest quota cooldown across providers', async () => {
+  it('reports the real reset: the earliest quota cooldown among the models', async () => {
     const g = gemini();
-    const q = groq();
     await seedModels(g, A, B, C);
-    await seedModels(q, 'groq-model');
     const now = Date.now();
     await seedCooldowns({
-      ...Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until: now + 10 * 3600_000, reason: 'quota' }])),
-      [cooldownId(q, 'groq-model')]: { until: now + 3 * 3600_000, reason: 'quota' },
+      [cooldownId(g, A)]: { until: now + 10 * 3600_000, reason: 'quota' },
+      [cooldownId(g, B)]: { until: now + 10 * 3600_000, reason: 'quota' },
+      [cooldownId(g, C)]: { until: now + 3 * 3600_000, reason: 'quota' },
     });
 
-    const { error } = await settle(start([g, q]));
+    const { error } = await settle(start(g));
     expect(error?.kind).toBe('quota');
-    expect(Math.abs(error!.retryAfterMs - 3 * 3600_000)).toBeLessThan(5_000); // Groq's, not Gemini's later one
+    expect(Math.abs(error!.retryAfterMs - 3 * 3600_000)).toBeLessThan(5_000); // C's, not the later ones
     expect(http).not.toHaveBeenCalled();
   });
 
@@ -391,23 +369,22 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     const g = gemini();
     await seedModels(g, A);
     await seedCooldowns({ [cooldownId(g, A)]: { until: Date.now() + 5_000, reason: 'quota' } });
-    const { error } = await settle(start([g]));
+    const { error } = await settle(start(g));
     expect(error?.kind).toBe('quota');
     expect(error?.retryAfterMs).toBeGreaterThan(60_000);
   });
 
-  it('a short rate cooldown on one provider beats a longer quota cooldown on another', async () => {
+  it('a short rate cooldown on one model beats a longer quota cooldown on another', async () => {
     const g = gemini();
-    const q = groq();
     await seedModels(g, A, B, C);
-    await seedModels(q, 'groq-model');
     const now = Date.now();
     await seedCooldowns({
-      ...Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until: now + 10 * 3600_000, reason: 'quota' }])),
-      [cooldownId(q, 'groq-model')]: { until: now + 30_000, reason: 'rate' },
+      [cooldownId(g, A)]: { until: now + 10 * 3600_000, reason: 'quota' },
+      [cooldownId(g, B)]: { until: now + 10 * 3600_000, reason: 'quota' },
+      [cooldownId(g, C)]: { until: now + 30_000, reason: 'rate' },
     });
 
-    const { error } = await settle(start([g, q]));
+    const { error } = await settle(start(g));
     expect(error?.kind).toBe('rate');
     expect(error?.retryAfterMs).toBeGreaterThan(20_000);
     expect(error?.retryAfterMs).toBeLessThanOrEqual(30_000);
@@ -419,7 +396,7 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     await seedModels(g, A, B, C);
     const until = Date.now() + 3 * 24 * 3600_000;
     await seedCooldowns(Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until, reason: 'not-found' }])));
-    const { error } = await settle(start([g]));
+    const { error } = await settle(start(g));
     expect(error?.kind).toBe('quota'); // as before: nothing better to say
     expect(error?.retryAfterMs).toBe(0);
     expect(error?.message).toContain('上限');
@@ -430,26 +407,23 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     reply(A, dailyQuota());
     reply(B, dailyQuota());
     reply(C, dailyQuota());
-    const { error } = await settle(start([gemini()]));
+    const { error } = await settle(start(gemini()));
     expect(error?.kind).toBe('quota');
     expect(error?.model).toBe(A);
-    expect(error?.provider).toBe('Google Gemini');
     const soonest = Math.min(...Object.values(await readCooldowns()).map((c) => c.until));
     expect(error!.retryAfterMs).toBeGreaterThan(60_000);
     expect(Math.abs(error!.retryAfterMs - (soonest - Date.now()))).toBeLessThan(5_000);
   });
 
-  it('a real quota error turns into a short "rate" wait when another provider returns within a minute', async () => {
+  it('a real quota error turns into a short "rate" wait when another model returns within a minute', async () => {
     const g = gemini();
-    const q = groq();
-    await seedModels(q, 'groq-model');
-    await seedCooldowns({ [cooldownId(q, 'groq-model')]: { until: Date.now() + 45_000, reason: 'rate' } });
+    await seedModels(g, A, B, C);
+    await seedCooldowns({ [cooldownId(g, C)]: { until: Date.now() + 45_000, reason: 'rate' } });
     reply(A, dailyQuota());
     reply(B, dailyQuota());
-    reply(C, dailyQuota());
 
-    const { error } = await settle(start([g, q]));
-    expect(generated).toEqual([A, B, C]); // Groq is skipped, not tried
+    const { error } = await settle(start(g));
+    expect(generated).toEqual([A, B]); // C is skipped, not tried
     expect(error?.kind).toBe('rate');
     expect(error?.retryAfterMs).toBeGreaterThan(30_000);
     expect(error?.retryAfterMs).toBeLessThanOrEqual(45_000);
@@ -457,7 +431,7 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
 
   it('passes an error that is not a quota error through unchanged', async () => {
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
-    const { error } = await settle(start([gemini({ model: B })]));
+    const { error } = await settle(start(gemini({ model: B })));
     expect(error?.kind).toBe('bad-request');
     expect(error?.retryAfterMs).toBe(0);
     expect(error?.status).toBe(400);
@@ -470,14 +444,14 @@ describe('generateWithFallback: the cooldown table follows what happened', () =>
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(A, ok('L1: あ\n'));
-    const first = await start([gemini()]).promise;
+    const first = await start(gemini()).promise;
     expect(generated).toEqual([B, C, A]); // the benched model goes last
     expect(first.model).toBe(A);
     expect(await readCooldowns()).toEqual({});
 
     generated = [];
     reply(A, ok('L1: い\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     expect(generated).toEqual([A]); // first in line again
   });
 
@@ -488,7 +462,7 @@ describe('generateWithFallback: the cooldown table follows what happened', () =>
     });
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(A, ok('L1: あ\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     expect(Object.keys(await readCooldowns())).toEqual([cooldownKey(C)]);
   });
 
@@ -497,7 +471,7 @@ describe('generateWithFallback: the cooldown table follows what happened', () =>
       status: 200,
       body: textEvent('L1: あ\n') + ev({ error: { code: 503, status: 'UNAVAILABLE', message: 'The model is overloaded.' } }),
     });
-    const first = await start([gemini()]).promise;
+    const first = await start(gemini()).promise;
     expect(first.error?.kind).toBe('overloaded');
     expect(first.model).toBe(A);
     expect(generated).toEqual([A]);
@@ -507,116 +481,35 @@ describe('generateWithFallback: the cooldown table follows what happened', () =>
 
     generated = [];
     reply(B, ok('L1: い\n'));
-    const second = await start([gemini()]).promise;
+    const second = await start(gemini()).promise;
     expect(generated).toEqual([B]); // A was demoted to the end
     expect(second.model).toBe(B);
   });
 
   it('skips a model that hit a per-minute limit mid-stream until the limit has passed', async () => {
     reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('rate', 'slow down', { status: 429, retryAfterMs: 5_000 }) });
-    const first = await start([gemini()]).promise;
+    const first = await start(gemini()).promise;
     expect(first.error?.kind).toBe('rate');
     expect((await readCooldowns())[cooldownKey(A)]?.reason).toBe('rate');
 
     generated = [];
     reply(B, ok('L1: い\n'));
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     expect(generated).toEqual([B]);
   });
 
   it('does not bench a model whose stream merely dropped', async () => {
     reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'down') });
-    await start([gemini()]).promise;
+    await start(gemini()).promise;
     expect(await readCooldowns()).toEqual({});
   });
 });
 
-describe('OpenAI-compatible providers: reasoning effort', () => {
-  const REPLY: Reply = { status: 200, body: ev({ choices: [{ delta: { content: 'L1: あ\n' }, finish_reason: 'stop' }] }) };
-  const reject = (message: string): Reply => ({ status: 400, body: JSON.stringify({ error: { message, type: 'invalid_request_error' } }) });
-  const pinned = (preset: string, model: string): ProviderConfig => ({ ...newProvider(preset, 'k'), model });
-  const bodies = () =>
-    http.mock.calls.map(([r]) => r).filter((r) => r.url.endsWith('/chat/completions')).map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
-
-  it('sends the thinking level to gpt-oss on Groq and Cerebras', async () => {
-    reply('openai/gpt-oss-120b', REPLY);
-    reply('gpt-oss-120b', REPLY);
-    await start([pinned('groq', 'openai/gpt-oss-120b')]).promise; // start() thinks at "low"
-    await start([pinned('cerebras', 'gpt-oss-120b')]).promise;
-    expect(bodies().map((b) => b.reasoning_effort)).toEqual(['low', 'low']);
-  });
-
-  it('follows the reader\'s level, not a fixed one', async () => {
-    reply('openai/gpt-oss-120b', REPLY);
-    await generateWithFallback(
-      [pinned('groq', 'openai/gpt-oss-120b')],
-      { system: 's', user: 'u', maxOutputTokens: 100, thinking: 'high', onText: () => undefined },
-    );
-    expect(bodies()[0]?.reasoning_effort).toBe('high');
-  });
-
-  it('leaves other models and endpoints alone', async () => {
-    reply('llama-3.3-70b-versatile', REPLY);
-    reply('openai/gpt-oss-120b:free', REPLY);
-    reply('gpt-oss:20b', REPLY);
-    await start([pinned('groq', 'llama-3.3-70b-versatile')]).promise;
-    await start([pinned('openrouter', 'openai/gpt-oss-120b:free')]).promise;
-    await start([pinned('ollama', 'gpt-oss:20b')]).promise;
-    const sent = bodies();
-    expect(sent).toHaveLength(3);
-    for (const body of sent) expect(body).not.toHaveProperty('reasoning_effort');
-  });
-
-  it('retries once without the field when the endpoint rejects it', async () => {
-    reply('openai/gpt-oss-120b', reject("Unsupported parameter: 'reasoning_effort' is not supported with this model."), REPLY);
-    const result = await start([pinned('groq', 'openai/gpt-oss-120b')]).promise;
-    expect(result.model).toBe('openai/gpt-oss-120b');
-    expect(result.text).toBe('L1: あ\n');
-    const sent = bodies();
-    expect(sent).toHaveLength(2);
-    expect(sent[0]?.reasoning_effort).toBe('low');
-    expect(sent[1]).not.toHaveProperty('reasoning_effort');
-  });
-
-  it('does not retry forever: a second rejection that mentions reasoning is an error', async () => {
-    reply('openai/gpt-oss-120b', reject('reasoning_effort is invalid'), reject('reasoning is not supported'));
-    const { error } = await settle(start([pinned('groq', 'openai/gpt-oss-120b')]));
-    expect(error?.kind).toBe('bad-request');
-    expect(bodies()).toHaveLength(2);
-  });
-
-  it('still flips the token parameter name, and can do both in one call', async () => {
-    reply(
-      'openai/gpt-oss-120b',
-      reject("Unsupported parameter: 'max_completion_tokens'. Use 'max_tokens' instead."),
-      reject("Unknown parameter: 'reasoning_effort'."),
-      REPLY,
-    );
-    const result = await start([pinned('groq', 'openai/gpt-oss-120b')]).promise;
-    expect(result.text).toBe('L1: あ\n');
-    const sent = bodies();
-    expect(sent).toHaveLength(3);
-    expect(sent[0]).toMatchObject({ max_completion_tokens: 1000, reasoning_effort: 'low' });
-    expect(sent[1]).toMatchObject({ max_tokens: 1000, reasoning_effort: 'low' });
-    expect(sent[2]).toMatchObject({ max_tokens: 1000 });
-    expect(sent[2]).not.toHaveProperty('reasoning_effort');
-    expect(sent[2]).not.toHaveProperty('max_completion_tokens');
-  });
-
-  it('does not retry an unrelated bad request', async () => {
-    reply('openai/gpt-oss-120b', reject('messages: content must be a string'));
-    const { error } = await settle(start([pinned('groq', 'openai/gpt-oss-120b')]));
-    expect(error?.kind).toBe('bad-request');
-    expect(bodies()).toHaveLength(1);
-  });
-});
-
 describe('cooldown ids and API keys', () => {
-  it('cooldownId is preset, endpoint, key fingerprint and model', () => {
+  it('cooldownId is gemini, endpoint, key fingerprint and model', () => {
     const config = gemini();
     expect(cooldownId(config, 'm')).toBe(`gemini:${GEMINI_BASE}:${keyTag(config)}:m`);
     expect(cooldownId(config, '')).toBe(`gemini:${GEMINI_BASE}:${keyTag(config)}:`);
-    expect(cooldownId({ ...config, baseUrl: 'https://proxy.example' }, 'm')).toBe(`gemini:https://proxy.example:${keyTag(config)}:m`);
   });
 
   it('keyTag is stable, ignores surrounding whitespace, tells keys apart, and does not contain the key', () => {
@@ -632,27 +525,27 @@ describe('cooldown ids and API keys', () => {
     const config = gemini({ apiKey: 'key-one' });
     reply(A, dailyQuota());
     reply(B, ok('L1: あ\n'));
-    await start([config]).promise;
+    await start(config).promise;
     const stored = await readCooldowns();
     expect(Object.keys(stored)).toEqual([cooldownId(config, A)]);
     expect(stored[cooldownKey(A, config)]?.reason).toBe('quota');
     expect(stored[cooldownKey(A, gemini({ apiKey: 'key-two' }))]).toBeUndefined();
   });
 
-  it("still tries a second Gemini key after the first key's models are all in quota cooldown", async () => {
+  it("still tries a second key after the first key's models are all in quota cooldown", async () => {
     const first = gemini({ apiKey: 'key-one' });
-    const second = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+    const second = gemini({ apiKey: 'key-two' });
     reply(A, dailyQuota());
     reply(B, dailyQuota());
     reply(C, dailyQuota());
-    expect((await settle(start([first]))).error?.kind).toBe('quota');
+    expect((await settle(start(first))).error?.kind).toBe('quota');
     expect(generatedKeys).toEqual(['key-one', 'key-one', 'key-one']);
 
     // the first key is spent for today; the second is another project with its own quota
     generated = [];
     generatedKeys = [];
     reply(A, ok('L1: あ\n'));
-    const run = start([first, second]);
+    const run = start(second);
     const result = await run.promise;
     expect(result.model).toBe(A);
     expect(generated).toEqual([A]);
@@ -662,15 +555,15 @@ describe('cooldown ids and API keys', () => {
     expect(Object.keys(stored).sort()).toEqual([A, B, C].map((m) => cooldownId(first, m)).sort());
   });
 
-  it('keeps a spent key skipped when another provider entry carries the same key', async () => {
+  it('keeps a spent key skipped, whichever way the same key is passed', async () => {
     const first = gemini({ apiKey: 'key-one' });
     reply(A, dailyQuota());
     reply(B, dailyQuota());
     reply(C, dailyQuota());
-    await settle(start([first]));
+    await settle(start(first));
 
     generated = [];
-    const again = await settle(start([gemini({ id: 'gemini-again', apiKey: 'key-one' })]));
+    const again = await settle(start(gemini({ apiKey: '  key-one ' })));
     expect(again.error?.kind).toBe('quota');
     expect(again.error?.message).toContain('上限');
     expect(generated).toEqual([]);
@@ -678,10 +571,10 @@ describe('cooldown ids and API keys', () => {
 
   it('keeps the model list per key too', async () => {
     const first = gemini({ apiKey: 'key-one' });
-    const second = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+    const second = gemini({ apiKey: 'key-two' });
     reply(A, ok('L1: あ\n'), ok('L1: い\n'), ok('L1: う\n'));
-    await start([first]).promise;
-    await start([second]).promise;
+    await start(first).promise;
+    await start(second).promise;
     const listRequests = () => http.mock.calls.filter(([r]) => r.url.includes('/v1beta/models?'));
     expect(listRequests()).toHaveLength(2);
     expect(listRequests().map(([r]) => r.headers?.['x-goog-api-key'])).toEqual(['key-one', 'key-two']);
@@ -689,7 +582,7 @@ describe('cooldown ids and API keys', () => {
     expect((await getJSON<{ models: unknown[] } | null>(`ll3:models:${cooldownId(second, '')}`, null))?.models).toHaveLength(3);
 
     // a key that is already listed is not listed again
-    await start([first]).promise;
+    await start(first).promise;
     expect(listRequests()).toHaveLength(2);
   });
 });
@@ -698,11 +591,10 @@ describe('generateWithFallback: auth', () => {
   it('throws kind "auth" on 401 and does not try the provider\'s other models', async () => {
     reply(A, unauthorized());
     reply(B, ok('L1: あ\n'));
-    const { error } = await settle(start([gemini()]));
+    const { error } = await settle(start(gemini()));
     expect(error).toBeInstanceOf(LLMError);
     expect(error?.kind).toBe('auth');
     expect(error?.model).toBe(A);
-    expect(error?.provider).toBe('Google Gemini');
     expect(generated).toEqual([A]);
     expect(await readCooldowns()).toEqual({}); // a bad key is not a cooldown
   });
@@ -711,11 +603,10 @@ describe('generateWithFallback: auth', () => {
     const config = gemini();
     expect(await keyStatus(config)).toEqual({ kind: 'ok' });
     reply(A, unauthorized());
-    await settle(start([config]));
+    await settle(start(config));
 
     expect(await keyStatus(config)).toEqual({ kind: 'bad' });
-    expect(await keyStatus({ ...config, id: 'elsewhere' })).toEqual({ kind: 'bad' }); // same key, wherever it is configured
-    expect(await keyStatus(gemini({ apiKey: 'a-different-key' }))).toEqual({ kind: 'ok' });
+        expect(await keyStatus(gemini({ apiKey: 'a-different-key' }))).toEqual({ kind: 'ok' });
     expect(await keyStatus(gemini({ apiKey: '   ' }))).toEqual({ kind: 'missing' });
   });
 
@@ -732,7 +623,7 @@ describe('generateWithFallback: auth', () => {
     reply(A, busy());
     reply(B, dailyQuota());
     reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
-    await settle(start([config]));
+    await settle(start(config));
     expect((await keyStatus(config)).kind).not.toBe('bad');
   });
 
@@ -741,7 +632,7 @@ describe('generateWithFallback: auth', () => {
     reply(A, dailyQuota());
     reply(B, dailyQuota());
     reply(C, dailyQuota());
-    await settle(start([config]));
+    await settle(start(config));
     const status = await keyStatus(config);
     expect(status.kind).toBe('resting');
     const stored = await readCooldowns();
@@ -755,45 +646,15 @@ describe('generateWithFallback: auth', () => {
   it('also remembers a key that was rejected by the model-list request', async () => {
     listReply = unauthorized();
     const config = gemini();
-    const { error } = await settle(start([config]));
+    const { error } = await settle(start(config));
     expect(error?.kind).toBe('auth');
     expect(await keyStatus(config)).toEqual({ kind: 'bad' });
   });
 
-  it('moves on to the next provider after an auth failure', async () => {
-    reply(A, unauthorized());
-    reply('llama-3.3-70b-versatile', {
-      status: 200,
-      body: ev({ choices: [{ delta: { content: '<think>hmm</think>L1: ' }, finish_reason: null }] })
-        + ev({ choices: [{ delta: { content: 'う\n' }, finish_reason: null }] })
-        + ev({ choices: [{ delta: {}, finish_reason: 'stop' }] })
-        + 'data: [DONE]\n\n',
-    });
-    const groq = { ...newProvider('groq', 'gk'), model: 'llama-3.3-70b-versatile' };
-    const run = start([gemini(), groq]);
-    const result = await run.promise;
-    expect(generated).toEqual([A, 'llama-3.3-70b-versatile']);
-    expect(result.provider).toBe('Groq');
-    expect(result.model).toBe('llama-3.3-70b-versatile');
-    expect(result.finish).toBe('stop');
-    expect(run.chunks.join('')).toBe('L1: う\n');
-  });
-
-  it('throws an auth error without any request when no provider is usable', async () => {
-    const disabled = gemini({ enabled: false });
-    const noKey = newProvider('gemini', '   ');
-    const { error } = await settle(start([disabled, noKey]));
+  it('throws an auth error without any request when there is no key', async () => {
+    const { error } = await settle(start(gemini({ apiKey: '   ' })));
     expect(error?.kind).toBe('auth');
     expect(http).not.toHaveBeenCalled();
-  });
-
-  it('isUsable checks enabled, key, and base URL', () => {
-    expect(isUsable(gemini())).toBe(true);
-    expect(isUsable(gemini({ enabled: false }))).toBe(false);
-    expect(isUsable(gemini({ apiKey: '  ' }))).toBe(false);
-    expect(isUsable(newProvider('ollama'))).toBe(true); // no key needed
-    expect(isUsable(newProvider('custom'))).toBe(false); // no base URL
-    expect(isUsable({ ...newProvider('custom'), baseUrl: 'http://localhost:1234/v1' })).toBe(true);
   });
 });
 
@@ -801,7 +662,7 @@ describe('generateWithFallback: partial output', () => {
   it('returns the result with `error` set when the stream breaks after some text, without trying other models', async () => {
     reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'ネットワークに接続できませんでした。') });
     reply(B, ok('should not be used'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     const result = await run.promise;
 
     expect(run.chunks).toEqual(['L1: あ\n']);
@@ -820,7 +681,7 @@ describe('generateWithFallback: partial output', () => {
       status: 200,
       body: textEvent('L1: あ\n') + ev({ error: { code: 503, status: 'UNAVAILABLE', message: 'The model is overloaded.' } }),
     });
-    const run = start([gemini()]);
+    const run = start(gemini());
     const result = await run.promise;
     expect(run.chunks).toEqual(['L1: あ\n']);
     expect(result.error?.kind).toBe('overloaded');
@@ -830,7 +691,7 @@ describe('generateWithFallback: partial output', () => {
   it('keeps the partial output when onText said the text was useful', async () => {
     reply(A, { partial: textEvent('{"t":"line"}\n'), throws: new LLMError('overloaded', 'busy') });
     reply(B, ok('should not be used'));
-    const run = start([gemini()], undefined, () => true);
+    const run = start(gemini(), undefined, () => true);
     const result = await run.promise;
     expect(result.error?.kind).toBe('overloaded');
     expect(result.model).toBe(A);
@@ -840,7 +701,7 @@ describe('generateWithFallback: partial output', () => {
   it('falls through to the next model when onText said false for everything before the error', async () => {
     reply(A, { partial: textEvent('{"t":"song"}\n') + textEvent('{"t":"song"}\n'), throws: new LLMError('overloaded', 'busy') });
     reply(B, ok('L1: あ\n'));
-    const run = start([gemini()], undefined, () => false);
+    const run = start(gemini(), undefined, () => false);
     const result = await run.promise;
     expect(generated).toEqual([A, B]);
     expect(result.model).toBe(B);
@@ -854,7 +715,7 @@ describe('generateWithFallback: partial output', () => {
   it('keeps the attempt once any chunk was useful, even if earlier ones were not', async () => {
     reply(A, { partial: textEvent('first\n') + textEvent('second\n') + textEvent('third\n'), throws: new LLMError('overloaded', 'busy') });
     reply(B, ok('should not be used'));
-    const run = start([gemini()], undefined, (chunks) => chunks.length >= 2);
+    const run = start(gemini(), undefined, (chunks) => chunks.length >= 2);
     const result = await run.promise;
     expect(result.error?.kind).toBe('overloaded');
     expect(generated).toEqual([A]);
@@ -862,14 +723,14 @@ describe('generateWithFallback: partial output', () => {
 
   it('a "not yet useful" attempt that ends cleanly is still a success', async () => {
     reply(A, ok('L1: あ\n'));
-    const result = await start([gemini()], undefined, () => false).promise;
+    const result = await start(gemini(), undefined, () => false).promise;
     expect(result.model).toBe(A);
     expect(result.error).toBeUndefined();
   });
 
   it('gives up with the error when the models keep failing before anything useful', async () => {
     for (const model of [A, B]) reply(model, { partial: textEvent('x\n'), throws: new LLMError('blocked', 'filtered') });
-    const { error } = await settle(start([gemini()], undefined, () => false));
+    const { error } = await settle(start(gemini(), undefined, () => false));
     expect(error?.kind).toBe('blocked');
     expect(generated).toEqual([A, B]); // a second refusal ends the round
   });
@@ -877,7 +738,7 @@ describe('generateWithFallback: partial output', () => {
   it('a stream error before any text still falls through to the next model', async () => {
     reply(A, { status: 200, body: ev({ error: { code: 503, status: 'UNAVAILABLE', message: 'The model is overloaded.' } }) });
     reply(B, ok('L1: い\n'));
-    const result = await start([gemini()]).promise;
+    const result = await start(gemini()).promise;
     expect(generated).toEqual([A, B]);
     expect(result.error).toBeUndefined();
   });
@@ -892,7 +753,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     reply(A, busy(), busy(), busy());
     reply(B, busy(), busy(), busy());
     reply(C, busy(), busy(), busy());
-    const run = start([gemini()]);
+    const run = start(gemini());
     const done = settle(run);
     await vi.advanceTimersByTimeAsync(40_000);
     const { error } = await done;
@@ -908,7 +769,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     reply(A, busy(), ok('L1: あ\n'));
     reply(B, busy());
     reply(C, busy());
-    const run = start([gemini()]);
+    const run = start(gemini());
     const done = settle(run);
     await vi.advanceTimersByTimeAsync(11_000);
     const { result, error } = await done;
@@ -921,7 +782,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     reply(A, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
-    const done = settle(start([gemini()]));
+    const done = settle(start(gemini()));
     await vi.advanceTimersByTimeAsync(1_000);
     const { error } = await done;
     expect(error?.kind).toBe('bad-request');
@@ -933,7 +794,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     reply(B, busy(), busy());
     reply(C, busy(), busy());
     const controller = new AbortController();
-    const done = settle(start([gemini()], controller.signal));
+    const done = settle(start(gemini(), controller.signal));
     await vi.advanceTimersByTimeAsync(2_500);
     expect(generated).toHaveLength(3);
     controller.abort();
@@ -945,7 +806,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
 
   it('reconnects once after a network error that produced no text', async () => {
     reply(A, { throws: new LLMError('network', 'down') }, ok('L1: あ\n'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     const done = settle(run);
     await vi.advanceTimersByTimeAsync(2_500);
     const { result } = await done;
@@ -956,7 +817,7 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
 
   it('retries a short per-minute limit after the advertised delay', async () => {
     reply(A, rateLimited('2s'), ok('L1: あ\n'));
-    const run = start([gemini()]);
+    const run = start(gemini());
     const done = settle(run);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(generated).toEqual([A]); // still waiting
@@ -1073,8 +934,8 @@ describe('generateWithFallback: model health (fake timers)', () => {
   });
 
   /** One call, with the fake clock advanced by `ms` (enough for every scripted silence). */
-  async function call(ms = 0, configs: ProviderConfig[] = [gemini()]) {
-    const run = start(configs);
+  async function call(ms = 0, cfg: Cfg = gemini()) {
+    const run = start(cfg);
     const done = settle(run);
     await vi.advanceTimersByTimeAsync(ms);
     return { run, ...(await done) };
@@ -1159,11 +1020,11 @@ describe('generateWithFallback: model health (fake timers)', () => {
     const silent = () => new LLMError('timeout', '応答が途切れました。');
 
     it('is given up on after its first-text timeout, benched for five minutes, and skipped by the next call', async () => {
-      reply(A, { throws: silent(), hangMs: FIRST_TEXT_TIMEOUT_MS.low });
+      reply(A, { throws: silent(), hangMs: FIRST_TEXT_TIMEOUT_MS });
       reply(B, ok('L1: あ\n'));
-      const first = start([gemini()]);
+      const first = start(gemini());
       const done = settle(first);
-      await vi.advanceTimersByTimeAsync(FIRST_TEXT_TIMEOUT_MS.low - 1);
+      await vi.advanceTimersByTimeAsync(FIRST_TEXT_TIMEOUT_MS - 1);
       expect(generated).toEqual([A]); // still waiting for A's first text
       await vi.advanceTimersByTimeAsync(1);
       const { result } = await done;
@@ -1171,7 +1032,7 @@ describe('generateWithFallback: model health (fake timers)', () => {
       expect(generated).toEqual([A, B]);
       expect(first.statuses).toContain('3.5-flash が応答なし · 次へ');
 
-      const failedAt = NOW + FIRST_TEXT_TIMEOUT_MS.low;
+      const failedAt = NOW + FIRST_TEXT_TIMEOUT_MS;
       expect((await readCooldowns())[cooldownKey(A)]).toEqual({ until: failedAt + 5 * MIN, reason: 'timeout' });
       expect((await readHealth())[cooldownKey(A)]).toEqual({ bad: failedAt });
 
@@ -1225,11 +1086,11 @@ describe('generateWithFallback: model health (fake timers)', () => {
     it('is un-benched when it answers a pinned request', async () => {
       const pinned = gemini({ model: A });
       reply(A, { throws: silent(), hangMs: 30_000 });
-      expect((await call(30_000, [pinned])).error?.kind).toBe('timeout');
+      expect((await call(30_000, pinned)).error?.kind).toBe('timeout');
       expect((await readCooldowns())[cooldownKey(A, pinned)]?.reason).toBe('timeout');
 
       reply(A, ok('L1: あ\n')); // a pinned model is asked despite the bench
-      expect((await call(0, [pinned])).result?.model).toBe(A);
+      expect((await call(0, pinned)).result?.model).toBe(A);
       expect(await readCooldowns()).toEqual({});
     });
 
@@ -1246,7 +1107,7 @@ describe('generateWithFallback: model health (fake timers)', () => {
       expect(second.error?.status).toBe(429);
       expect(second.error?.retryAfterMs).toBe(30_000 + 5 * MIN - 90_000); // A is the first to come back
       // the head's "worth a tap" check agrees: this is a short wait, not "out for the day"
-      expect(await availability([gemini()])).toEqual({ ok: true, until: 0 });
+      expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
       expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
     });
 
@@ -1334,30 +1195,18 @@ describe('generateWithFallback: model health (fake timers)', () => {
         [cooldownKey(A, pinned)]: { ok: NOW - MIN, ms: 10 },
       });
       reply(B, ok('L1: あ\n'));
-      const { result } = await call(0, [pinned]);
+      const { result } = await call(0, pinned);
       expect(result?.model).toBe(B);
       expect(generated).toEqual([B]);
       expect(http.mock.calls.some(([r]) => r.url.includes('/v1beta/models?'))).toBe(false);
     });
 
-    it('leaves the order of other providers alone', async () => {
-      const groq = newProvider('groq', 'gk');
-      await seedModels(groq, 'one', 'two', 'three');
-      await seedHealth({
-        [cooldownKey('two', groq)]: { ok: NOW - MIN, ms: 100 },
-        [cooldownKey('one', groq)]: { bad: NOW - MIN },
-      });
-      for (const model of ['one', 'two', 'three']) reply(model, badField());
-      await call(0, [groq]);
-      expect(generated).toEqual(['one', 'two', 'three']);
-    });
-
     it('does not mix up two API keys', async () => {
       const one = gemini({ apiKey: 'key-one' });
-      const two = gemini({ id: 'gemini-2', apiKey: 'key-two' });
+      const two = gemini({ apiKey: 'key-two' });
       await seedHealth({ [cooldownKey(B, one)]: { ok: NOW - MIN, ms: 100 } });
       for (const model of [A, B, C]) reply(model, badField());
-      await call(0, [two]);
+      await call(0, two);
       expect(generated).toEqual([A, B, C]); // key-two has seen nothing
     });
   });
@@ -1400,21 +1249,27 @@ describe('generateWithFallback: model health (fake timers)', () => {
   });
 });
 
-describe('GeminiProvider: first-text timeout follows the thinking level', () => {
-  it('is 30 s, 75 s and 120 s for low, medium and high thinking', () => {
-    expect(FIRST_TEXT_TIMEOUT_MS).toEqual({ low: 30_000, medium: 75_000, high: 120_000 });
-  });
-
-  it.each([['low', 30_000], ['medium', 75_000], ['high', 120_000]] as const)('sends %s thinking with a %i ms first-text timeout and an unchanged idle timeout', async (thinking, ms) => {
-    reply(A, ok('L1: あ\n'));
-    await generateWithFallback(
-      [gemini({ model: A })],
-      { system: 's', user: 'u', maxOutputTokens: 100, thinking, onText: () => undefined },
-    );
+describe('GeminiProvider: first-text timeout', () => {
+  it('is 30 s, with an unchanged idle timeout', async () => {
+    expect(FIRST_TEXT_TIMEOUT_MS).toBe(30_000);
+    reply(A, ok('L1: あ'+String.fromCharCode(92)+'n'));
+    await generateWithFallback('test-key', { system: 's', user: 'u', maxOutputTokens: 100, onText: () => undefined }, { onlyModels: [A] });
     const sent = http.mock.calls.map(([r]) => r).filter((r) => r.url.includes(':streamGenerateContent'));
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.firstByteTimeoutMs).toBe(ms);
+    expect(sent[0]?.firstByteTimeoutMs).toBe(30_000);
     expect(sent[0]?.idleTimeoutMs).toBe(90_000);
+  });
+
+  it('sends thinking level low to Gemini 3 and a 1024 budget to 2.5, and none to Gemma', async () => {
+    reply(A, ok('x'), ok('x'));
+    reply(B, ok('x'));
+    reply('gemma-4-31b-it', ok('x'));
+    for (const model of [A, B, 'gemma-4-31b-it']) {
+      await generateWithFallback('test-key', { system: 's', user: 'u', maxOutputTokens: 100, onText: () => undefined }, { onlyModels: [model] });
+    }
+    const configs = http.mock.calls.map(([r]) => r).filter((r) => r.url.includes(':streamGenerateContent'))
+      .map((r) => (JSON.parse(r.body ?? '{}') as { generationConfig: { thinkingConfig?: unknown } }).generationConfig.thinkingConfig);
+    expect(configs).toEqual([{ thinkingLevel: 'low' }, { thinkingBudget: 1024 }, undefined]);
   });
 });
 
@@ -1430,5 +1285,48 @@ describe('nextPacificMidnight', () => {
   it('treats exactly-midnight as the start of a full day (the formatter may print hour 24)', () => {
     const midnight = Date.UTC(2026, 0, 15, 8, 0, 0); // 00:00 PST
     expect(nextPacificMidnight(midnight)).toBe(midnight + 24 * 3600_000 + 60_000);
+  });
+});
+
+describe('cleanOtherProviders', () => {
+  const KEY = 'test-key';
+  const mine = (model: string) => cooldownIdOf(KEY, model);
+  const groqId = 'groq:https://api.groq.com/openai/v1:abc:llama-3.3-70b-versatile';
+  const ollamaId = 'ollama:http://localhost:11434/v1:abc:qwen';
+
+  async function seed() {
+    await setJSON('ll3:cooldowns', {
+      [mine(A)]: { until: Date.now() + 60_000, reason: 'rate' },
+      [groqId]: { until: Date.now() + 60_000, reason: 'quota' },
+    });
+    await setJSON('ll3:health', { [mine(A)]: { ok: 1 }, [ollamaId]: { ok: 2 } });
+    await setJSON(`ll3:models:${mine('')}`, { at: 1, models: [] });
+    await setJSON('ll3:models:groq:https://api.groq.com/openai/v1:abc:', { at: 1, models: [] });
+    await setJSON(`ll3:badkey:${keyTagOf(KEY)}`, true);
+    await setJSON('ll3:badkey:zzz', true);
+    await setJSON('ll3:s:id:1', { v: 2 });
+    await setJSON('ll3:index', []);
+    await setJSON('ll3:settings', { apiKey: KEY, hideTranslation: false });
+    await setJSON('ll3:lock', { id: 'x' });
+  }
+
+  it('drops other services models lists, cooldowns, health and bad-key marks, and nothing else', async () => {
+    await seed();
+    await cleanOtherProviders(KEY);
+    expect(Object.keys(await getJSON<Record<string, unknown>>('ll3:cooldowns', {}))).toEqual([mine(A)]);
+    expect(Object.keys(await getJSON<Record<string, unknown>>('ll3:health', {}))).toEqual([mine(A)]);
+    expect((await listKeys()).sort()).toEqual([
+      `ll3:badkey:${keyTagOf(KEY)}`, 'll3:cooldowns', 'll3:health', 'll3:index', 'll3:lock', `ll3:models:${mine('')}`, 'll3:s:id:1', 'll3:settings',
+    ].sort());
+  });
+
+  it('is idempotent and harmless on an empty store', async () => {
+    await cleanOtherProviders(KEY);
+    expect(await listKeys()).toEqual([]);
+    await seed();
+    await cleanOtherProviders(KEY);
+    const once = (await listKeys()).sort();
+    await cleanOtherProviders(KEY);
+    expect((await listKeys()).sort()).toEqual(once);
   });
 });

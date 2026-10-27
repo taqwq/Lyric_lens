@@ -21,8 +21,6 @@ const base: ViewInput = {
   hidden: false,
   hasKey: true,
   keyBad: false,
-  onlyGemini: true,
-  spare: null,
   total: 40,
   done: 0,
   stop: undefined,
@@ -37,7 +35,6 @@ const base: ViewInput = {
 const view = (over: Partial<ViewInput> = {}): ViewInput => ({ ...base, ...over });
 const stopOf = (reason: StopReason, extra: Partial<StopInfo> = {}): StopInfo => ({ reason, at: NOW - 5_000, ...extra });
 const at = (until: number) => formatWhen(until, NOW);
-const SPARE = { id: 'groq', name: 'Groq' };
 
 const SETTINGS: ActionSpec = { id: 'settings', label: '設定' };
 const STOP: ActionSpec = { id: 'stop', label: '止める' };
@@ -49,7 +46,6 @@ const WRITING = { slots: true, gaps: false, breathing: true, seam: null };
 
 const BLOCKED_BY_OTHER = '別の曲を訳し終えると続きを訳せます';
 const quotaBlocker = (until: number) => `今日の無料枠は終わりました。${at(until)}から訳せます`;
-const spareHint = (name: string) => `${name}の無料キーを足すと、今日も続けて訳せます`;
 
 /** toEqual ignores undefined properties; this also fails on a stray `note: undefined`/`tone`. */
 function expectDecision(actual: Decision, expected: Decision): void {
@@ -170,7 +166,7 @@ describe('S2b another song is being written', () => {
 });
 
 describe('S2q quota known exhausted', () => {
-  it('without a spare service: the reset time and 設定', () => {
+  it('the reset time and 設定', () => {
     const d = decide(view({ avail: { ok: false, until: SOON } }));
     expectDecision(d, {
       state: 'S2q',
@@ -181,18 +177,6 @@ describe('S2q quota known exhausted', () => {
       lines: NONE,
     });
     expect(d.status).toBe(quotaBlocker(SOON));
-  });
-
-  it('with a spare service: the note and キーを足す instead of 設定', () => {
-    expectDecision(decide(view({ avail: { ok: false, until: SOON }, spare: SPARE })), {
-      state: 'S2q',
-      status: '今日の無料枠は終わりました。15:00から訳せます',
-      tone: 'muted',
-      note: 'Groqの無料キーを足すと、今日も続けて訳せます',
-      actions: [{ id: 'addKey', label: 'キーを足す' }],
-      preface: false,
-      lines: NONE,
-    });
   });
 
   it('says 明日 when the reset is on the next day in Japan', () => {
@@ -214,7 +198,7 @@ describe('S2q quota known exhausted', () => {
   });
 
   it('is below S2b: another song running is the more useful thing to say', () => {
-    const d = decide(view({ avail: { ok: false, until: SOON }, spare: SPARE, otherSong: 'Hello' }));
+    const d = decide(view({ avail: { ok: false, until: SOON }, otherSong: 'Hello' }));
     expect(d.state).toBe('S2b');
   });
 });
@@ -227,8 +211,7 @@ describe('S2f the first request produced nothing', () => {
     { name: 'rate before until (button waits)', stop: stopOf('rate', { until: MINUTE_LATER }), status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
     { name: 'rate one ms before until', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER - 1 }, status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
     { name: 'rate without a known until', stop: stopOf('rate'), status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます' },
-    { name: 'blocked, Gemini the only service', stop: stopOf('blocked'), over: { onlyGemini: true }, status: 'AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります' },
-    { name: 'blocked, other services configured', stop: stopOf('blocked'), over: { onlyGemini: false }, status: 'AIの安全フィルタで止められ、訳せませんでした' },
+    { name: 'blocked', stop: stopOf('blocked'), status: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
     { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
     { name: 'unusable', stop: stopOf('unusable'), status: 'AIの返事をうまく読み取れませんでした。もう一度試せます' },
@@ -430,8 +413,8 @@ describe('S5g complete with gaps', () => {
     });
   });
 
-  it('quota spent: the reset time as the note, button disabled, no spare offer', () => {
-    expectDecision(gaps({ avail: { ok: false, until: SOON }, spare: SPARE }), {
+  it('quota spent: the reset time as the note, button disabled', () => {
+    expectDecision(gaps({ avail: { ok: false, until: SOON } }), {
       state: 'S5g',
       status: '15行が訳せていません',
       note: '今日の無料枠は終わりました。15:00から訳せます',
@@ -506,7 +489,6 @@ describe('S6 interrupted', () => {
   const RESUME: ActionSpec = { id: 'resume', label: '続きを訳す', disabled: false };
   const RESUME_WAITING: ActionSpec = { id: 'resume', label: '続きを訳す', disabled: true };
   const NOOP: ActionSpec = { id: 'noop', label: '続きを訳す', disabled: true };
-  const ADD_KEY: ActionSpec = { id: 'addKey', label: 'キーを足す' };
   const OPEN_SETTINGS: ActionSpec = { id: 'settings', label: '設定を開く' };
 
   interface Row {
@@ -526,15 +508,13 @@ describe('S6 interrupted', () => {
     { name: 'rate without until', stop: stopOf('rate'), seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'rate at until reads as closed', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
     { name: 'rate past until reads as closed', stop: stopOf('rate', { until: NOW - 1 }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'quota, no spare', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'quota', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'quota, reset tomorrow', stop: stopOf('quota', { until: TOMORROW }), over: { avail: { ok: false, until: TOMORROW } }, seam: { text: '今日の無料枠が終わりました。明日 01:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'quota, no known reset', stop: stopOf('quota'), over: { avail: { ok: false, until: 0 } }, seam: { text: '今日の無料枠が終わりました。あとで続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'quota with a spare: offers キーを足す', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: false, until: SOON }, spare: SPARE }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます。Groqの無料キーを足すと、今日も続けて訳せます', button: ADD_KEY }, explainWhenHidden: true },
     { name: 'quota that is available again reads as closed', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: true, until: 0 } }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
     { name: 'auth with a rejected key: 設定を開く', stop: stopOf('auth'), over: { keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
     { name: 'auth, key not rejected any more, reads as closed', stop: stopOf('auth'), over: { keyBad: false }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'blocked, Gemini only', stop: stopOf('blocked'), over: { onlyGemini: true }, seam: { text: 'この先はAIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'blocked, other services', stop: stopOf('blocked'), over: { onlyGemini: false }, seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることもあります', button: RESUME }, explainWhenHidden: false },
+    { name: 'blocked', stop: stopOf('blocked'), seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'network, offline: waiting button', stop: stopOf('network'), over: { online: false }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'unusable', stop: stopOf('unusable'), seam: { text: 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
@@ -548,15 +528,11 @@ describe('S6 interrupted', () => {
     { name: 'another song running, stopped', stop: stopOf('stopped'), over: { otherSong: 'X' }, seam: { text: 'ここで止めました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, closed', stop: stopOf('closed'), over: { otherSong: 'X' }, seam: { text: 'ここまで訳してあります。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, quota: the quota sentence already says it', stop: stopOf('quota', { until: SOON }), over: { otherSong: 'X', avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'another song running with a spare: no キーを足す', stop: stopOf('quota', { until: SOON }), over: { otherSong: 'X', avail: { ok: false, until: SOON }, spare: SPARE }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'another song running, auth: settings still wins', stop: stopOf('auth'), over: { otherSong: 'X', keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
     { name: 'quota spent, stopped: blocker appended, noop button', stop: stopOf('stopped'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで止めました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota spent, busy', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'AIが混み合っていて、ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota spent with unknown reset, closed', stop: stopOf('closed'), over: { avail: { ok: false, until: 0 } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。あとで訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota spent, stopped, with a spare: キーを足す', stop: stopOf('stopped'), over: { avail: { ok: false, until: SOON }, spare: SPARE }, seam: { text: 'ここで止めました。今日の無料枠は終わりました。15:00から訳せます。Groqの無料キーを足すと、今日も続けて訳せます', button: ADD_KEY }, explainWhenHidden: true },
-    { name: 'quota spent, busy, with a spare: キーを足す', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON }, spare: SPARE }, seam: { text: 'AIが混み合っていて、ここで途切れました。今日の無料枠は終わりました。15:00から訳せます。Groqの無料キーを足すと、今日も続けて訳せます', button: ADD_KEY }, explainWhenHidden: true },
     { name: 'quota stop whose own reset passed while still exhausted reads as closed + blocker', stop: stopOf('quota', { until: NOW - 1 }), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'auth with quota spent and a spare: settings still wins', stop: stopOf('auth'), over: { keyBad: true, avail: { ok: false, until: SOON }, spare: SPARE }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
   ];
 
   const settingsLike = (seam: SeamSpec) => seam.button.id === 'settings';
@@ -810,9 +786,8 @@ describe('seamText', () => {
     expect(seamText(stopOf('quota', until === undefined ? {} : { until }), i)).toBe('今日の無料枠が終わりました。あとで続きを訳せます');
   });
 
-  it('blocked depends on whether Gemini is the only service', () => {
-    expect(seamText(stopOf('blocked'), view({ onlyGemini: true }))).toBe('この先はAIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります');
-    expect(seamText(stopOf('blocked'), view({ onlyGemini: false }))).toBe('この先はAIの安全フィルタで止められました。もう一度試すと通ることもあります');
+  it('blocked says to try again', () => {
+    expect(seamText(stopOf('blocked'), view())).toBe('この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります');
   });
 
   it('measures the reset against the input clock', () => {
@@ -841,9 +816,8 @@ describe('startFailText', () => {
     expect(startFailText(stopOf('quota', { until: NOW - 1 }), i)).toBe('今日の無料枠が終わりました。あとで訳せます');
   });
 
-  it('blocked depends on whether Gemini is the only service', () => {
-    expect(startFailText(stopOf('blocked'), view({ onlyGemini: true }))).toBe('AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります');
-    expect(startFailText(stopOf('blocked'), view({ onlyGemini: false }))).toBe('AIの安全フィルタで止められ、訳せませんでした');
+  it('blocked says to try again', () => {
+    expect(startFailText(stopOf('blocked'), view())).toBe('この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります');
   });
 
   it.each<StopReason>(['stopped', 'closed', 'gaps'])('%s has no start-failure sentence (empty)', (reason) => {
@@ -853,7 +827,7 @@ describe('startFailText', () => {
   it('never mentions "ここ" or 続き (nothing is on the page yet)', () => {
     const reasons: StopReason[] = ['busy', 'rate', 'quota', 'auth', 'blocked', 'network', 'unusable', 'length'];
     for (const reason of reasons) {
-      const text = startFailText(stopOf(reason, { until: SOON }), view({ onlyGemini: false }));
+      const text = startFailText(stopOf(reason, { until: SOON }), view());
       expect(text).not.toMatch(/ここ|続き/);
     }
   });
@@ -893,62 +867,44 @@ describe('seamFor', () => {
   const BUSY = 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます';
 
   it('no blocker: a plain, enabled 続きを訳す', () => {
-    expect(seamFor(stopOf('busy'), i, null, null)).toEqual({ text: BUSY, button: { id: 'resume', label: '続きを訳す', disabled: false } });
+    expect(seamFor(stopOf('busy'), i, null)).toEqual({ text: BUSY, button: { id: 'resume', label: '続きを訳す', disabled: false } });
   });
 
-  it('auth always opens the settings, ignoring blockers and hints', () => {
+  it('auth always opens the settings, ignoring blockers', () => {
     const text = 'APIキーが使えなくなりました。設定でキーを入れ直してください';
     const expected = { text, button: { id: 'settings', label: '設定を開く' } };
-    expect(seamFor(stopOf('auth'), i, null, null)).toEqual(expected);
-    expect(seamFor(stopOf('auth'), i, 'B', 'H')).toEqual(expected);
+    expect(seamFor(stopOf('auth'), i, null)).toEqual(expected);
+    expect(seamFor(stopOf('auth'), i, 'B')).toEqual(expected);
   });
 
   it('a blocker on a non-quota reason is appended after the first sentence and the button is a disabled noop', () => {
-    expect(seamFor(stopOf('busy'), i, 'BLOCK', null)).toEqual({
+    expect(seamFor(stopOf('busy'), i, 'BLOCK')).toEqual({
       text: 'AIが混み合っていて、ここで途切れました。BLOCK',
       button: { id: 'noop', label: '続きを訳す', disabled: true },
     });
   });
 
-  it('a blocker plus a spare hint offers キーを足す (non-quota: first sentence + blocker + hint)', () => {
-    expect(seamFor(stopOf('busy'), i, 'BLOCK', 'HINT')).toEqual({
-      text: 'AIが混み合っていて、ここで途切れました。BLOCK。HINT',
-      button: { id: 'addKey', label: 'キーを足す' },
-    });
-  });
-
-  it('a blocker plus a spare hint on quota keeps the quota sentence whole (the blocker is not repeated)', () => {
-    expect(seamFor(stopOf('quota', { until: SOON }), i, 'BLOCK', 'HINT')).toEqual({
-      text: `今日の無料枠が終わりました。${at(SOON)}ごろから続きを訳せます。HINT`,
-      button: { id: 'addKey', label: 'キーを足す' },
-    });
-  });
-
   it('a blocker without a hint on quota: the quota sentence, a disabled resume (not noop)', () => {
-    expect(seamFor(stopOf('quota', { until: SOON }), i, 'BLOCK', null)).toEqual({
+    expect(seamFor(stopOf('quota', { until: SOON }), i, 'BLOCK')).toEqual({
       text: `今日の無料枠が終わりました。${at(SOON)}ごろから続きを訳せます`,
       button: { id: 'resume', label: '続きを訳す', disabled: true },
     });
   });
 
-  it('a hint without a blocker is ignored', () => {
-    expect(seamFor(stopOf('busy'), i, null, 'HINT')).toEqual({ text: BUSY, button: { id: 'resume', label: '続きを訳す', disabled: false } });
-  });
-
   it('rate waits until `until` (strictly before it)', () => {
     const stop = stopOf('rate', { until: MINUTE_LATER });
-    expect(seamFor(stop, view({ now: NOW }), null, null).button.disabled).toBe(true);
-    expect(seamFor(stop, view({ now: MINUTE_LATER - 1 }), null, null).button.disabled).toBe(true);
-    expect(seamFor(stop, view({ now: MINUTE_LATER }), null, null).button.disabled).toBe(false);
-    expect(seamFor(stopOf('rate'), i, null, null).button.disabled).toBe(false);
+    expect(seamFor(stop, view({ now: NOW }), null).button.disabled).toBe(true);
+    expect(seamFor(stop, view({ now: MINUTE_LATER - 1 }), null).button.disabled).toBe(true);
+    expect(seamFor(stop, view({ now: MINUTE_LATER }), null).button.disabled).toBe(false);
+    expect(seamFor(stopOf('rate'), i, null).button.disabled).toBe(false);
   });
 
   it('network waits for the connection', () => {
-    expect(seamFor(stopOf('network'), view({ online: false }), null, null).button.disabled).toBe(true);
-    expect(seamFor(stopOf('network'), view({ online: true }), null, null).button.disabled).toBe(false);
+    expect(seamFor(stopOf('network'), view({ online: false }), null).button.disabled).toBe(true);
+    expect(seamFor(stopOf('network'), view({ online: true }), null).button.disabled).toBe(false);
   });
 
   it('offline does not matter for other reasons', () => {
-    expect(seamFor(stopOf('busy'), view({ online: false }), null, null).button.disabled).toBe(false);
+    expect(seamFor(stopOf('busy'), view({ online: false }), null).button.disabled).toBe(false);
   });
 });

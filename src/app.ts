@@ -8,19 +8,18 @@ import { emptyRecord, isMostlyJapanese, missingLines } from './core/song';
 import type { GeniusAnnotation, SongRecord } from './core/types';
 import { fetchAnnotations } from './genius/annotations';
 import { isOwnNode, readPage, type PageSong } from './genius/extract';
-import { availability, keyStatus, type Availability } from './llm/chain';
+import { availability, cleanOtherProviders, keyStatus, type Availability } from './llm/chain';
 import { transportStreams } from './platform/http';
 import { acquireLock, readLock, requestAbort, TAB_ID, type Lock, type LockHandle } from './store/lock';
-import { currentSettings, hasAnyKey, loadSettings, onSettings, updateSettings } from './store/settings';
+import { currentSettings, hasKey, loadSettings, onSettings, updateSettings } from './store/settings';
 import { SaveQueue, deleteSong, loadSong, saveSong, touchSong } from './store/songs';
 import { HeadRow, type HeadAction, type HeadView } from './ui/head';
 import { LineRenderer, type LinesInput, type SeamView } from './ui/lines';
 import { NoteView } from './ui/notes';
-import { closeSheet, openSheet, type SheetService } from './ui/sheet';
+import { closeSheet, openSheet } from './ui/sheet';
 import { decide, failureText, type ActionId, type ActionSpec, type ViewInput } from './ui/state';
 import { formatWhen } from './ui/time';
 
-const SERVICE_NAMES: Record<string, string> = { gemini: 'Google AI Studio', groq: 'Groq', openrouter: 'OpenRouter' };
 
 interface Run {
   id: string;
@@ -90,7 +89,8 @@ export class App {
   private refreshAgain = false;
 
   async start(): Promise<void> {
-    await loadSettings();
+    const settings = await loadSettings();
+    await cleanOtherProviders(settings.apiKey);
     this.applyDisplay();
     onSettings(() => { this.applyDisplay(); this.scheduleRender(); });
     await this.refresh();
@@ -139,7 +139,7 @@ export class App {
         this.renderNow();
         // Genius' own annotations API is free and same-origin (not an LLM request): fetch at
         // idle so the grounding is ready before the tap and opened notes do not grow later.
-        if (fresh && page.songId && (hasAnyKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
+        if (fresh && page.songId && (hasKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
       } while (this.refreshAgain);
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
@@ -232,11 +232,10 @@ export class App {
 
   /** What the configured keys allow right now, from what is already known (no request). */
   private async refreshKeys(): Promise<void> {
-    const providers = currentSettings().providers;
-    this.avail = await availability(providers);
-    const keyed = providers.filter((p) => p.enabled && p.apiKey.trim());
-    // An invalid-key stop applies only while no configured key is believed to work.
-    this.keyBad = !keyed.length || (await Promise.all(keyed.map((p) => keyStatus(p)))).every((st) => st.kind === 'bad');
+    const { apiKey } = currentSettings();
+    this.avail = await availability(apiKey);
+    // An invalid-key stop applies only while the key is not believed to work.
+    this.keyBad = !apiKey.trim() || (await keyStatus(apiKey)).kind === 'bad';
   }
 
   /** A lock held by another tab. */
@@ -404,17 +403,13 @@ export class App {
     const run = this.run;
     const here = run && run.id === this.identity ? run : null;
     const shown = this.shown();
-    const keyed = settings.providers.filter((p) => p.enabled && p.apiKey.trim());
-    const spare = settings.providers.find((p) => p.enabled && !p.apiKey.trim());
     return {
       now: Date.now(),
       online: navigator.onLine,
       streams: transportStreams(),
       hidden: settings.hideTranslation,
-      hasKey: hasAnyKey(settings),
+      hasKey: hasKey(settings),
       keyBad: this.keyBad,
-      onlyGemini: keyed.length === 1 && keyed[0]!.preset === 'gemini',
-      spare: spare ? { id: spare.preset, name: SERVICE_NAMES[spare.preset] ?? spare.preset } : null,
       total: page.source.lines.length,
       done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
       stop: shown?.stop,
@@ -470,7 +465,6 @@ export class App {
       case 'hide': void this.toggleHidden(); break;
       case 'settings': this.openSettings(el); break;
       case 'firstRun': this.openFirstRun(); break;
-      case 'addKey': this.openSettings(el, input.spare?.id); break;
       case 'noop': break;
     }
   }
@@ -548,7 +542,7 @@ export class App {
     };
     try {
       const settings = await loadSettings();
-      if (!hasAnyKey(settings)) {
+      if (!hasKey(settings)) {
         this.openFirstRun();
         return;
       }
@@ -609,8 +603,7 @@ export class App {
         const annotations = await this.loadAnnotations(page);
         const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
         const outcome = await translateSong(input, record, {
-          providers: settings.providers,
-          thinking: settings.thinking,
+          apiKey: settings.apiKey,
           signal: current.controller.signal,
           onUpdate: () => {
             if (!retranslate) current.saver.schedule(record);
@@ -732,7 +725,7 @@ export class App {
     await this.refresh();
   }
 
-  openSettings(anchor: HTMLElement | null, focusService?: string): void {
+  openSettings(anchor: HTMLElement | null): void {
     const record = this.record;
     const id = this.identity;
     // While a request is writing (here or in another tab) there is nothing to retranslate
@@ -741,7 +734,6 @@ export class App {
     openSheet({
       mode: 'settings',
       anchor,
-      ...(focusService ? { focusService: focusService as SheetService } : {}),
       busySongId: busy ? id : null,
       song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
       onRetranslate: () => { if (this.identity === id) void this.translate('retranslate').catch((e) => console.error('[Lyric Lens]', e)); },
