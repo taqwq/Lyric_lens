@@ -446,7 +446,7 @@ export class App {
       ? { text: d.lines.seam.text, button: { ...d.lines.seam.button, onClick: () => this.act(d.lines.seam!.button.id, null, input) } }
       : null;
     return {
-      head: { status: d.status, ...(d.tone ? { tone: d.tone } : {}), ...(d.note ? { note: d.note } : {}), actions: d.actions.map(bind), preface, state: d.state },
+      head: { status: d.status, ...(d.tone ? { tone: d.tone } : {}), ...(d.note ? { note: d.note } : {}), ...(d.noteTone ? { noteTone: d.noteTone } : {}), actions: d.actions.map(bind), preface, state: d.state },
       lines: {
         page, record: shown, slots: d.lines.slots, gaps: d.lines.gaps, breathing: d.lines.breathing, seam,
         animate: !this.fromCache, openIndex: this.notes.openIndex,

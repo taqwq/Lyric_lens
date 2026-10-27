@@ -22,6 +22,7 @@ export interface HeadView {
   actions: HeadAction[];
   /** Small line under the row (e.g. buffered transport, why a button is disabled). */
   note?: string;
+  noteTone?: 'reason';
   preface?: { who: string; what: string; collapsed: boolean; onToggle: () => void } | null;
   /** State name (S2, S6…), exposed as data-ll-state for debugging and tests. */
   state?: string;
@@ -57,7 +58,7 @@ export class HeadRow {
       this.el = h('div', { class: 'll-head', lang: 'ja', 'data-exclude-from-selection': 'true' });
       isolateClicks(this.el);
     }
-    const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+    const sig = JSON.stringify([view.status, view.tone, view.note, view.noteTone, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
     if (view.state) this.el.dataset.llState = view.state;
     const ids = view.actions.map((a) => a.id ?? '');
     const prevIds = this.prevIds;
@@ -151,7 +152,7 @@ export class HeadRow {
       })),
     );
     const out: Node[] = [row];
-    if (view.note) out.push(h('span', { class: 'll-head-note' }, view.note));
+    if (view.note) out.push(h('span', { class: 'll-head-note', ...(view.noteTone ? { 'data-tone': view.noteTone } : {}) }, view.note));
     const p = view.preface;
     if (p && (p.who || p.what)) {
       // The preface is text (readable, selectable, announced); only the chevron toggles it.
