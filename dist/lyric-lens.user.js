@@ -1045,7 +1045,9 @@ ${req.user}` : req.user }] }],
     }
     if (!errors.length && skipped.length) throw fromSkipped();
     if (!errors.length) throw new LLMError("not-found", "使えるモデルが見つかりませんでした。");
-    const reported = pickReportedError(errors);
+    const latest = /* @__PURE__ */ new Map();
+    errors.forEach((e, i) => latest.set(e.model ? e.model : `#${i}`, e));
+    const reported = pickReportedError([...latest.values()]);
     throw reported.kind === "quota" ? fromCooldown(reported) : reported;
   }
 

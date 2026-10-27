@@ -630,7 +630,11 @@ export async function generateWithFallback(
   // Every candidate was skipped: say why and when the first one is back (a minute or a day), not always "today".
   if (!errors.length && skipped.length) throw fromSkipped();
   if (!errors.length) throw new LLMError('not-found', '使えるモデルが見つかりませんでした。');
-  const reported = pickReportedError(errors);
+  // Only a model's latest error counts: a 503 from pass 0 is no longer true once the same model
+  // answered quota in pass 1. Errors without a model (the model list) keep their own place.
+  const latest = new Map<string, LLMError>();
+  errors.forEach((e, i) => latest.set(e.model ? e.model : `#${i}`, e));
+  const reported = pickReportedError([...latest.values()]);
   // A real quota error often carries no usable reset time; the cooldown table knows when the
   // soonest model returns.
   throw reported.kind === 'quota' ? fromCooldown(reported) : reported;
