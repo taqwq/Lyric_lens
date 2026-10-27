@@ -761,6 +761,7 @@ ${req.user}` : req.user }] }],
     }
   }
   var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unusable", "unknown"];
+  var MAX_SILENT_IN_A_ROW = 2;
   var BUSY_PASS_WAITS_MS = [1e4, 25e3];
   function pickReportedError(errors) {
     return errors.slice().sort((a, b) => PRIORITY.indexOf(a.kind) - PRIORITY.indexOf(b.kind))[0] ?? new LLMError("auth", "APIキーが設定されていません。");
@@ -822,6 +823,7 @@ ${req.user}` : req.user }] }],
       return error;
     };
     let keyRejected = false;
+    let silentInARow = 0;
     for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
       if (pass > 0) {
         const wait = BUSY_PASS_WAITS_MS[pass - 1];
@@ -913,6 +915,8 @@ ${req.user}` : req.user }] }],
         if (!error) continue;
         passErrors.push(error);
         await remember(model, error);
+        silentInARow = error.kind === "timeout" ? silentInARow + 1 : 0;
+        if (silentInARow >= MAX_SILENT_IN_A_ROW) throw error;
         if (error.kind === "overloaded") busyNow.add(cooldownId(apiKey, model));
         else busyNow.delete(cooldownId(apiKey, model));
         if (error.kind === "auth") {
