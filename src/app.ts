@@ -751,7 +751,10 @@ export class App {
       mode: 'settings',
       anchor,
       busySongId: busy ? id : null,
-      song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt, ...(record!.stop?.detail ? { lastError: record!.stop.detail } : {}) } : null,
+      // A first request that failed leaves no edition, but its error is what the reader needs.
+      song: this.page && !busy && record && (hasLines(record) || record.stop?.detail)
+        ? { title: record.title, model: record.model, translatedAt: record.updatedAt, ...(record.stop?.detail ? { lastError: record.stop.detail } : {}), ...(hasLines(record) ? {} : { edition: false }) }
+        : null,
       onRetranslate: () => { if (this.identity === id) void this.translate('retranslate').catch((e) => console.error('[Lyric Lens]', e)); },
       onDeleteSong: async () => {
         if (!record || this.identity !== id || this.run) return;

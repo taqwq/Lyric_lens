@@ -3763,11 +3763,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           });
         });
         zone2.append(h("div", { class: "actions" }, retranslate, deleteSong2));
+        const edition = song.edition !== false;
         body.append(h(
           "section",
           { class: "section" },
           h("h3", { class: "section-title" }, COPY.song),
-          parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.join(" · ")}`) : null,
+          edition && parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.join(" · ")}`) : null,
           song.lastError ? h(
             "details",
             { class: "error-detail" },
@@ -3775,7 +3776,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join(" · ")),
             song.lastError.text ? h("p", { class: "error-text" }, song.lastError.text) : null
           ) : null,
-          zone2
+          edition ? zone2 : null
         ));
       }
       let summary = null;
@@ -4776,7 +4777,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         mode: "settings",
         anchor,
         busySongId: busy ? id : null,
-        song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt, ...record.stop?.detail ? { lastError: record.stop.detail } : {} } : null,
+        // A first request that failed leaves no edition, but its error is what the reader needs.
+        song: this.page && !busy && record && (hasLines(record) || record.stop?.detail) ? { title: record.title, model: record.model, translatedAt: record.updatedAt, ...record.stop?.detail ? { lastError: record.stop.detail } : {}, ...hasLines(record) ? {} : { edition: false } } : null,
         onRetranslate: () => {
           if (this.identity === id) void this.translate("retranslate").catch((e) => console.error("[Lyric Lens]", e));
         },
