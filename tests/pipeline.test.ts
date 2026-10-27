@@ -588,6 +588,13 @@ describe('stopFromError', () => {
     }
   });
 
+  it('unusable keeps the wait of a benched model, and none for a live unreadable answer', () => {
+    expect(stopFromError(new LLMError('unusable', 'x', { retryAfterMs: 600_000 }), 1000)).toEqual({ reason: 'unusable', at: 1000, until: 601_000 });
+    expect(stopFromError(new LLMError('unusable', 'x', { retryAfterMs: 0 }), 1000)).toEqual({ reason: 'unusable', at: 1000 });
+    expect(stopFromError(new LLMError('unusable', 'x', { retryAfterMs: 60_000 }), 1000)).toEqual({ reason: 'unusable', at: 1000 });
+    expect(stopFromError(new LLMError('unusable', 'x'), 1000).until).toBeUndefined();
+  });
+
   it('rate waits at least a minute, longer when the provider says so', () => {
     expect(stopFromError(new LLMError('rate', 'x'), 1000)).toEqual({ reason: 'rate', at: 1000, until: 61_000 });
     expect(stopFromError(new LLMError('rate', 'x', { retryAfterMs: 5000 }), 1000).until).toBe(61_000);

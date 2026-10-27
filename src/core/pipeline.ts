@@ -47,6 +47,7 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
     case 'bad-request': return { reason: 'rejected', at: now };
     case 'not-found': return { reason: 'no-model', at: now };
     case 'empty': return { reason: 'empty', at: now };
+    case 'unusable': return error.retryAfterMs > 60_000 ? { reason: 'unusable', at: now, until: now + error.retryAfterMs } : { reason: 'unusable', at: now };
     default: return { reason: 'unusable', at: now };
   }
 }

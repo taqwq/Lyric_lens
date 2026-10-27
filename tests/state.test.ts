@@ -215,6 +215,8 @@ describe('S2f the first request produced nothing', () => {
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
     { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
     { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, status: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'rate for five minutes names the time (button waits)', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), status: 'AIの回数制限にかかりました。12:05ごろから訳せます', button: { disabled: true } },
+    { name: 'unusable benched for ten minutes names the time (button waits)', stop: stopOf('unusable', { until: NOW + 600_000 }), status: 'AIの返事をうまく読み取れませんでした。12:10ごろからもう一度試せます', button: { disabled: true } },
     { name: 'rejected', stop: stopOf('rejected'), status: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
     { name: 'no-model', stop: stopOf('no-model'), status: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
     { name: 'empty', stop: stopOf('empty'), status: 'AIから空の返事が返ってきました。もう一度試せます' },
@@ -609,6 +611,11 @@ describe('S6 interrupted', () => {
     { name: 'blocked', stop: stopOf('blocked'), seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'network, offline: waiting button', stop: stopOf('network'), over: { online: false }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'rate for five minutes names the time', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), seam: { text: 'AIの回数制限にかかりました。12:05ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'rate at 90 s still says 1分ほど', stop: stopOf('rate', { until: NOW + 90_000 }), seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'unusable benched for ten minutes: waiting button, time named', stop: stopOf('unusable', { until: NOW + 600_000 }), seam: { text: 'AIの返事をうまく読み取れず、ここで途切れました。12:10ごろからもう一度試せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'unusable bench ended exactly now reads as closed', stop: stopOf('unusable', { until: NOW }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
+    { name: 'unusable bench ended a ms ago reads as closed', stop: stopOf('unusable', { until: NOW - 1 }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
     { name: 'silent, online: the button stays enabled', stop: stopOf('silent'), over: { online: true }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'silent, offline: not a connection stop, still enabled', stop: stopOf('silent'), over: { online: false }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'rejected', stop: stopOf('rejected'), seam: { text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
@@ -817,8 +824,8 @@ describe('liveStop', () => {
     expect(liveStop(stop, view({ avail: { ok: false, until: SOON } }))).toBe(stop);
   });
 
-  it('quota and rate: closed once `until` has passed (inclusive of now)', () => {
-    for (const reason of ['quota', 'rate'] as const) {
+  it('quota, rate and unusable: closed once `until` has passed (inclusive of now)', () => {
+    for (const reason of ['quota', 'rate', 'unusable'] as const) {
       const stop = stopOf(reason, { until: SOON });
       const exhausted = { avail: { ok: false, until: SOON } };
       expect(liveStop(stop, view({ now: SOON - 1, ...exhausted }))).toBe(stop);
@@ -845,7 +852,7 @@ describe('liveStop', () => {
     expect(closed).not.toHaveProperty('until');
   });
 
-  it.each<StopReason>(['busy', 'blocked', 'network', 'rejected', 'no-model', 'empty', 'unusable', 'stopped', 'length', 'closed', 'gaps'])('leaves %s alone', (reason) => {
+  it.each<StopReason>(['busy', 'blocked', 'network', 'rejected', 'no-model', 'empty', 'silent', 'stopped', 'length', 'closed', 'gaps'])('leaves %s alone', (reason) => {
     const stop = stopOf(reason, { until: NOW - 1 });
     expect(liveStop(stop, view({ keyBad: false, avail: { ok: true, until: 0 } }))).toBe(stop);
   });

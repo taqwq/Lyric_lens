@@ -81,16 +81,19 @@ export function liveStop(stop: StopInfo | undefined, i: ViewInput): StopInfo | u
   if (!stop) return stop;
   if (stop.reason === 'auth' && !i.keyBad) return { reason: 'closed', at: stop.at };
   if (stop.reason === 'quota' && i.avail.ok) return { reason: 'closed', at: stop.at };
-  if ((stop.reason === 'quota' || stop.reason === 'rate') && stop.until && stop.until <= i.now) return { reason: 'closed', at: stop.at };
+  if ((stop.reason === 'quota' || stop.reason === 'rate' || stop.reason === 'unusable') && stop.until && stop.until <= i.now) return { reason: 'closed', at: stop.at };
   return stop;
 }
 
 /** The seam's sentence: says where writing stopped and what can happen next. */
 export function seamText(stop: StopInfo, i: ViewInput): string {
   const at = when(stop.until, i.now);
+  // A bench that outlasts the usual minute (a timeout's 5 minutes, an unusable answer's 10) is
+  // named by its end, not promised as "1分ほど".
+  const long = stop.until !== undefined && stop.until - i.now > 90_000 && at !== '';
   const text: Record<StopInfo['reason'], string> = {
     busy: 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます',
-    rate: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます',
+    rate: long ? `AIの回数制限にかかりました。${at}ごろから続きを訳せます` : 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます',
     quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : 'あとで'}続きを訳せます`,
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
     blocked: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
@@ -99,7 +102,7 @@ export function seamText(stop: StopInfo, i: ViewInput): string {
     rejected: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります',
     'no-model': 'AIをいま使えません。少しおいてから続きを訳せます',
     empty: 'AIの返事が空のまま、ここで途切れました。もう一度試せます',
-    unusable: 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます',
+    unusable: long ? `AIの返事をうまく読み取れず、ここで途切れました。${at}ごろからもう一度試せます` : 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます',
     stopped: 'ここで止めました',
     length: '長い曲なので、ここで一度区切りました',
     closed: 'ここまで訳してあります',
@@ -112,9 +115,10 @@ export function seamText(stop: StopInfo, i: ViewInput): string {
  *  no 続き — nothing is on the page yet. */
 export function startFailText(stop: StopInfo, i: ViewInput): string {
   const at = when(stop.until, i.now);
+  const long = stop.until !== undefined && stop.until - i.now > 90_000 && at !== '';
   const text: Partial<Record<StopInfo['reason'], string>> = {
     busy: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ',
-    rate: 'AIの回数制限にかかりました。1分ほどおいてから訳せます',
+    rate: long ? `AIの回数制限にかかりました。${at}ごろから訳せます` : 'AIの回数制限にかかりました。1分ほどおいてから訳せます',
     quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : 'あとで'}訳せます`,
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
     blocked: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
@@ -123,7 +127,7 @@ export function startFailText(stop: StopInfo, i: ViewInput): string {
     rejected: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります',
     'no-model': 'AIをいま使えません。少しおいてからもう一度どうぞ',
     empty: 'AIから空の返事が返ってきました。もう一度試せます',
-    unusable: 'AIの返事をうまく読み取れませんでした。もう一度試せます',
+    unusable: long ? `AIの返事をうまく読み取れませんでした。${at}ごろからもう一度試せます` : 'AIの返事をうまく読み取れませんでした。もう一度試せます',
     length: '長い曲なので、一度では訳し切れませんでした',
   };
   return text[stop.reason] ?? '';
@@ -167,6 +171,7 @@ export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null): S
   }
   let disabled = Boolean(blocker);
   if (stop.reason === 'rate' && stop.until && i.now < stop.until) disabled = true;
+  if (stop.reason === 'unusable' && stop.until && i.now < stop.until) disabled = true;
   if (stop.reason === 'network' && !i.online) disabled = true;
   return { text, button: { id: 'resume', label: '続きを訳す', disabled } };
 }

@@ -61,7 +61,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | Reason | Seam sentence | Button rule |
 |---|---|---|
 | busy (all fallbacks gave 503) | `AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
-| per-minute limit | `AIの回数制限にかかりました。1分ほどおいてから続きを訳せます` | Disabled until the limit's reset (about 60 s), then enabled. It does not fire on its own. |
+| per-minute limit | `AIの回数制限にかかりました。1分ほどおいてから続きを訳せます` | Disabled until the limit's reset (about 60 s), then enabled. It does not fire on its own. When the wait is longer than 90 s (every model benched), the sentence names the time instead: `AIの回数制限にかかりました。{when}ごろから続きを訳せます`. |
 | daily quota | `今日の無料枠が終わりました。{when}ごろから続きを訳せます` | Disabled until reset, then enabled. It does not fire on its own. |
 | invalid key | `APIキーが使えなくなりました。設定でキーを入れ直してください` | `設定を開く` (the head row then drops its own `設定`). The stop stops applying as soon as a configured key is believed to work, whichever page fixed it. |
 | safety filter | `この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります` | `続きを訳す` |
@@ -70,7 +70,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | empty answer | `AIの返事が空のまま、ここで途切れました。もう一度試せます` | `続きを訳す`, enabled |
 | network | `接続が切れました。つながったら続きを訳せます` | Disabled while `navigator.onLine` is false, enabled when the connection returns. Never fires automatically. |
 | silent (two models timed out) | `AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
-| unusable output | `AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます` | `続きを訳す` |
+| unusable output | `AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます` | `続きを訳す`. While every model is benched for it (up to 10 min, a stored `until` longer than 90 s ahead) the button is disabled and the sentence names the time: `AIの返事をうまく読み取れず、ここで途切れました。{when}ごろからもう一度試せます`. |
 | reader stopped | `ここで止めました` | `続きを訳す` |
 | output-length cut (long song) | `長い曲なので、ここで一度区切りました` | `続きを訳す` |
 | tab closed or suspended (partial record found, no live lock), or a stop that no longer applies | `ここまで訳してあります` | `続きを訳す` |
@@ -90,7 +90,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `今日の無料枠は終わりました。{when}から訳せます`
 - First request failed (S2f), by reason:
   - busy: `AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ`
-  - rate: `AIの回数制限にかかりました。1分ほどおいてから訳せます`
+  - rate: `AIの回数制限にかかりました。1分ほどおいてから訳せます` (wait over 90 s: `AIの回数制限にかかりました。{when}ごろから訳せます`)
   - quota: `今日の無料枠が終わりました。{when}ごろから訳せます`
   - auth: `APIキーが使えなくなりました。設定でキーを入れ直してください` · `設定を開く`
   - blocked: `この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります`
@@ -99,7 +99,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
   - empty: `AIから空の返事が返ってきました。もう一度試せます`
   - network: `接続が切れて、訳し始められませんでした。つながったら訳せます`
   - silent: `AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ`
-  - unusable: `AIの返事をうまく読み取れませんでした。もう一度試せます`
+  - unusable: `AIの返事をうまく読み取れませんでした。もう一度試せます` (benched over 90 s: `AIの返事をうまく読み取れませんでした。{when}ごろからもう一度試せます`)
   - length: `長い曲なので、一度では訳し切れませんでした`
 - `別の曲（{title}）を訳しています · 終わると訳せます` · `あちらを止める`
 - `曲全体を読んでいます`
