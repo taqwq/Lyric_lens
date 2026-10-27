@@ -729,19 +729,22 @@ ${req.user}` : req.user }] }],
     }
     return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
   }
+  var refreshing = /* @__PURE__ */ new Map();
   async function modelsFor(apiKey, opts = {}) {
     const key = MODELS_KEY + cooldownId(apiKey, "");
     const cached2 = await getJSON(key, null);
-    if (!opts.refresh && cached2 && Date.now() - cached2.at < MODEL_LIST_TTL && cached2.models.length) return cached2.models;
-    try {
-      const models = await new GeminiProvider(apiKey).listModels(opts.signal);
-      await setJSON(key, { at: Date.now(), models });
-      return models;
-    } catch (error) {
-      const recoverable = error instanceof LLMError && error.kind !== "auth" && error.kind !== "aborted";
-      if (!opts.refresh && recoverable && cached2?.models.length) return cached2.models;
-      throw error;
+    if (!opts.refresh && cached2?.models.length) {
+      if (Date.now() - cached2.at < MODEL_LIST_TTL) return cached2.models;
+      if (!refreshing.has(key)) {
+        refreshing.set(key, new GeminiProvider(apiKey).listModels().then((models2) => setJSON(key, { at: Date.now(), models: models2 })).then(() => {
+        }, () => {
+        }).finally(() => refreshing.delete(key)));
+      }
+      return cached2.models;
     }
+    const models = await new GeminiProvider(apiKey).listModels(opts.signal);
+    await setJSON(key, { at: Date.now(), models });
+    return models;
   }
   var FALLBACK_GEMINI = [
     "gemini-3.8-flash",

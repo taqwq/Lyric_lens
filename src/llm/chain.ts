@@ -230,21 +230,30 @@ export async function availability(apiKey: string): Promise<Availability> {
 
 /* ---------- model lists ---------- */
 
-/** The model list: a cached one up to a week old; otherwise fetched. If the fetch fails, the stale
- *  cached list of any age is still better than the hard-coded one (an explicit refresh reports the failure). */
+/** Background renewals of a stale model list, by storage key: concurrent callers share one. */
+const refreshing = new Map<string, Promise<void>>();
+
+/** The model list: a cached one up to a week old; a stale cached list is served at once while a
+ *  background call renews it (models.list costs no generate quota, and a rejected key shows on the
+ *  generate call). With no cache the list is fetched and awaited: it is one-time, and it also
+ *  surfaces a rejected key before a generate call. An explicit refresh reports its failure. */
 export async function modelsFor(apiKey: string, opts: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
   const key = MODELS_KEY + cooldownId(apiKey, '');
   const cached = await getJSON<{ at: number; models: ModelInfo[] } | null>(key, null);
-  if (!opts.refresh && cached && Date.now() - cached.at < MODEL_LIST_TTL && cached.models.length) return cached.models;
-  try {
-    const models = await new GeminiProvider(apiKey).listModels(opts.signal);
-    await setJSON(key, { at: Date.now(), models });
-    return models;
-  } catch (error) {
-    const recoverable = error instanceof LLMError && error.kind !== 'auth' && error.kind !== 'aborted';
-    if (!opts.refresh && recoverable && cached?.models.length) return cached.models;
-    throw error;
+  if (!opts.refresh && cached?.models.length) {
+    if (Date.now() - cached.at < MODEL_LIST_TTL) return cached.models;
+    // No signal: the renewal outlives the request that noticed it was due.
+    if (!refreshing.has(key)) {
+      refreshing.set(key, new GeminiProvider(apiKey).listModels()
+        .then((models) => setJSON(key, { at: Date.now(), models }))
+        .then(() => {}, () => {})
+        .finally(() => refreshing.delete(key)));
+    }
+    return cached.models;
   }
+  const models = await new GeminiProvider(apiKey).listModels(opts.signal);
+  await setJSON(key, { at: Date.now(), models });
+  return models;
 }
 
 /** Only for a first run whose model list cannot be fetched (ids the live list returned on 2026-10-27). */
