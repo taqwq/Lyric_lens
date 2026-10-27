@@ -284,6 +284,25 @@ describe('translateSong: head validation', () => {
     expect(JSON.stringify(record)).not.toContain('行がずれた');
     expect(missingLines(source, record).map((u) => u.uid)).toEqual([2]);
     expect(Object.keys(record.lines)).toHaveLength(3);
+    expect(out.stop?.detail).toBeUndefined();
+  });
+
+  it('reports a line record that could not be decoded as dropped=1 in the stop detail', async () => {
+    const source = makeSource();
+    const record = newRecord();
+    script({
+      text: jsonl(
+        songRec(), lineRec(1, HEADS[0]!, JA[0]!), `{"t":"line","id":"L2","head":"${HEADS[1]!}","x":"cut off {[`,
+        lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!), endRec(),
+      ),
+    });
+    const out = await translateSong(source, record, options);
+
+    expect(out.complete).toBe(false);
+    expect(out.stop).toMatchObject({ reason: 'gaps', detail: { kind: 'dropped', status: 0 } });
+    expect(out.stop?.detail?.text).toMatch(/^dropped=1 \{"t":"line","id":"L2"/);
+    expect(out.stop?.detail?.text.length).toBeLessThanOrEqual(200);
+    expect(jaOf(source, record, 2)).toBeUndefined();
   });
 
   it('a following request asks only for the gap, shows the rest as done, and completes the song', async () => {

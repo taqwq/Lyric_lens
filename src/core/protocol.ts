@@ -74,6 +74,62 @@ function notesOf(value: unknown): RawNote[] {
   return out;
 }
 
+const LINE_RECORD = /"t"\s*:\s*"line"/;
+
+/** Escapes the bare " a model wrote inside a string (an English word quoted in a note):
+ *  inside a string, a " followed by anything but , : } ] is not the closing one. */
+function escapeStrayQuotes(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+    } else if (ch === '\\') {
+      out += ch + (text[i + 1] ?? '');
+      i += 1;
+    } else if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j]!)) j += 1;
+      if (j >= text.length || ',:}]'.includes(text[j]!)) {
+        inString = false;
+        out += ch;
+      } else {
+        out += '\\"';
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function unescapeString(body: string): string | null {
+  try {
+    return JSON.parse(`"${body}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
+/** A line record whose JSON is beyond repair but whose id, head and ja are intact keeps
+ *  its translation (without notes); anything less is lost. */
+function salvageLine(json: string): ProtocolEvent | null {
+  if (!LINE_RECORD.test(json)) return null;
+  const idText = /"id"\s*:\s*"(L?\d{1,4})"/.exec(json)?.[1];
+  const headBody = /"head"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(json)?.[1];
+  const jaBody = /"ja"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"notes"/.exec(json)?.[1];
+  if (idText == null || headBody == null || jaBody == null) return null;
+  const uid = uidOf(idText);
+  const head = unescapeString(headBody);
+  const ja = unescapeString(jaBody);
+  if (uid == null || head == null || ja == null) return null;
+  const text = stripWrappingQuotes(ja.trim());
+  if (!text) return null;
+  return { type: 'line', uid, ja: text, notes: [], ...(head.trim() ? { head: head.trim() } : {}) };
+}
+
 /** One output line → event, or null when it is not a usable record. */
 export function parseRecord(raw: string): ProtocolEvent | null {
   let line = raw.trim();
@@ -82,11 +138,16 @@ export function parseRecord(raw: string): ProtocolEvent | null {
   const start = line.indexOf('{');
   const end = line.lastIndexOf('}');
   if (start < 0 || end <= start) return null;
+  const json = line.slice(start, end + 1);
   let data: Record<string, unknown>;
   try {
-    data = JSON.parse(line.slice(start, end + 1)) as Record<string, unknown>;
+    data = JSON.parse(json) as Record<string, unknown>;
   } catch {
-    return null;
+    try {
+      data = JSON.parse(escapeStrayQuotes(json)) as Record<string, unknown>;
+    } catch {
+      return salvageLine(json);
+    }
   }
   const t = str(data.t ?? data.type).toLowerCase();
   if (t === 'end') return { type: 'end' };
@@ -113,13 +174,27 @@ export function parseRecord(raw: string): ProtocolEvent | null {
 /** Incremental parser: feed arbitrary text chunks, get events for each completed line. */
 export class ProtocolParser {
   private buffer = '';
+  /** Line records that could not be read at all, counted across attempts. */
+  dropped = 0;
+  /** The first 300 characters of the first few of them, for the console. */
+  readonly droppedSamples: string[] = [];
+
+  private parse(raw: string, complete: boolean): ProtocolEvent | null {
+    const ev = parseRecord(raw);
+    // A tail without its closing brace is a stream that was cut, not a record that failed.
+    if (!ev && LINE_RECORD.test(raw) && (complete || raw.trimEnd().endsWith('}'))) {
+      this.dropped += 1;
+      if (this.droppedSamples.length < 3) this.droppedSamples.push(raw.trim().slice(0, 300));
+    }
+    return ev;
+  }
 
   feed(chunk: string): ProtocolEvent[] {
     this.buffer += chunk;
     const events: ProtocolEvent[] = [];
     let nl: number;
     while ((nl = this.buffer.indexOf('\n')) >= 0) {
-      const ev = parseRecord(this.buffer.slice(0, nl));
+      const ev = this.parse(this.buffer.slice(0, nl), true);
       this.buffer = this.buffer.slice(nl + 1);
       if (ev) events.push(ev);
     }
@@ -134,7 +209,7 @@ export class ProtocolParser {
   /** The last line has no newline; a JSON record is self-delimiting, so it is safe to
    *  parse even after a cut (a truncated record simply fails to parse). */
   flush(): ProtocolEvent[] {
-    const ev = parseRecord(this.buffer);
+    const ev = this.parse(this.buffer, false);
     this.buffer = '';
     return ev ? [ev] : [];
   }

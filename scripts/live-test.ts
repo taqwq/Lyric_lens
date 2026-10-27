@@ -91,7 +91,7 @@ const outcome = await translateSong(source, record, {
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 const notes = Object.values(record.lines).flatMap((l) => l.notes ?? []);
 const status = songStatus(source, record);
-console.log(`model=${outcome?.model ?? record.model} total=${seconds(Date.now() - started)}s firstLine=${firstLineAt ? seconds(firstLineAt - started) : '-'}s status=${status.kind} stop=${record.stop?.reason ?? '-'} notes=${notes.length}`);
+console.log(`model=${outcome?.model ?? record.model} total=${seconds(Date.now() - started)}s firstLine=${firstLineAt ? seconds(firstLineAt - started) : '-'}s status=${status.kind} stop=${record.stop?.reason ?? '-'} notes=${notes.length}${record.stop?.detail?.kind === 'dropped' ? ` ${record.stop.detail.text.split(' ')[0]}` : ''}`);
 
 const out: string[] = [`# ${source.meta.artist} – ${source.meta.title}`, '', `model: ${record.model}`, ''];
 if (record.song) out.push(`**誰が誰に**: ${record.song.who}`, '', `**この曲は**: ${record.song.what}`, '', `tone: ${record.song.tone ?? ''} / motifs: ${JSON.stringify(record.song.motifs ?? [])}`, '');
