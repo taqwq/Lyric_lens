@@ -39,6 +39,8 @@ describe('parseReferents', () => {
     ]);
     expect(list.map((a) => a.id)).toEqual(['2', '3', '4']);
     expect(list.find((a) => a.id === '3')).not.toHaveProperty('verified');
+    expect(list.find((a) => a.id === '3')).toMatchObject({ accepted: true });
+    expect(list.find((a) => a.id === '2')).not.toHaveProperty('accepted');
   });
 
   it('skips the song description, empty annotations and referents without a fragment', () => {

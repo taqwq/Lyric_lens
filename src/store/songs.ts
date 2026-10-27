@@ -175,6 +175,7 @@ function cleanRecord(raw: unknown): SongRecord | null {
     lines,
     ...(stop ? { stop } : {}),
     ...(typeof raw.model === 'string' && raw.model ? { model: raw.model } : {}),
+    ...(typeof raw.carried === 'number' && raw.carried > 0 ? { carried: Math.floor(raw.carried) } : {}),
     createdAt: stamp(raw.createdAt, updatedAt),
     updatedAt,
   });

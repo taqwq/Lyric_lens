@@ -48,6 +48,8 @@ export interface GeniusAnnotation {
   votes: number;
   /** Written or confirmed by the artist or a verified Genius editor. */
   verified?: boolean;
+  /** Genius state "accepted": approved by the editors (also shown as 公認). */
+  accepted?: boolean;
 }
 
 export interface SongMeta {
@@ -133,6 +135,8 @@ export interface SongRecord {
   lines: Record<string, LineResult>;
   stop?: StopInfo;
   model?: string;
+  /** Lines a retranslation took over from the previous edition (its holes); song.motifs is the new edition's. */
+  carried?: number;
   createdAt: number;
   updatedAt: number;
 }

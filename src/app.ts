@@ -618,10 +618,16 @@ export class App {
           // from both keep the stop (S5g / S6) instead of discarding the whole new edition.
           let landed = outcome.complete;
           if (!landed && stored && outcome.stop && ['gaps', 'length'].includes(outcome.stop.reason)) {
+            let carried = 0;
             for (const u of missingLines(source, record)) {
               const old = stored.lines[u.key];
-              if (old?.ja) record.lines[u.key] = old;
+              if (old?.ja) {
+                record.lines[u.key] = old;
+                carried += 1;
+              }
             }
+            // The new motifs stay; this only records that some lines may use the old wording.
+            if (carried) record.carried = carried;
             if (!missingLines(source, record).length) delete record.stop;
             landed = true;
           }

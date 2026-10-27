@@ -570,6 +570,12 @@ describe('keyVersion', () => {
     expect(migrateRecord(rec('c', { keyVersion: 0 })).keyVersion).toBe(1);
   });
 
+  it('keeps a positive carried count on import and drops a bad one', async () => {
+    expect(await importSongs(file([rec('c1', { carried: 3 }), rec('c2', { carried: -1 })]))).toBe(2);
+    expect((await loadSong('c1'))?.carried).toBe(3);
+    expect(await loadSong('c2')).not.toHaveProperty('carried');
+  });
+
   it('is set on imported records that lack it', async () => {
     const r = rec('imp');
     delete r.keyVersion;

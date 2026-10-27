@@ -40,7 +40,7 @@ export function parseReferents(referents: ReferentJson[]): GeniusAnnotation[] {
     const votes = Number(ann.votes_total ?? 0);
     const trusted = ann.verified || ann.state === 'accepted';
     if (!trusted && votes < 3) continue;
-    out.push({ id: String(r.id ?? out.length), fragment, text, votes, ...(ann.verified ? { verified: true } : {}) });
+    out.push({ id: String(r.id ?? out.length), fragment, text, votes, ...(ann.verified ? { verified: true } : {}), ...(ann.state === 'accepted' ? { accepted: true } : {}) });
   }
   return out;
 }

@@ -319,6 +319,16 @@ describe('buildPrompt: Genius annotations', () => {
     expect(user.indexOf('# Genius の注釈')).toBeLessThan(user.indexOf('# 指示'));
   });
 
+  it('marks an accepted annotation 公認 like a verified one', () => {
+    const source = tenLineSong({ ...meta, annotations: [
+      { id: '8', fragment: 'line number 3', text: 'Third line explained', votes: 1, accepted: true },
+      { id: '9', fragment: 'line number 4', text: 'Fourth line explained', votes: 1 },
+    ] });
+    const { user } = buildPrompt(source, null, source.unique);
+    expect(user).toContain('- [id:8] ▲1 公認 「line number 3」');
+    expect(user).toContain('- [id:9] ▲1 「line number 4」');
+  });
+
   it('omits the block without annotations, and drops empty ones', () => {
     const none = tenLineSong();
     expect(buildPrompt(none, null, none.unique).user).not.toContain('# Genius の注釈');
