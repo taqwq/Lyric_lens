@@ -735,7 +735,7 @@ export class App {
       mode: 'settings',
       anchor,
       busySongId: busy ? id : null,
-      song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt } : null,
+      song: this.page && !busy && hasLines(record) ? { title: record!.title, model: record!.model, translatedAt: record!.updatedAt, ...(record!.stop?.detail ? { lastError: record!.stop.detail } : {}) } : null,
       onRetranslate: () => { if (this.identity === id) void this.translate('retranslate').catch((e) => console.error('[Lyric Lens]', e)); },
       onDeleteSong: async () => {
         if (!record || this.identity !== id || this.run) return;

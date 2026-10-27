@@ -125,7 +125,11 @@ const STOP_REASONS: readonly StopReason[] = ['busy', 'rate', 'quota', 'auth', 'b
 function cleanStop(raw: unknown, fallbackAt: number): StopInfo | undefined {
   if (!isObject(raw) || !STOP_REASONS.includes(raw.reason as StopReason)) return undefined;
   const until = typeof raw.until === 'number' && Number.isFinite(raw.until) ? raw.until : undefined;
-  return { reason: raw.reason as StopReason, at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : fallbackAt, ...(until !== undefined ? { until } : {}) };
+  const d = raw.detail;
+  const detail = isObject(d) && typeof d.kind === 'string' && typeof d.model === 'string' && typeof d.status === 'number' && typeof d.text === 'string'
+    ? { kind: d.kind.slice(0, 40), model: d.model.slice(0, 80), status: d.status, text: d.text.slice(0, 200) }
+    : undefined;
+  return { reason: raw.reason as StopReason, at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : fallbackAt, ...(until !== undefined ? { until } : {}), ...(detail ? { detail } : {}) };
 }
 
 function cleanContext(raw: unknown): SongContext | undefined {

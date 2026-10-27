@@ -469,6 +469,23 @@ describe('settings sheet', () => {
     expect(text()).toContain('保存データ');
   });
 
+  it('shows the last error of this song in a collapsed disclosure, only when there is one', async () => {
+    openSheet({ mode: 'settings', song: { title: 'x', lastError: { kind: 'bad-request', model: 'gemini-3.5-flash', status: 400, text: 'invalid field' } } });
+    await settingsReady();
+    const details = shadow().querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details!.open).toBe(false);
+    expect(details!.querySelector('summary')!.textContent).toBe('直近のエラー');
+    expect(details!.textContent).toContain('gemini-3.5-flash · 400 · bad-request');
+    expect(details!.textContent).toContain('invalid field');
+  });
+
+  it('has no error disclosure without a stored error', async () => {
+    openSheet({ mode: 'settings', song: { title: 'x', model: 'gemma-4' } });
+    await settingsReady();
+    expect(shadow().querySelector('details')).toBeNull();
+  });
+
   it('describes this song and asks before retranslating', async () => {
     const onRetranslate = vi.fn();
     const onClose = vi.fn();

@@ -1,7 +1,7 @@
 import './setup';
 
 import { describe, expect, it } from 'vitest';
-import { LLMError, classifyHttpError, isAbort, retryAfterMs } from '../src/llm/errors';
+import { LLMError, classifyHttpError, errorDetail, isAbort, retryAfterMs, scrubKey } from '../src/llm/errors';
 
 const googleError = (code: number, status: string, message: string, details?: unknown) =>
   JSON.stringify({ error: { code, status, message, ...(details ? { details } : {}) } });
@@ -153,5 +153,26 @@ describe('isAbort', () => {
     expect(isAbort(new LLMError('aborted', 'x'))).toBe(true);
     expect(isAbort(new LLMError('network', 'x'))).toBe(false);
     expect(isAbort(new Error('x'))).toBe(false);
+  });
+});
+
+describe('errorDetail', () => {
+  const KEY = 'AIzaSyExampleGeminiKey1234567';
+
+  it('scrubs an API key out of the text', () => {
+    expect(scrubKey(`GET /v1beta/models?key=${KEY} failed`)).toBe('GET /v1beta/models?key=[key] failed');
+  });
+
+  it('keeps kind, model and status, and cuts the text to the limit', () => {
+    const error = new LLMError('bad-request', 'msg', { status: 400, detail: `${KEY} ${'x'.repeat(900)}` });
+    error.model = 'gemini-3.5-flash';
+    const d = errorDetail(error, 200);
+    expect(d).toMatchObject({ kind: 'bad-request', model: 'gemini-3.5-flash', status: 400 });
+    expect(d.text).toHaveLength(200);
+    expect(d.text).not.toContain('AIza');
+  });
+
+  it('falls back to the message when there is no body', () => {
+    expect(errorDetail(new LLMError('timeout', '応答がありません'), 200).text).toBe('応答がありません');
   });
 });

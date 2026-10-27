@@ -10,11 +10,12 @@ import { keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
 import { LLMError } from '../llm/errors';
 import { currentSettings, loadSettings, setApiKey } from '../store/settings';
 import { deleteAllSongs, exportSongs, importSongs, storageSummary } from '../store/songs';
+import type { StopDetail } from '../core/types';
 import { h } from './dom';
 import css from './sheet.css';
 import { formatDate, formatWhen } from './time';
 
-export interface SheetSong { title: string; model?: string; translatedAt?: number }
+export interface SheetSong { title: string; model?: string; translatedAt?: number; lastError?: StopDetail }
 
 export interface OpenSheetOptions {
   mode: 'first-run' | 'settings';
@@ -59,6 +60,7 @@ const COPY = {
   statusOk: '使えます',
   statusBad: 'キーが使えません',
   song: 'この曲',
+  lastError: '直近のエラー',
   retranslate: 'この曲を訳し直す',
   retranslateConfirm: 'この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます',
   retranslateOk: '訳し直す',
@@ -720,6 +722,12 @@ function mount(options: OpenSheetOptions): Active {
       body.append(h('section', { class: 'section' },
         h('h3', { class: 'section-title' }, COPY.song),
         parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.join(' · ')}`) : null,
+        song.lastError
+          ? h('details', { class: 'error-detail' },
+            h('summary', {}, COPY.lastError),
+            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join(' · ')),
+            song.lastError.text ? h('p', { class: 'error-text' }, song.lastError.text) : null)
+          : null,
         zone));
     }
 

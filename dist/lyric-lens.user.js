@@ -237,6 +237,12 @@
     if (status === 400 || status === 413 || status === 422) return new LLMError("bad-request", message, opts);
     return new LLMError("unknown", message, opts);
   }
+  function scrubKey(text2) {
+    return text2.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[key]");
+  }
+  function errorDetail(error, maxText) {
+    return { kind: error.kind, model: error.model, status: error.status, text: scrubKey(error.detail || error.message).slice(0, maxText) };
+  }
 
   // src/platform/http.ts
   function pickGmXhr() {
@@ -814,6 +820,7 @@ ${req.user}` : req.user }] }],
     const busyNow = /* @__PURE__ */ new Set();
     const provider = new GeminiProvider(apiKey);
     const remember = async (model, error) => {
+      console.warn("[Lyric Lens]", errorDetail(error, 500));
       if (error.kind === "overloaded" || error.kind === "timeout" || error.kind === "unusable") await noteHealth(apiKey, model, "bad");
       const until = cooldownFor(error);
       if (!until) return;
@@ -1323,6 +1330,11 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return { reason: "unusable", at: now };
     }
   }
+  function stopWithDetail(error) {
+    const stop = stopFromError(error);
+    if (error.kind === "aborted" || !(error.model || error.status || error.detail)) return stop;
+    return { ...stop, detail: errorDetail(error, 200) };
+  }
   var GROUP = "[（(][^（）()]{1,24}[）)]";
   var HAS_GROUP = new RegExp(GROUP);
   var TRAILING_GROUPS = new RegExp(`(?:\\s*${GROUP})+\\s*$`);
@@ -1479,14 +1491,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels });
       if (builder.apply(parser.flush())) options.onUpdate?.(record);
       model = result.model;
-      if (result.error) stop = stopFromError(result.error);
+      if (result.error) stop = stopWithDetail(result.error);
       else if (result.finish === "length") stop = { reason: "length", at: Date.now() };
       else if (result.finish === "blocked") stop = { reason: "blocked", at: Date.now() };
       finished = result.finish === "stop";
     } catch (error) {
       if (!(error instanceof LLMError)) throw error;
-      stop = stopFromError(error);
+      stop = stopWithDetail(error);
     }
+    if (builder.misaligned) console.warn("[Lyric Lens]", { misaligned: builder.misaligned });
     if (model) record.model = model;
     if (!missingLines(source, record).length) {
       delete record.stop;
@@ -1922,7 +1935,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   function cleanStop(raw, fallbackAt) {
     if (!isObject(raw) || !STOP_REASONS.includes(raw.reason)) return void 0;
     const until = typeof raw.until === "number" && Number.isFinite(raw.until) ? raw.until : void 0;
-    return { reason: raw.reason, at: typeof raw.at === "number" && Number.isFinite(raw.at) ? raw.at : fallbackAt, ...until !== void 0 ? { until } : {} };
+    const d = raw.detail;
+    const detail = isObject(d) && typeof d.kind === "string" && typeof d.model === "string" && typeof d.status === "number" && typeof d.text === "string" ? { kind: d.kind.slice(0, 40), model: d.model.slice(0, 80), status: d.status, text: d.text.slice(0, 200) } : void 0;
+    return { reason: raw.reason, at: typeof raw.at === "number" && Number.isFinite(raw.at) ? raw.at : fallbackAt, ...until !== void 0 ? { until } : {}, ...detail ? { detail } : {} };
   }
   function cleanContext(raw) {
     if (!isObject(raw) || typeof raw.who !== "string" || typeof raw.what !== "string") return void 0;
@@ -2916,6 +2931,23 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   flex-direction: column;\r
   align-items: stretch;\r
 }\r
+\r
+.error-detail {\r
+  margin: 0 0 10px;\r
+  color: var(--label);\r
+  font-size: 12.5px;\r
+  line-height: 1.6;\r
+}\r
+\r
+.error-detail summary { cursor: pointer; }\r
+\r
+.error-detail p {\r
+  margin: 4px 0 0;\r
+  overflow-wrap: anywhere;\r
+  user-select: text;\r
+}\r
+\r
+.error-text { font-size: 11.5px; }\r
 `;
 
   // src/ui/time.ts
@@ -2954,6 +2986,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     statusOk: "使えます",
     statusBad: "キーが使えません",
     song: "この曲",
+    lastError: "直近のエラー",
     retranslate: "この曲を訳し直す",
     retranslateConfirm: "この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます",
     retranslateOk: "訳し直す",
@@ -3604,6 +3637,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           { class: "section" },
           h("h3", { class: "section-title" }, COPY.song),
           parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.join(" · ")}`) : null,
+          song.lastError ? h(
+            "details",
+            { class: "error-detail" },
+            h("summary", {}, COPY.lastError),
+            h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join(" · ")),
+            song.lastError.text ? h("p", { class: "error-text" }, song.lastError.text) : null
+          ) : null,
           zone2
         ));
       }
@@ -4585,7 +4625,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         mode: "settings",
         anchor,
         busySongId: busy ? id : null,
-        song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
+        song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt, ...record.stop?.detail ? { lastError: record.stop.detail } : {} } : null,
         onRetranslate: () => {
           if (this.identity === id) void this.translate("retranslate").catch((e) => console.error("[Lyric Lens]", e));
         },
