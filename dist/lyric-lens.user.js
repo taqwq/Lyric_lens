@@ -2117,10 +2117,16 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
   // src/ui/head.ts
   var prefaceSeq = 0;
+  var isStop = (id) => id === "stop" || id === "stopMirror";
+  var STOP_GRACE_MS = 600;
   var HeadRow = class {
     constructor() {
       __publicField(this, "el", null);
       __publicField(this, "sig", "");
+      /** Action ids of the last render, and since when a stop action has been on screen
+       *  (null when none is): the guard follows the presence of 止める, not each rebuilt button. */
+      __publicField(this, "prevIds", []);
+      __publicField(this, "stopSince", null);
       /** The live region outlives every rebuild of the row: a region inserted already holding its
        *  text is not announced, one whose text changes in place is. */
       __publicField(this, "statusEl", null);
@@ -2138,11 +2144,20 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
       const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
       if (view.state) this.el.dataset.llState = view.state;
+      const ids = view.actions.map((a) => a.id ?? "");
+      const prevIds = this.prevIds;
+      const hadStop = prevIds.some(isStop);
+      this.stopSince = ids.some(isStop) ? hadStop && this.stopSince !== null ? this.stopSince : performance.now() : null;
+      this.prevIds = ids;
       if (sig !== this.sig) {
         const focus = this.focusedSlot();
         this.sig = sig;
         this.el.replaceChildren(...this.content(view));
-        if (focus) this.restoreFocus(focus);
+        if (focus) {
+          const landsOnStop = focus.kind === "action" && isStop(ids[focus.index]) && !isStop(prevIds[focus.index]);
+          if (landsOnStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
+          else this.restoreFocus(focus);
+        }
       } else {
         this.el.querySelectorAll(".ll-actions .ll-btn").forEach((b, i) => {
           b.disabled = Boolean(view.actions[i]?.disabled);
@@ -2160,6 +2175,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.el?.remove();
       this.el = null;
       this.sig = "";
+      this.prevIds = [];
+      this.stopSince = null;
       this.statusEl = null;
     }
     focusedSlot() {
@@ -2179,7 +2196,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
      *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
     statusNode(view) {
-      const el = this.statusEl ?? (this.statusEl = h("span", { class: "ll-status", role: "status", "aria-live": "polite" }));
+      const el = this.statusEl ?? (this.statusEl = h("span", { class: "ll-status", role: "status", "aria-live": "polite", tabindex: "-1" }));
       el.dataset.tone = view.tone ?? "normal";
       if (el.textContent !== view.status) el.textContent = view.status;
       if (view.status) delete el.dataset.empty;
@@ -2200,6 +2217,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             onclick: (e) => {
               e.preventDefault();
               if (button.disabled) return;
+              if (isStop(a.id) && this.stopSince !== null && performance.now() - this.stopSince < STOP_GRACE_MS) return;
               if (a.primary) button.disabled = true;
               a.onClick(button);
             }

@@ -29,9 +29,18 @@ export interface HeadView {
 
 let prefaceSeq = 0;
 
+/** 止める appears in the slot of the button just pressed (日本語で読む → 止める): a double tap or
+ *  key auto-repeat must not land on it. */
+const isStop = (id?: string): boolean => id === 'stop' || id === 'stopMirror';
+const STOP_GRACE_MS = 600;
+
 export class HeadRow {
   private el: HTMLElement | null = null;
   private sig = '';
+  /** Action ids of the last render, and since when a stop action has been on screen
+   *  (null when none is): the guard follows the presence of 止める, not each rebuilt button. */
+  private prevIds: string[] = [];
+  private stopSince: number | null = null;
   /** The live region outlives every rebuild of the row: a region inserted already holding its
    *  text is not announced, one whose text changes in place is. */
   private statusEl: HTMLSpanElement | null = null;
@@ -50,12 +59,22 @@ export class HeadRow {
     }
     const sig = JSON.stringify([view.status, view.tone, view.note, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
     if (view.state) this.el.dataset.llState = view.state;
+    const ids = view.actions.map((a) => a.id ?? '');
+    const prevIds = this.prevIds;
+    const hadStop = prevIds.some(isStop);
+    this.stopSince = ids.some(isStop) ? (hadStop && this.stopSince !== null ? this.stopSince : performance.now()) : null;
+    this.prevIds = ids;
     if (sig !== this.sig) {
       // Rebuilding destroys the focused control: remember which one it was.
       const focus = this.focusedSlot();
       this.sig = sig;
       this.el.replaceChildren(...this.content(view));
-      if (focus) this.restoreFocus(focus);
+      if (focus) {
+        // Focus must not slide onto a 止める that took the place of the button just pressed.
+        const landsOnStop = focus.kind === 'action' && isStop(ids[focus.index]) && !isStop(prevIds[focus.index]);
+        if (landsOnStop && this.statusEl) this.statusEl.focus({ preventScroll: true });
+        else this.restoreFocus(focus);
+      }
     } else {
       // A tapped button was locked in place; state decides whether it stays locked.
       this.el.querySelectorAll<HTMLButtonElement>('.ll-actions .ll-btn').forEach((b, i) => { b.disabled = Boolean(view.actions[i]?.disabled); });
@@ -76,6 +95,8 @@ export class HeadRow {
     this.el?.remove();
     this.el = null;
     this.sig = '';
+    this.prevIds = [];
+    this.stopSince = null;
     this.statusEl = null;
   }
 
@@ -100,7 +121,7 @@ export class HeadRow {
   /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
    *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
   private statusNode(view: HeadView): HTMLSpanElement {
-    const el = this.statusEl ?? (this.statusEl = h('span', { class: 'll-status', role: 'status', 'aria-live': 'polite' }));
+    const el = this.statusEl ?? (this.statusEl = h('span', { class: 'll-status', role: 'status', 'aria-live': 'polite', tabindex: '-1' }));
     el.dataset.tone = view.tone ?? 'normal';
     if (el.textContent !== view.status) el.textContent = view.status;
     if (view.status) delete el.dataset.empty;
@@ -120,6 +141,7 @@ export class HeadRow {
           onclick: (e: Event) => {
             e.preventDefault();
             if (button.disabled) return;
+            if (isStop(a.id) && this.stopSince !== null && performance.now() - this.stopSince < STOP_GRACE_MS) return;
             // Lock at once; the next render rebuilds the button from state.
             if (a.primary) button.disabled = true;
             a.onClick(button);

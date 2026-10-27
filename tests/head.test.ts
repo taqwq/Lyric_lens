@@ -96,6 +96,82 @@ describe('status live region', () => {
   });
 });
 
+describe('止める right after the button just pressed', () => {
+  let now = 1_000;
+  beforeEach(() => {
+    now = 1_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    document.body.innerHTML = `<div data-lyrics-container="true">[Chorus]<br>Pull up in the rain, I ain't even need a coat<br>Light under the door</div>`;
+    page = readPage()!;
+    head = new HeadRow();
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const s2 = (): HeadView => ({
+    status: '',
+    state: 'S2',
+    actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }, { id: 'settings', label: '設定', onClick: vi.fn() }],
+  });
+  const s3 = (onClick = vi.fn()): HeadView => ({ status: '曲全体を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
+  const s4 = (onClick = vi.fn()): HeadView => ({
+    status: '',
+    state: 'S4',
+    actions: [{ id: 'stop', label: '止める', onClick }, { id: 'hide', label: '訳を隠す', onClick: vi.fn() }, { id: 'settings', label: '設定', onClick: vi.fn() }],
+  });
+  const stopButton = () => head.element!.querySelector<HTMLButtonElement>('.ll-actions .ll-btn')!;
+
+  it('moves focus to the status line, ignores a tap at +200 ms and accepts one at +700 ms', () => {
+    head.render(page, s2());
+    stopButton().focus();
+    expect(document.activeElement).toBe(stopButton());
+
+    const spy = vi.fn();
+    head.render(page, s3(spy));
+    expect(document.activeElement).toBe(statusOf());
+    expect(statusOf().getAttribute('tabindex')).toBe('-1');
+
+    now += 200;
+    stopButton().click();
+    expect(spy).not.toHaveBeenCalled();
+
+    now += 500;
+    stopButton().click();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not restart when S3 turns into S4: a stop right at the first line works', () => {
+    head.render(page, s2());
+    head.render(page, s3());
+    now += 10_000;
+    const spy = vi.fn();
+    head.render(page, s4(spy));
+    stopButton().click();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps focus on 止める itself when it was already the focused button', () => {
+    head.render(page, s3());
+    now += 10_000;
+    stopButton().focus();
+    head.render(page, s4());
+    expect(document.activeElement).toBe(stopButton());
+  });
+
+  it('clear() forgets the old 止める: a stop shown afterwards counts as new', () => {
+    head.render(page, s3());
+    now += 10_000;
+    head.clear();
+    const spy = vi.fn();
+    head.render(page, s4(spy));
+    now += 100;
+    stopButton().click();
+    expect(spy).not.toHaveBeenCalled();
+    now += 600;
+    stopButton().click();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('styles.css (touch feedback)', () => {
   const css = readFileSync(resolve(__dirname, '../src/ui/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
