@@ -51,6 +51,7 @@ const COPY = {
   checking: '確かめています…',
   badKey: 'このキーは使えませんでした。コピーし直してください',
   network: '確かめられませんでした。接続を確認してください',
+  busyCheck: 'Google が混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ',
   settingsTitle: 'Lyric Lens の設定',
   close: '閉じる',
   services: '翻訳に使うAI',
@@ -438,13 +439,15 @@ function mount(options: OpenSheetOptions): Active {
   }
 
   /** Verifies a key with the provider's model list (never a generation call). */
-  async function verify(apiKey: string): Promise<'ok' | 'auth' | 'network' | 'aborted'> {
+  async function verify(apiKey: string): Promise<'ok' | 'auth' | 'network' | 'busy' | 'aborted'> {
     try {
       await modelsFor(apiKey, { refresh: true });
       return 'ok';
     } catch (error) {
       if (isAborted(error)) return 'aborted';
-      return isAuthError(error) ? 'auth' : 'network';
+      if (isAuthError(error)) return 'auth';
+      // Only a failed connection is the reader's to fix; a 503, 429 or timeout is Google's.
+      return error instanceof LLMError && error.kind === 'network' ? 'network' : 'busy';
     }
   }
 
@@ -501,7 +504,7 @@ function mount(options: OpenSheetOptions): Active {
       if (verdict !== 'ok') {
         setBusy(false);
         input.setAttribute('aria-invalid', 'true');
-        say(verdict === 'auth' ? COPY.badKey : COPY.network, 'error');
+        say(verdict === 'auth' ? COPY.badKey : verdict === 'busy' ? COPY.busyCheck : COPY.network, 'error');
         focusEl(input);
         return;
       }
@@ -596,7 +599,7 @@ function mount(options: OpenSheetOptions): Active {
       if (verdict !== 'ok') {
         row.busy = false;
         row.kind = verdict === 'auth' ? 'bad' : 'missing';
-        row.message = verdict === 'auth' ? COPY.badKey : COPY.network;
+        row.message = verdict === 'auth' ? COPY.badKey : verdict === 'busy' ? COPY.busyCheck : COPY.network;
         paintRow(row);
         focusEl(row.input);
         return;
