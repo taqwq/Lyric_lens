@@ -480,6 +480,16 @@ describe('settings sheet', () => {
     expect(details!.textContent).toContain('invalid field');
   });
 
+  it('shows only the error when a first request failed before any line (no edition yet)', async () => {
+    openSheet({ mode: 'settings', song: { title: 'x', edition: false, lastError: { kind: 'unusable', model: 'gemini-3.6-flash', status: 200, text: 'not JSONL' } } });
+    await settingsReady();
+    expect(text()).toContain('この曲');
+    expect(shadow().querySelector('details summary')!.textContent).toBe('直近のエラー');
+    expect(text()).not.toContain('この曲の訳：');
+    expect(text()).not.toContain('この曲を訳し直す');
+    expect(text()).not.toContain('この曲の保存データを消す');
+  });
+
   it('has no error disclosure without a stored error', async () => {
     openSheet({ mode: 'settings', song: { title: 'x', model: 'gemma-4' } });
     await settingsReady();

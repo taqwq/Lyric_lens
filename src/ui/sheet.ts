@@ -16,7 +16,8 @@ import { h } from './dom';
 import css from './sheet.css';
 import { formatDate, formatWhen } from './time';
 
-export interface SheetSong { title: string; model?: string; translatedAt?: number; lastError?: StopDetail }
+/** `edition: false`: nothing is translated yet (a first request failed); only 直近のエラー is shown. */
+export interface SheetSong { title: string; model?: string; translatedAt?: number; lastError?: StopDetail; edition?: boolean }
 
 export interface OpenSheetOptions {
   mode: 'first-run' | 'settings';
@@ -720,16 +721,17 @@ function mount(options: OpenSheetOptions): Active {
         });
       });
       zone.append(h('div', { class: 'actions' }, retranslate, deleteSong));
+      const edition = song.edition !== false;
       body.append(h('section', { class: 'section' },
         h('h3', { class: 'section-title' }, COPY.song),
-        parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.join(' · ')}`) : null,
+        edition && parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.join(' · ')}`) : null,
         song.lastError
           ? h('details', { class: 'error-detail' },
             h('summary', {}, COPY.lastError),
             h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join(' · ')),
             song.lastError.text ? h('p', { class: 'error-text' }, song.lastError.text) : null)
           : null,
-        zone));
+        edition ? zone : null));
     }
 
     /* -- saved data -- */
