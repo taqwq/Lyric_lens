@@ -5,7 +5,7 @@
  * its reset instead of burning a request to rediscover it.
  */
 import { getJSON, listKeys, remove, setJSON } from '../platform/storage';
-import { LLMError, type LLMErrorKind } from './errors';
+import { LLMError, errorDetail, type LLMErrorKind } from './errors';
 import { GEMINI_BASE, GeminiProvider, rankGeminiModel } from './gemini';
 import type { GenerateRequest, GenerateResult, ModelInfo } from './types';
 
@@ -341,6 +341,8 @@ export async function generateWithFallback(
   const provider = new GeminiProvider(apiKey);
 
   const remember = async (model: string, error: LLMError) => {
+    // The key never appears here: errorDetail scrubs it from the response text.
+    console.warn('[Lyric Lens]', errorDetail(error, 500));
     if (error.kind === 'overloaded' || error.kind === 'timeout' || error.kind === 'unusable') await noteHealth(apiKey, model, 'bad');
     const until = cooldownFor(error);
     if (!until) return;

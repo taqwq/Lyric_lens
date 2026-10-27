@@ -444,7 +444,7 @@ describe('translateSong: errors become a stop, never an exception', () => {
     const out = await translateSong(source, record, options);
 
     expect(out.complete).toBe(false);
-    expect(out.stop).toEqual({ reason: 'quota', at: NOW, until: NOW + 57_083_000 });
+    expect(out.stop).toMatchObject({ reason: 'quota', at: NOW, until: NOW + 57_083_000 });
     expect(record.stop).toBe(out.stop);
     expect(record.lines).toEqual({});
   });
@@ -557,6 +557,17 @@ describe('translateSong: errors become a stop, never an exception', () => {
     script({ text: '', throws: new LLMError(kind, 'x') });
     const out = await translateSong(makeSource(), newRecord(), options);
     expect(out.stop).toEqual({ reason, at: NOW });
+  });
+});
+
+describe('stop detail', () => {
+  it('stores the failing model and status on the stop, without a key', async () => {
+    const error = new LLMError('bad-request', 'x', { status: 400, detail: 'key AIzaSyExampleGeminiKey1234567 rejected' });
+    error.model = 'gemini-3.5-flash';
+    script({ text: '', throws: error });
+    const out = await translateSong(makeSource(), newRecord(), options);
+    expect(out.stop?.reason).toBe('rejected');
+    expect(out.stop?.detail).toEqual({ kind: 'bad-request', model: 'gemini-3.5-flash', status: 400, text: 'key [key] rejected' });
   });
 });
 

@@ -85,3 +85,13 @@ export function classifyHttpError(status: number, bodyText: string, rawHeaders =
   if (status === 400 || status === 413 || status === 422) return new LLMError('bad-request', message, opts);
   return new LLMError('unknown', message, opts);
 }
+
+/** Text from a failure may echo the request URL or key: never log or store one. */
+export function scrubKey(text: string): string {
+  return text.replace(/AIza[0-9A-Za-z_-]{20,}/g, '[key]');
+}
+
+/** The diagnostic kept per failed model: logged to the console and stored on the song's stop. */
+export function errorDetail(error: LLMError, maxText: number): { kind: LLMErrorKind; model: string; status: number; text: string } {
+  return { kind: error.kind, model: error.model, status: error.status, text: scrubKey(error.detail || error.message).slice(0, maxText) };
+}

@@ -6,7 +6,7 @@
  */
 import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
-import { LLMError } from '../llm/errors';
+import { LLMError, errorDetail } from '../llm/errors';
 import { buildPrompt, noteBudget } from './prompt';
 import { ProtocolParser, type ProtocolEvent } from './protocol';
 import { headMatches, looseText, missingLines } from './song';
@@ -49,6 +49,13 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
     case 'empty': return { reason: 'empty', at: now };
     default: return { reason: 'unusable', at: now };
   }
+}
+
+/** The stop for an engine error, with the failing model and status kept for the settings sheet. */
+function stopWithDetail(error: LLMError): StopInfo {
+  const stop = stopFromError(error);
+  if (error.kind === 'aborted' || !(error.model || error.status || error.detail)) return stop;
+  return { ...stop, detail: errorDetail(error, 200) };
 }
 
 const GROUP = '[（(][^（）()]{1,24}[）)]';
@@ -253,14 +260,15 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels });
     if (builder.apply(parser.flush())) options.onUpdate?.(record);
     model = result.model;
-    if (result.error) stop = stopFromError(result.error);
+    if (result.error) stop = stopWithDetail(result.error);
     else if (result.finish === 'length') stop = { reason: 'length', at: Date.now() };
     else if (result.finish === 'blocked') stop = { reason: 'blocked', at: Date.now() };
     finished = result.finish === 'stop';
   } catch (error) {
     if (!(error instanceof LLMError)) throw error;
-    stop = stopFromError(error);
+    stop = stopWithDetail(error);
   }
+  if (builder.misaligned) console.warn('[Lyric Lens]', { misaligned: builder.misaligned });
 
   if (model) record.model = model;
   if (!missingLines(source, record).length) {

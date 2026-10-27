@@ -258,6 +258,14 @@ describe('exportSongs', () => {
     expect(text).not.toContain('secret-key-value');
   });
 
+  it('keeps a stop detail and still reads records without one', async () => {
+    const detail = { kind: 'bad-request', model: 'gemini-3.5-flash', status: 400, text: 'oops' };
+    await saveSong(rec('d', { stop: { reason: 'rejected', at: 5, detail } }));
+    await saveSong(rec('n', { stop: { reason: 'closed', at: 5 } }));
+    expect((await loadSong('d'))!.stop?.detail).toEqual(detail);
+    expect((await loadSong('n'))!.stop).toEqual({ reason: 'closed', at: 5 });
+  });
+
   it('keeps the newer stop reasons through a save and a load', async () => {
     for (const reason of ['rejected', 'no-model', 'empty'] as const) {
       await saveSong(rec(reason, { stop: { reason, at: 5 } }));

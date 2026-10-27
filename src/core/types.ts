@@ -103,6 +103,16 @@ export interface StopInfo {
   at: number;
   /** For rate/quota: when trying again makes sense. */
   until?: number;
+  /** The failure behind it (task: 直近のエラー); absent on older records and on plain closes. */
+  detail?: StopDetail;
+}
+
+export interface StopDetail {
+  kind: string;
+  model: string;
+  status: number;
+  /** At most 200 characters, with any API key scrubbed. */
+  text: string;
 }
 
 /** What is persisted per song. Lines are keyed by normalized text, so a Genius edit
