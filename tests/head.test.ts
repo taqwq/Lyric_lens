@@ -22,7 +22,9 @@ afterEach(() => {
 });
 
 const view = (over: Partial<HeadView> = {}): HeadView => ({
+  tone: 'speaking',
   status: '',
+  captions: [],
   actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }],
   ...over,
 });
@@ -65,26 +67,6 @@ describe('status live region', () => {
     expect(statusOf().hasAttribute('data-empty')).toBe(true);
   });
 
-  it('data-tone follows view.tone, defaulting to normal', () => {
-    head.render(page, view({ status: '読んでいます' }));
-    expect(statusOf().dataset.tone).toBe('normal');
-    head.render(page, view({ status: '読んでいます', tone: 'muted' }));
-    expect(statusOf().dataset.tone).toBe('muted');
-    head.render(page, view({ status: '読んでいます', tone: 'normal' }));
-    expect(statusOf().dataset.tone).toBe('normal');
-  });
-
-  it('sits first in the row and the row keeps data-bare for an empty status', () => {
-    head.render(page, view({ status: '' }));
-    const row = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
-    expect(row.firstElementChild).toBe(statusOf());
-    expect(row.dataset.bare).toBe('1');
-    head.render(page, view({ status: '読んでいます' }));
-    const next = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
-    expect(next.firstElementChild).toBe(statusOf());
-    expect(next.dataset.bare).toBe('');
-  });
-
   it('clear() forgets the node: a later render makes a fresh one', () => {
     head.render(page, view({ status: '読んでいます' }));
     const old = statusOf();
@@ -108,17 +90,21 @@ describe('止める right after the button just pressed', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   const s2 = (): HeadView => ({
+    tone: 'speaking',
+    captions: [],
     status: '',
     state: 'S2',
     actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }, { id: 'settings', label: '設定', onClick: vi.fn() }],
   });
-  const s3 = (onClick = vi.fn()): HeadView => ({ status: '曲全体を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
+  const s3 = (onClick = vi.fn()): HeadView => ({ tone: 'speaking', captions: [], status: '曲全体を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
   const s4 = (onClick = vi.fn()): HeadView => ({
-    status: '',
+    tone: 'speaking',
+    captions: [],
+    status: '訳しています',
     state: 'S4',
     actions: [{ id: 'stop', label: '止める', onClick }, { id: 'hide', label: '訳を隠す', onClick: vi.fn() }, { id: 'settings', label: '設定', onClick: vi.fn() }],
   });
-  const stopButton = () => head.element!.querySelector<HTMLButtonElement>('.ll-actions .ll-btn')!;
+  const stopButton = () => head.element!.querySelector<HTMLButtonElement>('.ll-head-row .ll-btn')!;
 
   it('moves focus to the status line, ignores a tap at +200 ms and accepts one at +700 ms', () => {
     head.render(page, s2());
@@ -172,6 +158,189 @@ describe('止める right after the button just pressed', () => {
   });
 });
 
+describe('row content', () => {
+  const stopA = { id: 'stop', label: '止める', onClick: vi.fn() };
+  const hideA = { id: 'hide', label: '訳を隠す', onClick: vi.fn() };
+  const setA = { id: 'settings', label: '設定', onClick: vi.fn() };
+  const bar = () => head.element!.querySelector<HTMLElement>('.ll-progress');
+
+  it('the head is a labelled region excluded from selection', () => {
+    head.render(page, view({ state: 'S4' }));
+    const el = head.element!;
+    expect(el.getAttribute('role')).toBe('region');
+    expect(el.getAttribute('aria-label')).toBe('Lyric Lens 日本語訳');
+    expect(el.getAttribute('lang')).toBe('ja');
+    expect(el.dataset.llState).toBe('S4');
+    expect(el.hasAttribute('data-exclude-from-selection')).toBe(true);
+  });
+
+  it('the row carries data-tone, starts with the aria-hidden icon and then the status', () => {
+    head.render(page, view({ status: '読んでいます', actions: [] }));
+    const row = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
+    expect(row.dataset.tone).toBe('speaking');
+    expect(row.firstElementChild!.className).toBe('ll-icon');
+    expect(row.firstElementChild!.getAttribute('aria-hidden')).toBe('true');
+    expect(row.children[1]).toBe(statusOf());
+    head.render(page, view({ status: 'AIによる日本語訳', tone: 'settled', actions: [] }));
+    expect(head.element!.querySelector<HTMLElement>('.ll-head-row')!.dataset.tone).toBe('settled');
+  });
+
+  it('the primary button takes the left; the status stays in the DOM as an empty live region', () => {
+    head.render(page, view());
+    const row = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
+    expect(Array.from(row.children).map((c) => c.className)).toEqual(['ll-icon', 'll-btn', 'll-status']);
+    const primary = row.querySelector<HTMLButtonElement>('.ll-btn')!;
+    expect(primary.hasAttribute('data-primary')).toBe(true);
+    expect(primary.textContent).toBe('日本語で読む');
+    expect(statusOf().hasAttribute('data-empty')).toBe(true);
+    expect(statusOf().textContent).toBe('');
+  });
+
+  it('the count is aria-hidden and only present with a count; links keep their order inside .ll-links', () => {
+    head.render(page, view({ status: '訳しています', actions: [stopA, hideA, setA], count: '（12/67行）', progress: { value: 12, max: 67 } }));
+    const row = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
+    expect(Array.from(row.children).map((c) => c.className)).toEqual(['ll-icon', 'll-status', 'll-count', 'll-links', 'll-progress']);
+    const count = row.querySelector('.ll-count')!;
+    expect(count.textContent).toBe('（12/67行）');
+    expect(count.getAttribute('aria-hidden')).toBe('true');
+    expect(Array.from(row.querySelectorAll('.ll-links .ll-btn')).map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定']);
+    expect(row.querySelector('.ll-links [data-primary]')).toBeNull();
+    head.render(page, view({ status: 'AIによる日本語訳', actions: [hideA, setA] }));
+    expect(head.element!.querySelector('.ll-count')).toBeNull();
+    expect(bar()).toBeNull();
+  });
+
+  it('progress is a progressbar with value, max and --p, updated in place without a rebuild', () => {
+    head.render(page, view({ status: '訳しています', actions: [stopA], progress: { value: 12, max: 67 } }));
+    const first = bar()!;
+    expect(first.getAttribute('role')).toBe('progressbar');
+    expect(first.getAttribute('aria-label')).toBe('翻訳の進み具合');
+    expect(first.getAttribute('aria-valuemin')).toBe('0');
+    expect(first.getAttribute('aria-valuemax')).toBe('67');
+    expect(first.getAttribute('aria-valuenow')).toBe('12');
+    expect(first.style.getPropertyValue('--p')).toBe('0.179');
+    expect(first.hasAttribute('data-indeterminate')).toBe(false);
+    head.render(page, view({ status: '訳しています', actions: [stopA], progress: { value: 40, max: 67 } }));
+    expect(bar()).toBe(first);
+    expect(first.getAttribute('aria-valuenow')).toBe('40');
+    expect(first.style.getPropertyValue('--p')).toBe('0.597');
+  });
+
+  it('an indeterminate bar has no values; null removes the bar', () => {
+    head.render(page, view({ status: '曲全体を読んでいます', actions: [stopA], progress: 'indeterminate' }));
+    const b = bar()!;
+    expect(b.hasAttribute('data-indeterminate')).toBe(true);
+    expect(b.getAttribute('role')).toBe('progressbar');
+    expect(b.getAttribute('aria-label')).toBe('翻訳の進み具合');
+    expect(b.hasAttribute('aria-valuenow')).toBe(false);
+    expect(b.hasAttribute('aria-valuemax')).toBe(false);
+    head.render(page, view({ status: 'x', actions: [stopA], progress: null }));
+    expect(bar()).toBeNull();
+  });
+
+  it('the count text changes in place', () => {
+    head.render(page, view({ status: '訳しています', actions: [stopA], count: '（1/9行）' }));
+    const count = head.element!.querySelector('.ll-count')!;
+    head.render(page, view({ status: '訳しています', actions: [stopA], count: '（2/9行）' }));
+    expect(head.element!.querySelector('.ll-count')).toBe(count);
+    expect(count.textContent).toBe('（2/9行）');
+  });
+
+  it('captions follow the row in order, with data-tone only for a reason', () => {
+    head.render(page, view({ captions: [{ text: '67行のうち31行まで訳してあります' }, { text: '別の曲を訳し終えると続きを訳せます', tone: 'reason' }] }));
+    const caps = Array.from(head.element!.querySelectorAll<HTMLElement>('.ll-caption'));
+    expect(caps.map((c) => c.textContent)).toEqual(['67行のうち31行まで訳してあります', '別の曲を訳し終えると続きを訳せます']);
+    expect(caps[0]!.hasAttribute('data-tone')).toBe(false);
+    expect(caps[1]!.dataset.tone).toBe('reason');
+    expect(head.element!.children[1]).toBe(caps[0]);
+    head.render(page, view({ captions: [] }));
+    expect(head.element!.querySelector('.ll-caption')).toBeNull();
+  });
+
+  it('carries none of the old labels or classes', () => {
+    head.render(page, view({ preface: { who: 'AからBへ', what: '本文', collapsed: false, onToggle: vi.fn() } }));
+    const text = head.element!.textContent!;
+    expect(text).not.toContain('誰が誰に');
+    expect(text).not.toContain('この曲は');
+    expect(head.element!.querySelector('.ll-head-note, .ll-actions, .ll-preface-label, .ll-preface-toggle')).toBeNull();
+  });
+});
+
+describe('preface', () => {
+  const pf = (collapsed: boolean, onToggle = vi.fn()) => ({ who: 'ケンドリックから、ライバルと聴衆へ', what: '圧倒的な成功と孤独の歌', collapsed, onToggle });
+
+  it('expanded: both paragraphs, no toggle at all', () => {
+    head.render(page, view({ preface: pf(false) }));
+    const who = head.element!.querySelector<HTMLElement>('.ll-preface-who')!;
+    const what = head.element!.querySelector<HTMLElement>('.ll-preface-what')!;
+    expect(who.tagName).toBe('P');
+    expect(who.textContent).toBe('ケンドリックから、ライバルと聴衆へ');
+    expect(what.hidden).toBe(false);
+    expect(what.textContent).toBe('圧倒的な成功と孤独の歌');
+    expect(head.element!.querySelector('.ll-preface-more')).toBeNull();
+  });
+
+  it('collapsed: the 続きを読む ▾ toggle ends the first line and controls the hidden second paragraph', () => {
+    const onToggle = vi.fn();
+    head.render(page, view({ preface: pf(true, onToggle) }));
+    const who = head.element!.querySelector<HTMLElement>('.ll-preface-who')!;
+    const what = head.element!.querySelector<HTMLElement>('.ll-preface-what')!;
+    const more = who.querySelector<HTMLButtonElement>('.ll-preface-more')!;
+    expect(more.textContent).toBe('続きを読む ▾');
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    expect(more.getAttribute('aria-controls')).toBe(what.id);
+    expect(what.id).toBeTruthy();
+    expect(what.hidden).toBe(true);
+    expect(who.lastElementChild).toBe(more);
+    more.click();
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('expanding removes the toggle and keeps focus inside the head', () => {
+    head.render(page, view({ preface: pf(true) }));
+    head.element!.querySelector<HTMLButtonElement>('.ll-preface-more')!.focus();
+    head.render(page, view({ preface: pf(false) }));
+    expect(head.element!.querySelector('.ll-preface-more')).toBeNull();
+    expect(head.element!.contains(document.activeElement)).toBe(true);
+  });
+
+  it('no preface, no preface node', () => {
+    head.render(page, view({ preface: null }));
+    expect(head.element!.querySelector('.ll-preface')).toBeNull();
+  });
+});
+
+describe('settle', () => {
+  const rowOf = () => head.element!.querySelector<HTMLElement>('.ll-head-row')!;
+  const settled = (over: Partial<HeadView> = {}) => view({ status: 'AIによる日本語訳', tone: 'settled', actions: [], ...over });
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('sets data-settle for 600 ms, then removes it', () => {
+    head.render(page, settled({ settle: true }));
+    expect(rowOf().hasAttribute('data-settle')).toBe(true);
+    vi.advanceTimersByTime(599);
+    expect(rowOf().hasAttribute('data-settle')).toBe(true);
+    vi.advanceTimersByTime(2);
+    expect(rowOf().hasAttribute('data-settle')).toBe(false);
+  });
+
+  it('survives a rebuild inside the window and does not return afterwards', () => {
+    head.render(page, settled({ settle: true }));
+    head.render(page, settled({ status: '訳を隠しています' }));
+    expect(rowOf().hasAttribute('data-settle')).toBe(true);
+    vi.advanceTimersByTime(700);
+    expect(rowOf().hasAttribute('data-settle')).toBe(false);
+    head.render(page, settled());
+    expect(rowOf().hasAttribute('data-settle')).toBe(false);
+  });
+
+  it('is absent without view.settle', () => {
+    head.render(page, settled());
+    expect(rowOf().hasAttribute('data-settle')).toBe(false);
+  });
+});
+
 describe('styles.css (touch feedback)', () => {
   const css = readFileSync(resolve(__dirname, '../src/ui/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -198,7 +367,7 @@ describe('styles.css (touch feedback)', () => {
   it('pressed controls dim to .55 at once (no transition)', () => {
     const rule = /(?:^|\})\s*([^{}]*\.ll-btn:active:not\(:disabled\)[^{}]*)\{([^}]*)\}/.exec(css);
     expect(rule).not.toBeNull();
-    for (const sel of ['.ll-gn-toggle:active', '.ll-gn-more:active', '.ll-preface-toggle:active']) expect(rule![1]).toContain(sel);
+    for (const sel of ['.ll-gn-toggle:active', '.ll-gn-more:active', '.ll-preface-more:active']) expect(rule![1]).toContain(sel);
     expect(rule![2]).toMatch(/opacity:\s*\.55\b/);
     expect(rule![2]).not.toMatch(/transition/);
     expect(css.indexOf('.ll-btn:active:not(:disabled)')).toBeGreaterThan(css.indexOf('.ll-btn:disabled'));

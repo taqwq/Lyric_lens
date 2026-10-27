@@ -11,8 +11,8 @@ import { isOwnNode, readPage, type PageSong } from './genius/extract';
 import { availability, cleanOtherProviders, keyStatus, type Availability } from './llm/chain';
 import { transportStreams } from './platform/http';
 import { acquireLock, readLock, requestAbort, TAB_ID, type Lock, type LockHandle } from './store/lock';
-import { currentSettings, hasKey, loadSettings, onSettings, updateSettings } from './store/settings';
-import { SaveQueue, deleteSong, loadSong, saveSong, touchSong } from './store/songs';
+import { currentSettings, hasKey, loadSettings, onSettings } from './store/settings';
+import { SaveQueue, deleteSong, loadSong, saveSong, setSongHidden, touchSong } from './store/songs';
 import { HeadRow, type HeadAction, type HeadView } from './ui/head';
 import { LineRenderer, type LinesInput, type SeamView } from './ui/lines';
 import { NoteView } from './ui/notes';
@@ -75,6 +75,11 @@ export class App {
   private notice: { status: string; detail: string } | null = null;
   /** The edition on screen could not be stored: storage must not replace it until it is. */
   private unsaved = false;
+  /** A request ran here for this song since it was opened: reaching S5 then settles the head once. */
+  private wrote = false;
+  /** The reader just tapped a button that creates the empty slots: the next render that
+   *  shows them unfolds the ones near the viewport (LinesInput.opening). */
+  private opening = false;
 
   private readonly head = new HeadRow();
   private readonly lines = new LineRenderer();
@@ -124,6 +129,8 @@ export class App {
           this.annotations = null;
           this.notice = null;
           this.unsaved = false;
+          this.wrote = false;
+          this.opening = false;
           this.record = this.acceptStored(identity, page, await loadSong(identity));
           this.fromCache = hasLines(this.record);
           this.prefaceCollapsed = this.fromCache && !this.record?.stop;
@@ -138,6 +145,7 @@ export class App {
         this.foreignLock = await this.otherLock();
         await this.refreshKeys();
         this.detectTheme();
+        this.followLyricFont(page);
         this.renderNow();
         // Genius' own annotations API is free and same-origin (not an LLM request): fetch
         // once so the grounding is ready before the tap and opened notes do not grow later.
@@ -268,10 +276,19 @@ export class App {
     document.documentElement.classList.toggle('ll-dark', (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.4);
   }
 
+  /** 訳を隠す is per song: it follows the record of the song on screen. */
   private applyDisplay(): void {
-    const hidden = currentSettings().hideTranslation;
+    const hidden = Boolean(this.shown()?.hidden);
     document.documentElement.classList.toggle('ll-hidden', hidden);
     if (hidden) this.notes.close();
+  }
+
+  /** Latin text in a translated line is set in the lyrics' own face (--ll-latin). */
+  private followLyricFont(page: PageSong): void {
+    try {
+      const family = getComputedStyle(page.containers[0]!).fontFamily;
+      if (family) document.documentElement.style.setProperty('--ll-latin', family);
+    } catch { /* no container yet: the stylesheet's fallback applies */ }
   }
 
   /* ---------- rendering ---------- */
@@ -297,6 +314,7 @@ export class App {
     this.preferAnchor = null;
     const focusedHere = this.focusInsideOurUi();
     this.anchored(() => {
+      this.applyDisplay();
       // Closing or refreshing a note above the viewport is compensated like everything else.
       this.syncNote(page);
       const { head, lines } = this.view(page);
@@ -407,7 +425,7 @@ export class App {
       online: navigator.onLine,
       streams: transportStreams(),
       waitedMs: here ? Date.now() - here.startedAt : undefined,
-      hidden: settings.hideTranslation,
+      hidden: Boolean(shown?.hidden),
       hasKey: hasKey(settings),
       keyBad: this.keyBad,
       total: page.source.lines.length,
@@ -443,11 +461,24 @@ export class App {
     const seam: SeamView | null = d.lines.seam
       ? { text: d.lines.seam.text, button: { ...d.lines.seam.button, onClick: () => this.act(d.lines.seam!.button.id, null, input) } }
       : null;
+    if (input.running !== 'none') this.wrote = true;
+    // A run in this session reached S5: the head settles once.
+    const settle = d.state === 'S5' && this.wrote;
+    if (settle) this.wrote = false;
+    // The first render that shows the slots a tap just created.
+    const opening = this.opening && input.running === 'here';
+    if (opening) this.opening = false;
     return {
-      head: { status: d.status, ...(d.tone ? { tone: d.tone } : {}), ...(d.note ? { note: d.note } : {}), ...(d.noteTone ? { noteTone: d.noteTone } : {}), actions: d.actions.map(bind), preface, state: d.state },
+      head: {
+        state: d.state, tone: d.tone, status: d.status,
+        ...(d.count ? { count: `（${d.count.done}/${d.count.total}行）` } : {}),
+        progress: d.progress,
+        ...(settle ? { settle: true } : {}),
+        captions: d.captions, actions: d.actions.map(bind), preface,
+      },
       lines: {
         page, record: shown, slots: d.lines.slots, gaps: d.lines.gaps, breathing: d.lines.breathing, seam,
-        animate: !this.fromCache, openIndex: this.notes.openIndex,
+        animate: !this.fromCache, ...(opening ? { opening: true } : {}), openIndex: this.notes.openIndex,
         onMark: (i) => void this.toggleNote(i),
         onMarkHover: (i, on) => this.peek(i, on),
       },
@@ -457,8 +488,8 @@ export class App {
   /** Runs an action named by the state machine. */
   private act(id: ActionId, el: HTMLElement | null, input: ViewInput): void {
     switch (id) {
-      case 'start': void this.translate('start').catch((e) => console.error('[Lyric Lens]', e)); break;
-      case 'resume': void this.translate('resume').catch((e) => console.error('[Lyric Lens]', e)); break;
+      case 'start': this.opening = true; void this.translate('start').catch((e) => console.error('[Lyric Lens]', e)); break;
+      case 'resume': this.opening = true; void this.translate('resume').catch((e) => console.error('[Lyric Lens]', e)); break;
       case 'stop': this.stop(); break;
       case 'stopMirror': void requestAbort(); break;
       case 'stopOther': this.stopOther(); break;
@@ -539,7 +570,7 @@ export class App {
     // A retranslation is confirmed in the settings sheet, away from the page: if it cannot
     // start, say so in the head row instead of silently doing nothing.
     const cannotRetranslate = (detail: string) => {
-      if (kind === 'retranslate' && this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのままです', detail };
+      if (kind === 'retranslate' && this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail };
     };
     try {
       const settings = await loadSettings();
@@ -588,7 +619,11 @@ export class App {
       this.notice = null;
       this.prefaceCollapsed = false;
       // Asking for Japanese means wanting to see it.
-      if (settings.hideTranslation) await updateSettings((s) => ({ ...s, hideTranslation: false }));
+      delete record.hidden;
+      if (this.record?.hidden) {
+        delete this.record.hidden;
+        await setSongHidden(id, false).catch(() => {});
+      }
       const current = run;
       current.lock.start(() => current.controller.abort());
       // A reload or closed tab should not leave a live-looking lock for 10 s, and what it
@@ -655,7 +690,7 @@ export class App {
             }
           } else if (this.identity === id) {
             const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
-            this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: failureText(stop, Date.now()) };
+            this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText(stop, Date.now()) };
           }
         } else {
           if (leaving && record.stop?.reason === 'stopped') record.stop = { reason: 'closed', at: Date.now() };
@@ -664,7 +699,7 @@ export class App {
       } catch (error) {
         console.error('[Lyric Lens]', error);
         if (retranslate) {
-          if (this.identity === id) this.notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: failureText({ reason: 'unusable', at: Date.now() }, Date.now()) };
+          if (this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText({ reason: 'unusable', at: Date.now() }, Date.now()) };
         } else {
           record.stop = { reason: 'unusable', at: Date.now() };
           await this.persist(current, record);
@@ -727,9 +762,18 @@ export class App {
     else void requestAbort();
   }
 
+  /** 訳を隠す belongs to the song: it is saved on the record (without touching its date). */
   private async toggleHidden(): Promise<void> {
-    await updateSettings((s) => ({ ...s, hideTranslation: !s.hideTranslation }));
+    const record = this.shown();
+    if (!record) return;
+    if (record.hidden) delete record.hidden;
+    else record.hidden = true;
     this.renderNow();
+    try {
+      await setSongHidden(record.id, Boolean(record.hidden));
+    } catch (e) {
+      console.error('[Lyric Lens]', e);
+    }
   }
 
   /** After the reader changed keys, an "invalid key" stop no longer applies: let the song

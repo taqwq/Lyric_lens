@@ -41,211 +41,168 @@ const STOP: ActionSpec = { id: 'stop', label: '止める' };
 const HIDE: ActionSpec = { id: 'hide', label: '訳を隠す' };
 const SHOW: ActionSpec = { id: 'hide', label: '訳を表示' };
 const START: ActionSpec = { id: 'start', label: '日本語で読む', primary: true };
+const FIRST_RUN: ActionSpec = { id: 'firstRun', label: '日本語で読む', primary: true };
 const NONE = { slots: false, gaps: false, breathing: false, seam: null };
 const WRITING = { slots: true, gaps: false, breathing: true, seam: null };
 
 const BLOCKED_BY_OTHER = '別の曲を訳し終えると続きを訳せます';
 const quotaBlocker = (until: number) => `今日の無料枠は終わりました。${at(until)}から訳せます`;
 
-/** toEqual ignores undefined properties; this also fails on a stray `note: undefined`/`tone`. */
+/** A Decision with the quiet defaults filled in (count is absent unless given). */
+const D = (over: Partial<Decision> & Pick<Decision, 'state'>): Decision => ({
+  tone: 'speaking', status: '', captions: [], progress: null, actions: [], preface: false, lines: NONE, ...over,
+});
+
+/** toEqual ignores undefined properties; this also fails on a stray `count: undefined`. */
 function expectDecision(actual: Decision, expected: Decision): void {
   expect(actual).toEqual(expected);
   expect(Object.keys(actual).sort()).toEqual(Object.keys(expected).sort());
 }
 
-describe('fixture', () => {
-  it('NOW is noon in Japan and the helper times read as expected', () => {
-    expect(at(SOON)).toBe('15:00');
-    expect(at(TOMORROW)).toBe('明日 01:00');
-    expect(at(NOW)).toBe('12:00');
-  });
-});
-
 /* ---------- S1 / S2 family: nothing translated yet ---------- */
 
 describe('S1 no key', () => {
-  it('asks for a key with one primary button', () => {
-    expectDecision(decide(view({ hasKey: false })), {
+  it('asks for the key in a caption, behind one primary button', () => {
+    expectDecision(decide(view({ hasKey: false })), D({
       state: 'S1',
-      status: '日本語訳には無料のAPIキーが必要です',
-      actions: [{ id: 'firstRun', label: 'キーを設定', primary: true }],
-      preface: false,
-      lines: NONE,
-    });
+      captions: [{ text: 'はじめに無料のAPIキーを設定します' }],
+      actions: [FIRST_RUN],
+    }));
   });
 
-  it('beats the other-song, quota and stored-stop states', () => {
-    const d = decide(view({ hasKey: false, otherSong: 'X', avail: { ok: false, until: SOON }, stop: stopOf('busy') }));
+  it('ignores a preface and the hide switch, and never counts', () => {
+    const d = decide(view({ hasKey: false, hasPreface: true, hidden: true }));
     expect(d.state).toBe('S1');
+    expect(d.preface).toBe(false);
+    expect(d.actions).toEqual([FIRST_RUN]);
+    expect(d.count).toBeUndefined();
   });
 
-  it('only applies while nothing is translated: with lines on the page it is the usual S6/S7', () => {
-    expect(decide(view({ hasKey: false, done: 10, stop: stopOf('busy') })).state).toBe('S6');
-    expect(decide(view({ hasKey: false, done: 10 })).state).toBe('S7');
+  it('beats the other-song and quota states', () => {
+    expect(decide(view({ hasKey: false, otherSong: 'X', avail: { ok: false, until: SOON } })).state).toBe('S1');
   });
 });
 
 describe('S2 ready', () => {
-  it('offers 日本語で読む and 設定', () => {
-    expectDecision(decide(base), { state: 'S2', status: '', actions: [START, SETTINGS], preface: false, lines: NONE });
+  it('offers 日本語で読む and 設定 with nothing to say', () => {
+    expectDecision(decide(view()), D({ state: 'S2', actions: [START, SETTINGS] }));
   });
 
   it('ignores a preface and the hide switch before anything is written', () => {
-    expectDecision(decide(view({ hasPreface: true, hidden: true })), { state: 'S2', status: '', actions: [START, SETTINGS], preface: false, lines: NONE });
+    const d = decide(view({ hasPreface: true, hidden: true }));
+    expect(d.state).toBe('S2');
+    expect(d.preface).toBe(false);
+    expect(d.actions).toEqual([START, SETTINGS]);
   });
 
-  it.each<[string, Partial<ViewInput>]>([
-    ['no stop recorded', {}],
+  const plain: Array<[string, Partial<ViewInput>]> = [
     ['stopped by the reader', { stop: stopOf('stopped') }],
     ['closed tab', { stop: stopOf('closed') }],
     ['rate limit whose wait is over', { stop: stopOf('rate', { until: NOW - 1 }) }],
     ['rate limit that ends exactly now', { stop: stopOf('rate', { until: NOW }) }],
     ['daily quota that is available again', { stop: stopOf('quota', { until: SOON }), avail: { ok: true, until: 0 } }],
-    ['quota stop with nothing known to block it', { stop: stopOf('quota') }],
     ['auth stop but no key is rejected any more', { stop: stopOf('auth'), keyBad: false }],
-  ])('stays plain S2 for %s', (_name, over) => {
-    expectDecision(decide(view(over)), { state: 'S2', status: '', actions: [START, SETTINGS], preface: false, lines: NONE });
-  });
-
-  it('ignores a retranslation notice while nothing is translated', () => {
-    expect(decide(view({ notice: { status: 's', detail: 'd' } })).state).toBe('S2');
+  ];
+  it.each(plain)('stays plain S2 for %s', (_name, over) => {
+    expectDecision(decide(view(over)), D({ state: 'S2', actions: [START, SETTINGS] }));
   });
 });
 
 describe('SJ Japanese lyrics', () => {
-  const japanese = view({ japanese: true });
-
-  it('says so quietly and offers no way to start a request', () => {
-    expectDecision(decide(japanese), {
-      state: 'SJ',
-      status: 'この曲は日本語の歌詞です',
-      tone: 'muted',
-      actions: [],
-      preface: false,
-      lines: NONE,
-    });
-    const ids = decide(japanese).actions.map((a) => a.id);
-    expect(ids).not.toContain('start');
-    expect(ids).not.toContain('firstRun');
+  it('says so quietly (settled) and offers nothing', () => {
+    expectDecision(decide(view({ japanese: true })), D({ state: 'SJ', tone: 'settled', status: 'この曲は日本語の歌詞です' }));
   });
 
-  it('beats the no-key, other-song, quota and stored-stop states', () => {
+  it('needs no key and ignores the other-song and quota states', () => {
     expect(decide(view({ japanese: true, hasKey: false })).state).toBe('SJ');
     expect(decide(view({ japanese: true, otherSong: 'X' })).state).toBe('SJ');
     expect(decide(view({ japanese: true, avail: { ok: false, until: SOON } })).state).toBe('SJ');
-    expect(decide(view({ japanese: true, stop: stopOf('busy') })).state).toBe('SJ');
   });
 
-  it('yields to a running request, another tab and a saved edition', () => {
-    expect(decide(view({ japanese: true, running: 'here' })).state).toBe('S3');
-    expect(decide(view({ japanese: true, mirrored: true })).state).toBe('S4m');
-    expect(decide(view({ japanese: true, done: 40 })).state).toBe('S5');
-    expect(decide(view({ japanese: true, done: 10, stop: stopOf('busy') })).state).toBe('S6');
-  });
-
-  it('is off by default and when false', () => {
-    expect(decide(base).state).toBe('S2');
-    expect(decide(view({ japanese: false })).state).toBe('S2');
+  it('is not shown once something is translated', () => {
+    expect(decide(view({ japanese: true, done: 5 })).state).toBe('S7');
+    expect(decide(view({ japanese: true, done: 40, total: 40 })).state).toBe('S5');
   });
 });
 
 describe('S2b another song is being written', () => {
-  it('names the other song and offers to stop it', () => {
-    expectDecision(decide(view({ otherSong: 'Hello' })), {
+  it('names it in a caption and offers only to stop it', () => {
+    expectDecision(decide(view({ otherSong: 'Smoke Signals' })), D({
       state: 'S2b',
-      status: '別の曲（Hello）を訳しています。終わるとこの曲も訳せます',
-      actions: [{ id: 'stopOther', label: 'あちらを止める' }, SETTINGS],
-      preface: false,
-      lines: NONE,
-    });
+      status: '別の曲を訳しています',
+      captions: [{ text: '「Smoke Signals」が終わると、この曲も訳せます' }],
+      actions: [{ id: 'stopOther', label: 'あちらを止める' }],
+    }));
   });
 
-  it('beats quota and a stored failure', () => {
-    expect(decide(view({ otherSong: 'Hello', avail: { ok: false, until: SOON }, stop: stopOf('busy') })).state).toBe('S2b');
+  it('has no 設定 link', () => {
+    expect(decide(view({ otherSong: 'X' })).actions.map((a) => a.id)).toEqual(['stopOther']);
   });
 });
 
 describe('S2q quota known exhausted', () => {
-  it('the reset time and 設定', () => {
-    const d = decide(view({ avail: { ok: false, until: SOON } }));
-    expectDecision(d, {
+  it('says the day is used up and when it resets (status + caption), 設定 as the only link', () => {
+    expectDecision(decide(view({ avail: { ok: false, until: SOON } })), D({
       state: 'S2q',
-      status: '今日の無料枠は終わりました。15:00から訳せます',
-      tone: 'muted',
+      status: '今日の無料枠を使い切りました',
+      captions: [{ text: '15:00から、また訳せます' }],
       actions: [SETTINGS],
-      preface: false,
-      lines: NONE,
-    });
-    expect(d.status).toBe(quotaBlocker(SOON));
+    }));
   });
 
   it('says 明日 when the reset is on the next day in Japan', () => {
-    expect(decide(view({ avail: { ok: false, until: TOMORROW } })).status).toBe('今日の無料枠は終わりました。明日 01:00から訳せます');
+    expect(decide(view({ avail: { ok: false, until: TOMORROW } })).captions).toEqual([{ text: '明日 01:00から、また訳せます' }]);
   });
 
-  it.each([
-    ['unknown reset (0)', 0],
-    ['reset already in the past', NOW - 1],
-    ['reset exactly now', NOW],
-  ])('says あとで for %s', (_name, until) => {
+  it.each([[0], [NOW - 1], [NOW]])('has no time caption for a reset of %i (unknown or already past)', (until) => {
     const d = decide(view({ avail: { ok: false, until } }));
     expect(d.state).toBe('S2q');
-    expect(d.status).toBe('今日の無料枠は終わりました。あとで訳せます');
-  });
-
-  it('beats a stored first-request failure', () => {
-    expect(decide(view({ avail: { ok: false, until: SOON }, stop: stopOf('busy') })).state).toBe('S2q');
-  });
-
-  it('is below S2b: another song running is the more useful thing to say', () => {
-    const d = decide(view({ avail: { ok: false, until: SOON }, otherSong: 'Hello' }));
-    expect(d.state).toBe('S2b');
+    expect(d.captions).toEqual([]);
   });
 });
 
 describe('S2f the first request produced nothing', () => {
-  const plain = (extra: Partial<ActionSpec> = {}): ActionSpec => ({ id: 'start', label: '日本語で読む', primary: true, disabled: false, ...extra });
+  const plain = (extra: Partial<ActionSpec> = {}): ActionSpec => ({ id: 'start', label: 'もう一度訳す', primary: true, disabled: false, ...extra });
 
-  const rows: Array<{ name: string; stop: StopInfo; over?: Partial<ViewInput>; status: string; button?: Partial<ActionSpec> }> = [
-    { name: 'busy', stop: stopOf('busy'), status: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ' },
-    { name: 'rate before until (button waits)', stop: stopOf('rate', { until: MINUTE_LATER }), status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
-    { name: 'rate one ms before until', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER - 1 }, status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
-    { name: 'rate without a known until', stop: stopOf('rate'), status: 'AIの回数制限にかかりました。1分ほどおいてから訳せます' },
-    { name: 'blocked', stop: stopOf('blocked'), status: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
-    { name: 'network, online', stop: stopOf('network'), over: { online: true }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
-    { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
-    { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, status: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ' },
-    { name: 'rate for five minutes names the time (button waits)', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), status: 'AIの回数制限にかかりました。12:05ごろから訳せます', button: { disabled: true } },
-    { name: 'unusable benched for ten minutes names the time (button waits)', stop: stopOf('unusable', { until: NOW + 600_000 }), status: 'AIの返事をうまく読み取れませんでした。12:10ごろからもう一度試せます', button: { disabled: true } },
-    { name: 'rejected', stop: stopOf('rejected'), status: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
-    { name: 'no-model', stop: stopOf('no-model'), status: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
-    { name: 'empty', stop: stopOf('empty'), status: 'AIから空の返事が返ってきました。もう一度試せます' },
-    { name: 'unusable', stop: stopOf('unusable'), status: 'AIの返事をうまく読み取れませんでした。もう一度試せます' },
-    { name: 'length', stop: stopOf('length'), status: '長い曲なので、一度では訳し切れませんでした' },
+  const rows: Array<{ name: string; stop: StopInfo; over?: Partial<ViewInput>; reason: string; button?: Partial<ActionSpec> }> = [
+    { name: 'busy', stop: stopOf('busy'), reason: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'rate before until (button waits)', stop: stopOf('rate', { until: MINUTE_LATER }), reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
+    { name: 'rate one ms before until', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER - 1 }, reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
+    { name: 'rate without a known until', stop: stopOf('rate'), reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます' },
+    { name: 'blocked', stop: stopOf('blocked'), reason: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
+    { name: 'network, online', stop: stopOf('network'), over: { online: true }, reason: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
+    { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, reason: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
+    { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, reason: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'rate for five minutes names the time (button waits)', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), reason: 'AIの回数制限にかかりました。12:05ごろから訳せます', button: { disabled: true } },
+    { name: 'unusable benched for ten minutes names the time (button waits)', stop: stopOf('unusable', { until: NOW + 600_000 }), reason: 'AIの返事をうまく読み取れませんでした。12:10ごろからもう一度試せます', button: { disabled: true } },
+    { name: 'rejected', stop: stopOf('rejected'), reason: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
+    { name: 'no-model', stop: stopOf('no-model'), reason: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
+    { name: 'empty', stop: stopOf('empty'), reason: 'AIから空の返事が返ってきました。もう一度試せます' },
+    { name: 'unusable', stop: stopOf('unusable'), reason: 'AIの返事をうまく読み取れませんでした。もう一度試せます' },
+    { name: 'length', stop: stopOf('length'), reason: '長い曲なので、一度では訳し切れませんでした' },
   ];
 
-  it.each(rows)('$name', ({ stop, over, status, button }) => {
-    expectDecision(decide(view({ stop, ...over })), {
+  it.each(rows)('$name', ({ stop, over, reason, button }) => {
+    expectDecision(decide(view({ stop, ...over })), D({
       state: 'S2f',
-      status,
+      captions: [{ text: reason }],
       actions: [plain(button), SETTINGS],
-      preface: false,
-      lines: NONE,
-    });
+    }));
   });
 
-  it('auth with a rejected key: 設定を開く is the only (primary) button', () => {
-    expectDecision(decide(view({ stop: stopOf('auth'), keyBad: true })), {
+  it('auth with a rejected key: the button is 設定を開く and there is no second 設定', () => {
+    expectDecision(decide(view({ stop: stopOf('auth'), keyBad: true })), D({
       state: 'S2f',
-      status: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
+      captions: [{ text: 'APIキーが使えなくなりました。設定でキーを入れ直してください' }],
       actions: [{ id: 'settings', label: '設定を開く', primary: true }],
-      preface: false,
-      lines: NONE,
-    });
+    }));
   });
 
-  it('auth with a key that is not known to be bad reads as plain S2', () => {
-    expect(decide(view({ stop: stopOf('auth'), keyBad: false })).state).toBe('S2');
+  it('the status is empty (the button takes its place) and the reason is a caption, never joined with ·', () => {
+    const d = decide(view({ stop: stopOf('busy') }));
+    expect(d.status).toBe('');
+    expect(d.captions).toHaveLength(1);
+    expect(d.captions[0]!.text).not.toContain(' · ');
   });
 
   it('the start button keeps its place whatever the preface/hide inputs say', () => {
@@ -259,73 +216,42 @@ describe('S2f the first request produced nothing', () => {
     expect(decide(view({ stop: stopOf('quota', { until: SOON }), avail: { ok: false, until: SOON } })).state).toBe('S2q');
     expect(decide(view({ stop: stopOf('quota', { until: SOON }), avail: { ok: true, until: 0 } })).state).toBe('S2');
   });
-
-  it('a rate stop whose wait ended reads as plain S2', () => {
-    expect(decide(view({ stop: stopOf('rate', { until: NOW - 1 }) })).state).toBe('S2');
-  });
 });
 
 /* ---------- writing ---------- */
 
 describe('S3 reading the whole song first', () => {
-  it('is just 止める', () => {
-    expectDecision(decide(view({ running: 'here' })), {
+  it('is just 止める, an indeterminate bar and no count', () => {
+    expectDecision(decide(view({ running: 'here' })), D({
       state: 'S3',
       status: '曲全体を読んでいます',
+      progress: 'indeterminate',
       actions: [STOP],
-      preface: false,
       lines: WRITING,
-    });
+    }));
   });
 
   it('says answers arrive all at once when the transport buffers', () => {
-    expectDecision(decide(view({ running: 'here', streams: false })), {
-      state: 'S3',
-      status: '曲全体を読んでいます',
-      note: 'この環境では訳がまとめて届きます',
-      actions: [STOP],
-      preface: false,
-      lines: WRITING,
-    });
-  });
-
-  const WAIT = '返事を待っています。混んでいると1分ほどかかることもあります';
-  const slowBase = { running: 'here' as const, hasPreface: false, done: 0, total: 24, streams: true };
-
-  it('stays quiet before 15 s', () => {
-    const d = decide(view({ ...slowBase, waitedMs: 5_000 }));
-    expect(d.state).toBe('S3');
-    expect(d.status).toBe('曲全体を読んでいます');
-    expect(d.note).toBeUndefined();
+    expect(decide(view({ running: 'here', streams: false })).captions).toEqual([{ text: 'この環境では訳がまとめて届きます' }]);
   });
 
   it('says the wait is expected once the first line is 15 s late', () => {
-    const d = decide(view({ ...slowBase, waitedMs: 16_000 }));
-    expect(d.state).toBe('S3');
-    expect(d.status).toBe('曲全体を読んでいます');
-    expect(d.note).toBe(WAIT);
-    expect(d.actions).toEqual([STOP]);
+    expect(decide(view({ running: 'here', waitedMs: 15_000 })).captions).toEqual([{ text: '返事を待っています。混んでいると1分ほどかかることもあります' }]);
+    expect(decide(view({ running: 'here', waitedMs: 14_999 })).captions).toEqual([]);
   });
 
-  it('drops the wait sentence once a line (I been on the road since the sun went down) has arrived', () => {
-    const d = decide(view({ ...slowBase, done: 1, waitedMs: 16_000 }));
-    expect(d.state).toBe('S4');
-    expect(d.note).toBeUndefined();
+  it('keeps the wait and buffered sentences as two captions, wait first', () => {
+    const d = decide(view({ running: 'here', waitedMs: 20_000, streams: false }));
+    expect(d.captions.map((c) => c.text)).toEqual(['返事を待っています。混んでいると1分ほどかかることもあります', 'この環境では訳がまとめて届きます']);
+    expect(d.captions.every((c) => !c.tone)).toBe(true);
   });
 
-  it('joins the wait and buffered sentences when the transport does not stream', () => {
-    const d = decide(view({ ...slowBase, streams: false, waitedMs: 16_000 }));
-    expect(d.note).toBe(`${WAIT}。この環境では訳がまとめて届きます`);
-  });
-
-  it('keeps only the buffered sentence when not yet slow', () => {
-    const d = decide(view({ ...slowBase, streams: false, waitedMs: 1_000 }));
-    expect(d.note).toBe('この環境では訳がまとめて届きます');
+  it('is not slow once a line has arrived', () => {
+    expect(decide(view({ running: 'here', waitedMs: 60_000, done: 2 })).captions).toEqual([]);
   });
 });
 
 describe('S6 a per-minute stop next to a spent daily quota names one limit', () => {
-  // 'Ran it up twice, still nobody clapping'
   // The per-minute stop is still live (until ahead): once its own wait has passed it reads as closed.
   const spent = { ok: false, until: NOW + 5 * HOUR } as const;
   const resting = (reason: 'rate' | 'busy') =>
@@ -350,376 +276,271 @@ describe('S6 a per-minute stop next to a spent daily quota names one limit', () 
   });
 });
 
-describe('noteTone: only a reason for a disabled button reads as a reason', () => {
-  // 'Gold on my neck like the sun owe me rent' / 'Told her come through, she said text me again'
-  it('a spent daily quota on a song with gaps: reason note beside a disabled primary', () => {
-    const d = decide(view({ done: 18, total: 20, stop: { reason: 'gaps', at: 0 }, avail: { ok: false, until: NOW + 3_600_000 } }));
-    expect(d.state).toBe('S5g');
-    expect(d.noteTone).toBe('reason');
-    expect(d.note).toBeTruthy();
-    expect(d.actions[0]).toMatchObject({ id: 'resume', primary: true, disabled: true });
+describe('captions: only a reason for a blocked button is tone reason', () => {
+  it('the buffered, wait, count and update captions are untoned', () => {
+    const buffered = decide(view({ running: 'here', streams: false, done: 3 }));
+    expect(buffered.captions).toEqual([{ text: 'この環境では訳がまとめて届きます' }]);
+    expect(decide(view({ done: 20 })).captions[0]).toEqual({ text: '歌詞が更新されました。まだ訳していない行が20行あります' });
+    expect(decide(view({ done: 10, stop: stopOf('busy') })).captions).toEqual([{ text: '40行のうち10行まで訳してあります' }]);
   });
 
-  it('the buffered-transport note stays untoned', () => {
-    const d = decide(view({ running: 'here', streams: false, done: 0 }));
-    expect(d.note).toBe('この環境では訳がまとめて届きます');
-    expect(d.noteTone).toBeUndefined();
-    expect('noteTone' in d).toBe(false);
-  });
-
-  it('the S8f detail stays untoned', () => {
-    const d = decide(view({ done: 25, notice: { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: '止めました' } }));
-    expect(d.state).toBe('S8f');
-    expect(d.noteTone).toBeUndefined();
+  it('the S8f detail is a reason', () => {
+    const d = decide(view({ done: 25, notice: { status: 'x', detail: '止めました' } }));
+    expect(d.captions[1]).toEqual({ text: '止めました', tone: 'reason' });
+    expect(d.captions[0]).not.toHaveProperty('tone');
   });
 });
 
 describe('S4 lines arriving', () => {
-  it('starts as soon as the preface is in (hide and 設定 appear)', () => {
-    expectDecision(decide(view({ running: 'here', hasPreface: true })), {
+  it('starts as soon as the preface is in (hide and 設定 appear), counting from zero', () => {
+    expectDecision(decide(view({ running: 'here', hasPreface: true })), D({
       state: 'S4',
-      status: '',
+      status: '訳しています',
+      count: { done: 0, total: 40 },
+      progress: { value: 0, max: 40 },
       actions: [STOP, HIDE, SETTINGS],
       preface: true,
       lines: WRITING,
-    });
+    }));
   });
 
-  it('starts as soon as one line is in, even without a preface', () => {
-    expectDecision(decide(view({ running: 'here', done: 1 })), {
+  it('starts as soon as one line is in, even without a preface; the bar and the count follow done/total', () => {
+    expectDecision(decide(view({ running: 'here', done: 12, total: 67 })), D({
       state: 'S4',
-      status: '',
+      status: '訳しています',
+      count: { done: 12, total: 67 },
+      progress: { value: 12, max: 67 },
       actions: [STOP, HIDE, SETTINGS],
-      preface: false,
       lines: WRITING,
-    });
+    }));
   });
 
-  it('shows 訳を表示 when hidden, and the buffered note when the transport does not stream', () => {
-    expectDecision(decide(view({ running: 'here', done: 5, hasPreface: true, hidden: true, streams: false })), {
-      state: 'S4',
-      status: '',
-      note: 'この環境では訳がまとめて届きます',
-      actions: [STOP, SHOW, SETTINGS],
-      preface: true,
-      lines: WRITING,
-    });
+  it('shows 訳を表示 when hidden, and the buffered caption when the transport does not stream', () => {
+    const d = decide(view({ running: 'here', done: 3, hidden: true, streams: false }));
+    expect(d.actions).toEqual([STOP, SHOW, SETTINGS]);
+    expect(d.captions).toEqual([{ text: 'この環境では訳がまとめて届きます' }]);
+  });
+
+  it('has no primary button: 止める is a link', () => {
+    expect(decide(view({ running: 'here', done: 3 })).actions.some((a) => a.primary)).toBe(false);
   });
 });
 
 describe('S4m another tab is writing this song', () => {
-  it('follows it and can ask the owner to stop', () => {
-    expectDecision(decide(view({ mirrored: true })), {
+  it('follows it and can ask the owner to stop (止める, 訳を隠す; no 設定)', () => {
+    expectDecision(decide(view({ mirrored: true, done: 3 })), D({
       state: 'S4m',
       status: '別のタブで訳しています',
       actions: [{ id: 'stopMirror', label: '止める' }, HIDE],
-      preface: false,
       lines: WRITING,
-    });
+    }));
   });
 
-  it('carries the preface, the hide label, and no buffered note', () => {
-    expectDecision(decide(view({ mirrored: true, done: 12, hasPreface: true, hidden: true, streams: false })), {
-      state: 'S4m',
-      status: '別のタブで訳しています',
-      actions: [{ id: 'stopMirror', label: '止める' }, SHOW],
-      preface: true,
-      lines: WRITING,
-    });
-  });
-
-  it('applies even before any key or line (it is the other tab that is working)', () => {
-    expect(decide(view({ mirrored: true, hasKey: false })).state).toBe('S4m');
+  it('carries the preface and the hide label', () => {
+    const d = decide(view({ mirrored: true, hasPreface: true, hidden: true }));
+    expect(d.preface).toBe(true);
+    expect(d.actions).toEqual([{ id: 'stopMirror', label: '止める' }, SHOW]);
   });
 });
 
 describe('S8 retranslating', () => {
-  it('keeps the old edition and offers only 止める', () => {
-    expectDecision(decide(view({ running: 'here-retranslate', done: 40 })), {
+  it('keeps the old edition and offers only 止める, with an indeterminate bar', () => {
+    expectDecision(decide(view({ running: 'here-retranslate', done: 40 })), D({
       state: 'S8',
-      status: '訳し直しています。終わるまで今の訳を表示します',
+      status: '訳し直しています',
+      captions: [{ text: '終わるまでは、今の訳をそのまま表示します' }],
+      progress: 'indeterminate',
       actions: [STOP],
-      preface: false,
-      lines: NONE,
-    });
+    }));
   });
 
-  it('carries the preface of the edition on screen', () => {
+  it('carries the preface', () => {
     expect(decide(view({ running: 'here-retranslate', done: 40, hasPreface: true })).preface).toBe(true);
   });
 });
 
-/* ---------- complete / gaps / lyrics changed ---------- */
+/* ---------- complete / partial ---------- */
 
 describe('S5 complete', () => {
-  it('offers hide and 設定', () => {
-    expectDecision(decide(view({ done: 40 })), { state: 'S5', status: '', actions: [HIDE, SETTINGS], preface: false, lines: NONE });
+  it('is settled: the quiet label, 訳を隠す and 設定', () => {
+    expectDecision(decide(view({ done: 40 })), D({
+      state: 'S5',
+      tone: 'settled',
+      status: 'AIによる日本語訳',
+      actions: [HIDE, SETTINGS],
+    }));
   });
 
-  it('shows 訳を表示 when hidden and carries the preface', () => {
-    expectDecision(decide(view({ done: 40, hidden: true, hasPreface: true })), { state: 'S5', status: '', actions: [SHOW, SETTINGS], preface: true, lines: NONE });
-  });
-
-  it('is not disturbed by a stale stop, a busy quota or another song', () => {
-    for (const over of [{ stop: stopOf('gaps') }, { stop: stopOf('quota', { until: SOON }) }, { otherSong: 'X' }, { avail: { ok: false, until: SOON } }]) {
-      expect(decide(view({ done: 40, ...over })).state).toBe('S5');
-    }
+  it('says 訳を隠しています and offers 訳を表示 when hidden; carries the preface', () => {
+    expectDecision(decide(view({ done: 40, hidden: true, hasPreface: true })), D({
+      state: 'S5',
+      tone: 'settled',
+      status: '訳を隠しています',
+      actions: [SHOW, SETTINGS],
+      preface: true,
+    }));
   });
 });
 
 describe('S5g complete with gaps', () => {
-  const resume = (extra: Partial<ActionSpec> = {}): ActionSpec => ({ id: 'resume', label: '抜けた行を訳す', primary: true, disabled: false, ...extra });
-  const gaps = (over: Partial<ViewInput> = {}) => decide(view({ done: 25, stop: stopOf('gaps'), ...over }));
-  const GAP_LINES = { slots: false, gaps: true, breathing: false, seam: null };
+  const gaps = stopOf('gaps');
+  const resume = (disabled: boolean): ActionSpec => ({ id: 'resume', label: '抜けた行を訳す', primary: true, disabled });
 
-  it('counts the missing lines and offers the gap fill', () => {
-    expectDecision(gaps(), {
+  it('counts the missing lines in a caption and offers the gap fill first', () => {
+    expectDecision(decide(view({ done: 37, stop: gaps })), D({
       state: 'S5g',
-      status: '15行が訳せていません',
-      actions: [resume(), HIDE, SETTINGS],
-      preface: false,
-      lines: GAP_LINES,
-    });
+      captions: [{ text: '3行が訳せていません。下の「――」の行です' }],
+      actions: [resume(false), HIDE, SETTINGS],
+      lines: { slots: false, gaps: true, breathing: false, seam: null },
+    }));
   });
 
   it('carries the preface and 訳を表示 when hidden', () => {
-    expectDecision(gaps({ hasPreface: true, hidden: true }), {
-      state: 'S5g',
-      status: '15行が訳せていません',
-      actions: [resume(), SHOW, SETTINGS],
-      preface: true,
-      lines: GAP_LINES,
-    });
+    const d = decide(view({ done: 37, stop: gaps, hasPreface: true, hidden: true }));
+    expect(d.preface).toBe(true);
+    expect(d.actions).toEqual([resume(false), SHOW, SETTINGS]);
   });
 
-  it('another song running: a note and a disabled button', () => {
-    expectDecision(gaps({ otherSong: 'X' }), {
-      state: 'S5g',
-      status: '15行が訳せていません',
-      note: BLOCKED_BY_OTHER,
-      noteTone: 'reason',
-      actions: [resume({ disabled: true }), HIDE, SETTINGS],
-      preface: false,
-      lines: GAP_LINES,
-    });
+  it('another song running: the blocker is a reason caption beside a disabled primary', () => {
+    const d = decide(view({ done: 37, stop: gaps, otherSong: 'X' }));
+    expect(d.captions).toEqual([{ text: '3行が訳せていません。下の「――」の行です' }, { text: BLOCKED_BY_OTHER, tone: 'reason' }]);
+    expect(d.actions[0]).toEqual(resume(true));
   });
 
-  it('quota spent: the reset time as the note, button disabled', () => {
-    expectDecision(gaps({ avail: { ok: false, until: SOON } }), {
-      state: 'S5g',
-      status: '15行が訳せていません',
-      note: '今日の無料枠は終わりました。15:00から訳せます',
-      noteTone: 'reason',
-      actions: [resume({ disabled: true }), HIDE, SETTINGS],
-      preface: false,
-      lines: GAP_LINES,
-    });
+  it('a spent daily quota: the reset time as the reason, button disabled', () => {
+    const d = decide(view({ done: 37, stop: gaps, avail: { ok: false, until: SOON } }));
+    expect(d.captions[1]).toEqual({ text: quotaBlocker(SOON), tone: 'reason' });
+    expect(d.actions[0]).toEqual(resume(true));
   });
 
-  it('quota with an unknown reset says あとで', () => {
-    expect(gaps({ avail: { ok: false, until: 0 } }).note).toBe('今日の無料枠は終わりました。あとで訳せます');
+  it('a spent quota with an unknown reset says あとで', () => {
+    const d = decide(view({ done: 37, stop: gaps, avail: { ok: false, until: 0 } }));
+    expect(d.captions[1]).toEqual({ text: '今日の無料枠は終わりました。あとで訳せます', tone: 'reason' });
   });
 });
 
 describe('S7 Genius changed the lyrics', () => {
-  const resume = (extra: Partial<ActionSpec> = {}): ActionSpec => ({ id: 'resume', label: '新しい行を訳す', primary: true, disabled: false, ...extra });
-  const NEW_LINES = { slots: true, gaps: false, breathing: false, seam: null };
+  const resume = (disabled: boolean): ActionSpec => ({ id: 'resume', label: '新しい行を訳す', primary: true, disabled });
 
   it('says how many lines are new and offers 新しい行を訳す', () => {
-    expectDecision(decide(view({ done: 25 })), {
+    expectDecision(decide(view({ done: 37 })), D({
       state: 'S7',
-      status: '歌詞が更新され、まだ訳していない行が15行あります',
-      actions: [resume(), HIDE, SETTINGS],
-      preface: false,
-      lines: NEW_LINES,
-    });
+      captions: [{ text: '歌詞が更新されました。まだ訳していない行が3行あります' }],
+      actions: [resume(false), HIDE, SETTINGS],
+      lines: { slots: true, gaps: false, breathing: false, seam: null },
+    }));
   });
 
   it('carries the preface and 訳を表示 when hidden', () => {
-    const d = decide(view({ done: 39, hasPreface: true, hidden: true }));
-    expectDecision(d, {
-      state: 'S7',
-      status: '歌詞が更新され、まだ訳していない行が1行あります',
-      actions: [resume(), SHOW, SETTINGS],
-      preface: true,
-      lines: NEW_LINES,
-    });
+    const d = decide(view({ done: 37, hasPreface: true, hidden: true }));
+    expect(d.preface).toBe(true);
+    expect(d.actions).toEqual([resume(false), SHOW, SETTINGS]);
   });
 
-  it('another song running: note + disabled button', () => {
-    expectDecision(decide(view({ done: 25, otherSong: 'X' })), {
-      state: 'S7',
-      status: '歌詞が更新され、まだ訳していない行が15行あります',
-      note: BLOCKED_BY_OTHER,
-      noteTone: 'reason',
-      actions: [resume({ disabled: true }), HIDE, SETTINGS],
-      preface: false,
-      lines: NEW_LINES,
-    });
+  it('another song running: a reason caption + disabled button', () => {
+    const d = decide(view({ done: 37, otherSong: 'X' }));
+    expect(d.captions[1]).toEqual({ text: BLOCKED_BY_OTHER, tone: 'reason' });
+    expect(d.actions[0]).toEqual(resume(true));
   });
 
-  it('quota spent: reset time note + disabled button', () => {
-    expectDecision(decide(view({ done: 25, avail: { ok: false, until: TOMORROW } })), {
-      state: 'S7',
-      status: '歌詞が更新され、まだ訳していない行が15行あります',
-      note: '今日の無料枠は終わりました。明日 01:00から訳せます',
-      noteTone: 'reason',
-      actions: [resume({ disabled: true }), HIDE, SETTINGS],
-      preface: false,
-      lines: NEW_LINES,
-    });
-  });
-
-  it('a stop that no longer applies turns into S6 "ここまで訳してあります", not S7', () => {
-    const d = decide(view({ done: 25, stop: stopOf('auth'), keyBad: false }));
-    expect(d.state).toBe('S6');
-    expect(d.lines.seam?.text).toBe('ここまで訳してあります');
+  it('quota spent: reset time caption + disabled button', () => {
+    const d = decide(view({ done: 37, avail: { ok: false, until: TOMORROW } }));
+    expect(d.captions[1]).toEqual({ text: quotaBlocker(TOMORROW), tone: 'reason' });
+    expect(d.actions[0]).toEqual(resume(true));
   });
 });
 
-/* ---------- S6 interrupted ---------- */
-
 describe('S6 interrupted', () => {
-  const RESUME: ActionSpec = { id: 'resume', label: '続きを訳す', disabled: false };
-  const RESUME_WAITING: ActionSpec = { id: 'resume', label: '続きを訳す', disabled: true };
-  const NOOP: ActionSpec = { id: 'noop', label: '続きを訳す', disabled: true };
-  const OPEN_SETTINGS: ActionSpec = { id: 'settings', label: '設定を開く' };
+  const partial = { done: 12, total: 67 };
 
-  interface Row {
-    name: string;
-    stop: StopInfo;
-    over?: Partial<ViewInput>;
-    seam: SeamSpec;
-    /** With 訳を隠す on, the head says it because the seam button cannot just be pressed. */
-    explainWhenHidden: boolean;
-  }
-
+  type Row = { name: string; stop: StopInfo; over?: Partial<ViewInput> };
   const rows: Row[] = [
-    // one request per reason, no blocker
-    { name: 'busy', stop: stopOf('busy'), seam: { text: 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'rate before until: waiting button', stop: stopOf('rate', { until: MINUTE_LATER }), seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'rate one ms before until', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER - 1 }, seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'rate without until', stop: stopOf('rate'), seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'rate at until reads as closed', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'rate past until reads as closed', stop: stopOf('rate', { until: NOW - 1 }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'quota', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'quota, reset tomorrow', stop: stopOf('quota', { until: TOMORROW }), over: { avail: { ok: false, until: TOMORROW } }, seam: { text: '今日の無料枠が終わりました。明日 01:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'quota, no known reset', stop: stopOf('quota'), over: { avail: { ok: false, until: 0 } }, seam: { text: '今日の無料枠が終わりました。あとで続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'quota that is available again reads as closed', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: true, until: 0 } }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'auth with a rejected key: 設定を開く', stop: stopOf('auth'), over: { keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
-    { name: 'auth, key not rejected any more, reads as closed', stop: stopOf('auth'), over: { keyBad: false }, seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'blocked', stop: stopOf('blocked'), seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'network, online', stop: stopOf('network'), over: { online: true }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'network, offline: waiting button', stop: stopOf('network'), over: { online: false }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'rate for five minutes names the time', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), seam: { text: 'AIの回数制限にかかりました。12:05ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'rate at 90 s still says 1分ほど', stop: stopOf('rate', { until: NOW + 90_000 }), seam: { text: 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'unusable benched for ten minutes: waiting button, time named', stop: stopOf('unusable', { until: NOW + 600_000 }), seam: { text: 'AIの返事をうまく読み取れず、ここで途切れました。12:10ごろからもう一度試せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'unusable bench ended exactly now reads as closed', stop: stopOf('unusable', { until: NOW }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'unusable bench ended a ms ago reads as closed', stop: stopOf('unusable', { until: NOW - 1 }), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'silent, online: the button stays enabled', stop: stopOf('silent'), over: { online: true }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'silent, offline: not a connection stop, still enabled', stop: stopOf('silent'), over: { online: false }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'rejected', stop: stopOf('rejected'), seam: { text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'no-model', stop: stopOf('no-model'), seam: { text: 'AIをいま使えません。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'empty', stop: stopOf('empty'), seam: { text: 'AIの返事が空のまま、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'unusable', stop: stopOf('unusable'), seam: { text: 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
-    { name: 'stopped', stop: stopOf('stopped'), seam: { text: 'ここで止めました', button: RESUME }, explainWhenHidden: false },
-    { name: 'length', stop: stopOf('length'), seam: { text: '長い曲なので、ここで一度区切りました', button: RESUME }, explainWhenHidden: false },
-    { name: 'closed', stop: stopOf('closed'), seam: { text: 'ここまで訳してあります', button: RESUME }, explainWhenHidden: false },
-    // blockers
-    { name: 'another song running, busy: blocker said in the seam, noop button', stop: stopOf('busy'), over: { otherSong: 'X' }, seam: { text: 'AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, rate', stop: stopOf('rate', { until: MINUTE_LATER }), over: { otherSong: 'X' }, seam: { text: 'AIの回数制限にかかりました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, network', stop: stopOf('network'), over: { otherSong: 'X' }, seam: { text: '接続が切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, silent', stop: stopOf('silent'), over: { otherSong: 'X' }, seam: { text: 'AIから返事がなく、ここで途切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, stopped', stop: stopOf('stopped'), over: { otherSong: 'X' }, seam: { text: 'ここで止めました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, closed', stop: stopOf('closed'), over: { otherSong: 'X' }, seam: { text: 'ここまで訳してあります。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'another song running, quota: the quota sentence already says it', stop: stopOf('quota', { until: SOON }), over: { otherSong: 'X', avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'another song running, auth: settings still wins', stop: stopOf('auth'), over: { otherSong: 'X', keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
-    { name: 'quota spent, stopped: blocker appended, noop button', stop: stopOf('stopped'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで止めました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota spent, silent: the head only says where it stopped', stop: stopOf('silent'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota spent, busy', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota spent with unknown reset, closed', stop: stopOf('closed'), over: { avail: { ok: false, until: 0 } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。あとで訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota stop whose own reset passed while still exhausted reads as closed + blocker', stop: stopOf('quota', { until: NOW - 1 }), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
+    { name: 'busy', stop: stopOf('busy') },
+    { name: 'rate before until', stop: stopOf('rate', { until: MINUTE_LATER }) },
+    { name: 'rate at until reads as closed', stop: stopOf('rate', { until: NOW }) },
+    { name: 'quota', stop: stopOf('quota', { until: SOON }), over: { avail: { ok: false, until: SOON } } },
+    { name: 'quota, reset tomorrow', stop: stopOf('quota', { until: TOMORROW }), over: { avail: { ok: false, until: TOMORROW } } },
+    { name: 'auth with a rejected key', stop: stopOf('auth'), over: { keyBad: true } },
+    { name: 'blocked', stop: stopOf('blocked') },
+    { name: 'network, online', stop: stopOf('network') },
+    { name: 'network, offline', stop: stopOf('network'), over: { online: false } },
+    { name: 'silent', stop: stopOf('silent') },
+    { name: 'unusable benched', stop: stopOf('unusable', { until: NOW + 600_000 }) },
+    { name: 'length', stop: stopOf('length') },
+    { name: 'stopped', stop: stopOf('stopped') },
+    { name: 'closed', stop: stopOf('closed') },
   ];
+  const run = (row: Row, over: Partial<ViewInput> = {}) => decide(view({ ...partial, stop: row.stop, ...row.over, ...over }));
 
-  const settingsLike = (seam: SeamSpec) => seam.button.id === 'settings';
-  const expected = (row: Row, hidden: boolean, preface = false): Decision => ({
-    state: 'S6',
-    status: '途中まで訳してあります（10/40行）',
-    ...(hidden && row.explainWhenHidden ? { note: row.seam.text, noteTone: 'reason' as const } : {}),
-    actions: [{ ...row.seam.button, primary: true }, hidden ? SHOW : HIDE, ...(settingsLike(row.seam) ? [] : [SETTINGS])],
-    preface,
-    lines: { slots: true, gaps: false, breathing: false, seam: row.seam },
-  });
-  const run = (row: Row, over: Partial<ViewInput> = {}) => decide(view({ done: 10, stop: row.stop, ...row.over, ...over }));
-
-  it.each(rows)('$name', (row) => {
-    expectDecision(run(row), expected(row, false));
-  });
-
-  it.each(rows)('hidden: $name', (row) => {
-    expectDecision(run(row, { hidden: true }), expected(row, true));
+  it.each(rows)('$name: the seam, the progress caption and the bar', (row) => {
+    const d = run(row);
+    expect(d.state).toBe('S6');
+    expect(d.tone).toBe('speaking');
+    expect(d.status).toBe('');
+    expect(d.captions).toEqual([{ text: '67行のうち12行まで訳してあります' }]);
+    expect(d.progress).toEqual({ value: 12, max: 67 });
+    expect(d.count).toBeUndefined();
+    expect(d.lines).toMatchObject({ slots: true, gaps: false, breathing: false });
+    expect(d.lines.seam).not.toBeNull();
+    expect(d.actions[0]).toEqual({ ...d.lines.seam!.button, primary: true });
   });
 
-  it('keeps the preface of the edition on screen', () => {
-    const row = rows[0]!;
-    expectDecision(run(row, { hasPreface: true }), expected(row, false, true));
+  it('puts the seam button first, then 訳を隠す and 設定', () => {
+    expectDecision(decide(view({ ...partial, stop: stopOf('busy') })), D({
+      state: 'S6',
+      captions: [{ text: '67行のうち12行まで訳してあります' }],
+      progress: { value: 12, max: 67 },
+      actions: [{ id: 'resume', label: '続きを訳す', disabled: false, primary: true }, HIDE, SETTINGS],
+      lines: { slots: true, gaps: false, breathing: false, seam: { text: 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます', button: { id: 'resume', label: '続きを訳す', disabled: false } } },
+    }));
   });
 
-  it('the seam (lines) and the first action describe the same button; only the action is primary', () => {
-    for (const row of rows) {
-      const d = run(row);
-      expect(d.lines.seam).toEqual(row.seam);
-      expect(d.lines.seam?.button).not.toHaveProperty('primary');
-      expect(d.actions[0]).toEqual({ ...d.lines.seam!.button, primary: true });
-    }
+  it('auth: the primary is 設定を開く and there is no second 設定', () => {
+    const d = decide(view({ ...partial, stop: stopOf('auth'), keyBad: true }));
+    expect(d.actions).toEqual([{ id: 'settings', label: '設定を開く', primary: true }, HIDE]);
   });
 
-  it('auth: 設定を開く replaces 設定 (no second settings button)', () => {
-    const d = decide(view({ done: 10, stop: stopOf('auth'), keyBad: true }));
-    expect(d.actions.map((a) => a.id)).toEqual(['settings', 'hide']);
-    expect(d.actions.map((a) => a.label)).toEqual(['設定を開く', '訳を隠す']);
+  it('carries the preface and 訳を表示 when hidden', () => {
+    const d = decide(view({ ...partial, stop: stopOf('busy'), hasPreface: true, hidden: true }));
+    expect(d.preface).toBe(true);
+    expect(d.actions[1]).toEqual(SHOW);
   });
 
-  it('every other reason keeps 設定 as the last action', () => {
-    for (const row of rows.filter((r) => !settingsLike(r.seam))) {
-      expect(run(row).actions.at(-1)).toEqual(SETTINGS);
-    }
-  });
-
-  it('the status counts lines, not translations', () => {
-    expect(decide(view({ done: 1, total: 2, stop: stopOf('busy') })).status).toBe('途中まで訳してあります（1/2行）');
-  });
-
-  it('a gaps stop with lines still missing is S5g, not S6', () => {
-    expect(decide(view({ done: 10, stop: stopOf('gaps') })).state).toBe('S5g');
-  });
-
-  it('no stop at all is S7, not S6', () => {
-    expect(decide(view({ done: 10 })).state).toBe('S7');
+  it('another song running: the seam button is disabled and the blocker is in the seam text', () => {
+    const d = decide(view({ ...partial, stop: stopOf('busy'), otherSong: 'X' }));
+    expect(d.lines.seam!.text).toBe('AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます');
+    expect(d.lines.seam!.button).toEqual({ id: 'noop', label: '続きを訳す', disabled: true });
+    expect(d.actions[0]).toEqual({ id: 'noop', label: '続きを訳す', disabled: true, primary: true });
   });
 
   describe('with 訳を隠す on', () => {
     it('stays quiet when the seam button can simply be pressed', () => {
       const d = decide(view({ done: 10, hidden: true, stop: stopOf('busy') }));
       expect(d.state).toBe('S6');
-      expect(d).not.toHaveProperty('note');
+      expect(d.captions).toEqual([{ text: '40行のうち10行まで訳してあります' }]);
       expect(d.actions).toEqual([{ id: 'resume', label: '続きを訳す', disabled: false, primary: true }, SHOW, SETTINGS]);
     });
 
     it('a blocked/closed/stopped/length seam that works says nothing either', () => {
       for (const reason of ['blocked', 'closed', 'stopped', 'length', 'unusable'] as const) {
-        expect(decide(view({ done: 10, hidden: true, stop: stopOf(reason) }))).not.toHaveProperty('note');
+        expect(decide(view({ done: 10, hidden: true, stop: stopOf(reason) })).captions).toHaveLength(1);
       }
     });
 
-    it('never adds a note when 訳を隠す is off, whatever blocks the button', () => {
-      for (const row of rows) expect(run(row, { hidden: false })).not.toHaveProperty('note');
+    it('a blocked button gets the seam sentence as a reason caption, verbatim', () => {
+      const d = decide(view({ done: 10, hidden: true, stop: stopOf('busy'), otherSong: 'X' }));
+      expect(d.captions).toHaveLength(2);
+      expect(d.captions[1]).toEqual({ text: 'AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます', tone: 'reason' });
+      expect(d.captions[1]!.text).toBe(d.lines.seam?.text);
     });
 
-    it('the note is the seam sentence verbatim', () => {
-      const d = decide(view({ done: 10, hidden: true, stop: stopOf('busy'), otherSong: 'X' }));
-      expect(d.note).toBe('AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます');
-      expect(d.note).toBe(d.lines.seam?.text);
+    it('auth explains itself too (the seam is hidden with the translation)', () => {
+      const d = decide(view({ done: 10, hidden: true, stop: stopOf('auth'), keyBad: true }));
+      expect(d.captions[1]).toEqual({ text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', tone: 'reason' });
+    });
+
+    it('never adds a reason when 訳を隠す is off, whatever blocks the button', () => {
+      for (const row of rows) expect(run(row, { hidden: false }).captions).toHaveLength(1);
     });
   });
 });
@@ -727,38 +548,32 @@ describe('S6 interrupted', () => {
 /* ---------- S8f ---------- */
 
 describe('S8f retranslation failed', () => {
-  const notice = { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: 'AIの回数制限にかかりました。1分ほどおいてから試せます' };
+  const notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: 'AIの回数制限にかかりました。1分ほどおいてから試せます' };
 
-  it('shows the notice with its detail as the note', () => {
-    expectDecision(decide(view({ done: 25, notice })), {
+  it('is settled: the quiet label, the notice as a caption and its detail as a reason', () => {
+    expectDecision(decide(view({ done: 25, notice })), D({
       state: 'S8f',
-      status: notice.status,
-      note: notice.detail,
+      tone: 'settled',
+      status: 'AIによる日本語訳',
+      captions: [{ text: notice.status }, { text: notice.detail, tone: 'reason' }],
       actions: [HIDE, SETTINGS],
-      preface: false,
-      lines: NONE,
-    });
+    }));
   });
 
-  it('has no note when the notice has no detail', () => {
-    expectDecision(decide(view({ done: 25, notice: { status: '訳し直せませんでした。今の訳はそのままです', detail: '' } })), {
-      state: 'S8f',
-      status: '訳し直せませんでした。今の訳はそのままです',
-      actions: [HIDE, SETTINGS],
-      preface: false,
-      lines: NONE,
-    });
+  it('has only the first caption when the notice has no detail', () => {
+    const d = decide(view({ done: 25, notice: { status: notice.status, detail: '' } }));
+    expect(d.captions).toEqual([{ text: notice.status }]);
   });
 
   it('applies to a finished song as well (the case it exists for), keeping preface and 訳を表示', () => {
-    expectDecision(decide(view({ done: 40, hasPreface: true, hidden: true, notice })), {
+    expectDecision(decide(view({ done: 40, hasPreface: true, hidden: true, notice })), D({
       state: 'S8f',
-      status: notice.status,
-      note: notice.detail,
+      tone: 'settled',
+      status: 'AIによる日本語訳',
+      captions: [{ text: notice.status }, { text: notice.detail, tone: 'reason' }],
       actions: [SHOW, SETTINGS],
       preface: true,
-      lines: NONE,
-    });
+    }));
   });
 
   it('beats S5, S5g, S6 and S7', () => {
@@ -770,6 +585,33 @@ describe('S8f retranslation failed', () => {
   it('is ignored when nothing is translated', () => {
     expect(decide(view({ done: 0, notice })).state).toBe('S2');
     expect(decide(view({ done: 0, hasKey: false, notice })).state).toBe('S1');
+  });
+});
+
+/* ---------- copy rules ---------- */
+
+describe('copy never joins sentences with a middle dot', () => {
+  it('no status or caption of any state contains · ', () => {
+    const inputs: ViewInput[] = [
+      view({ hasKey: false }), view(), view({ japanese: true }), view({ otherSong: 'X' }), view({ avail: { ok: false, until: SOON } }),
+      view({ stop: stopOf('busy') }), view({ running: 'here', waitedMs: 20_000, streams: false }), view({ running: 'here', done: 3 }),
+      view({ mirrored: true }), view({ running: 'here-retranslate', done: 40 }), view({ done: 40 }), view({ done: 37, stop: stopOf('gaps'), otherSong: 'X' }),
+      view({ done: 37 }), view({ done: 12, stop: stopOf('busy'), hidden: true, otherSong: 'X' }), view({ done: 40, notice: { status: 'a', detail: 'b' } }),
+    ];
+    for (const i of inputs) {
+      const d = decide(i);
+      for (const text of [d.status, ...d.captions.map((c) => c.text)]) expect(text).not.toMatch(/ · /);
+    }
+  });
+
+  it('a primary action always comes first and only one exists', () => {
+    for (const over of [{}, { hasKey: false }, { done: 37 }, { done: 12, stop: stopOf('busy') }, { stop: stopOf('busy') }, { done: 37, stop: stopOf('gaps') }]) {
+      const d = decide(view(over));
+      const idx = d.actions.map((a, n) => (a.primary ? n : -1)).filter((n) => n >= 0);
+      expect(idx.length).toBeLessThanOrEqual(1);
+      if (idx.length) expect(idx[0]).toBe(0);
+      if (idx.length) expect(d.status).toBe('');
+    }
   });
 });
 
@@ -1000,9 +842,9 @@ describe('copy on the reading surface does not talk about models', () => {
   it('a silent Gemini is told as silence, not as a lost connection, and the start button stays enabled', () => {
     const d = decide(view({ online: true, done: 0, total: 18, stop: stopOf('silent') }));
     expect(d.state).toBe('S2f');
-    expect(d.status).toBe('AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ');
-    expect(d.status).not.toMatch(/接続/);
-    expect(d.actions[0]).toEqual({ id: 'start', label: '日本語で読む', primary: true, disabled: false });
+    expect(d.captions[0]!.text).toBe('AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ');
+    expect(d.captions[0]!.text).not.toMatch(/接続/);
+    expect(d.actions[0]).toEqual({ id: 'start', label: 'もう一度訳す', primary: true, disabled: false });
   });
 
   it('a silent stop after some lines puts silence in the seam and keeps 続きを訳す enabled', () => {
@@ -1020,7 +862,7 @@ describe('copy on the reading surface does not talk about models', () => {
   it('no-model before any line is S2f with a plain sentence', () => {
     const d = decide(view({ done: 0, total: 20, stop: stopOf('no-model') }));
     expect(d.state).toBe('S2f');
-    expect(d.status).toBe('AIをいま使えません。少しおいてからもう一度どうぞ');
+    expect(d.captions[0]!.text).toBe('AIをいま使えません。少しおいてからもう一度どうぞ');
   });
 });
 

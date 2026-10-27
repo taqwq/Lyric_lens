@@ -44,7 +44,8 @@ const COPY = {
   step1: 'Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります',
   step1Link: 'Google AI Studio を開く',
   step2: 'キーをコピーして、下に貼り付けます',
-  placeholder: 'APIキーを貼り付け',
+  placeholder: 'ここに貼り付け',
+  pasteKey: 'キーを貼り付けてください',
   keyNote: 'キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません',
   primary: '保存してこの曲を訳す',
   secondary: '保存だけする',
@@ -56,7 +57,7 @@ const COPY = {
   close: '閉じる',
   services: '翻訳に使うAI',
   save: '保存',
-  makeKey: 'キーを作る',
+  makeKey: 'キーを作る（Google AI Studio）',
   removeKey: 'キーを消す',
   reenterKey: 'キーを入れ直す',
   statusMissing: '未設定',
@@ -65,10 +66,11 @@ const COPY = {
   song: 'この曲',
   lastError: '直近のエラー',
   retranslate: 'この曲を訳し直す',
-  retranslateConfirm: 'この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます',
+  retranslateConfirm: '今の訳を残したまま訳し直します。終わると入れ替わります',
   retranslateOk: '訳し直す',
-  deleteSong: 'この曲の保存データを消す',
-  deleteSongConfirm: 'この曲の保存した訳を消しますか？',
+  deleteSong: 'この曲の訳を消す',
+  deleteSongConfirm: 'この曲の保存した訳を消します。元に戻せません',
+  deleteAllOk: 'すべて消す',
   data: '保存データ',
   dataLead: '書き出したファイルは、別の端末でも読み込めます',
   exportData: '書き出す',
@@ -205,8 +207,7 @@ function statusText(row: Row): string {
     case 'resting': {
       if (row.until <= 0) return COPY.statusOk;
       const when = formatWhen(row.until);
-      // "今日は明日 16:00まで休み" reads wrong: drop 今日は when the reset is tomorrow.
-      return when.startsWith('明日') ? `${when}まで休み` : `今日は${when}まで休み`;
+      return `今日の枠を使い切りました（${when}から使えます）`;
     }
     default: return '';
   }
@@ -416,9 +417,6 @@ function mount(options: OpenSheetOptions): Active {
   const button = (text: string, variant: 'text' | 'outline' | 'solid', onClick: () => void): HTMLButtonElement =>
     h('button', { class: 'btn', type: 'button', 'data-v': variant, onClick }, text);
 
-  /** Deleting reads as deleting: the system's destructive red (sheet.css [data-danger]). */
-  const danger = (b: HTMLButtonElement): HTMLButtonElement => { b.dataset.danger = ''; return b; };
-
   const externalLink = (text: string, href: string): HTMLAnchorElement =>
     h('a', { class: 'link', href, target: '_blank', rel: 'noopener noreferrer' }, text);
 
@@ -462,12 +460,11 @@ function mount(options: OpenSheetOptions): Active {
     const original = Array.from(zone.childNodes);
     const restore = (): void => { zone.replaceChildren(...original); };
     const cancel = button(COPY.cancel, 'text', () => { restore(); focusEl(trigger); });
-    const ok: HTMLButtonElement = button(spec.ok, 'outline', () => {
+    const ok: HTMLButtonElement = button(spec.ok, 'solid', () => {
       ok.disabled = true;
       cancel.disabled = true;
       spec.onOk(() => { ok.disabled = false; cancel.disabled = false; });
     });
-    if (trigger.dataset.danger !== undefined) ok.dataset.danger = '';
     zone.replaceChildren(h('div', { class: 'confirm' },
       h('p', { class: 'confirm-text', role: 'alert' }, spec.message),
       h('div', { class: 'actions' }, ok, cancel)));
@@ -502,7 +499,7 @@ function mount(options: OpenSheetOptions): Active {
     async function submit(andTranslate: boolean): Promise<void> {
       if (busy || closed) return;
       const key = input.value.trim();
-      if (!key) { focusEl(input); return; }
+      if (!key) { say(COPY.pasteKey, 'error'); focusEl(input); return; }
       input.removeAttribute('aria-invalid');
       setBusy(true);
       say(COPY.checking);
@@ -559,6 +556,7 @@ function mount(options: OpenSheetOptions): Active {
 
     function paintRow(row: Row): void {
       row.dot.dataset.s = row.kind;
+      row.statusEl.dataset.s = row.kind;
       row.statusEl.textContent = statusText(row);
       row.msgEl.textContent = row.message;
       if (row.message) row.msgEl.dataset.kind = 'error'; else delete row.msgEl.dataset.kind;
@@ -695,8 +693,8 @@ function mount(options: OpenSheetOptions): Active {
     if (options.song) {
       const song = options.song;
       const parts: string[] = [];
-      if (song.model) parts.push(song.model);
-      if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(formatDate(song.translatedAt));
+      if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(`${formatDate(song.translatedAt)}に`);
+      if (song.model) parts.push(`${song.model}で`);
       const zone = h('div', { class: 'zone' });
       const retranslate: HTMLButtonElement = button(COPY.retranslate, 'outline', () => {
         askInline(zone, retranslate, {
@@ -709,7 +707,7 @@ function mount(options: OpenSheetOptions): Active {
           },
         });
       });
-      const deleteSong: HTMLButtonElement = danger(button(COPY.deleteSong, 'text', () => {
+      const deleteSong: HTMLButtonElement = button(COPY.deleteSong, 'text', () => {
         askInline(zone, deleteSong, {
           message: COPY.deleteSongConfirm,
           ok: COPY.ok,
@@ -729,16 +727,16 @@ function mount(options: OpenSheetOptions): Active {
             })();
           },
         });
-      }));
+      });
       zone.append(h('div', { class: 'actions' }, retranslate, deleteSong));
       const edition = song.edition !== false;
       body.append(h('section', { class: 'section' },
         h('h3', { class: 'section-title' }, COPY.song),
-        edition && parts.length ? h('p', { class: 'line' }, `この曲の訳：${parts.length > 1 ? `${parts[0]}（${parts[1]}）` : parts[0]}`) : null,
+        edition && parts.length ? h('p', { class: 'line' }, `${parts.join('')}訳しました`) : null,
         song.lastError
           ? h('details', { class: 'error-detail' },
             h('summary', {}, COPY.lastError),
-            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join('／')),
+            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join(' · ')),
             song.lastError.text ? h('p', { class: 'error-text' }, song.lastError.text) : null)
           : null,
         edition ? zone : null));
@@ -820,12 +818,12 @@ function mount(options: OpenSheetOptions): Active {
       focusEl(importButton);
     }
 
-    const deleteAll: HTMLButtonElement = danger(button(COPY.deleteAll, 'text', () => {
+    const deleteAll: HTMLButtonElement = button(COPY.deleteAll, 'text', () => {
       if (!summary) return;
       const count = summary.count;
       askInline(zone, deleteAll, {
-        message: `保存したすべての曲（${count}曲）を消しますか？途中まで訳した曲も消えます`,
-        ok: COPY.ok,
+        message: `保存した${count}曲をすべて消します。元に戻せません`,
+        ok: COPY.deleteAllOk,
         focusCancel: true,
         onOk: (done) => {
           deleting = true;
@@ -847,12 +845,12 @@ function mount(options: OpenSheetOptions): Active {
           })();
         },
       });
-    }));
+    });
     const dataActions = h('div', { class: 'actions' }, exportButton, importButton, deleteAll);
     zone.append(dataActions);
 
     function paintSummary(): void {
-      summaryEl.textContent = summary ? `保存した曲：${summary.count}曲（${formatSize(summary.bytes)}）` : '保存した曲：…';
+      summaryEl.textContent = summary ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : '保存した曲：…';
       const none = !summary || summary.count === 0;
       exportButton.disabled = none || dataBusy();
       importButton.disabled = dataBusy();

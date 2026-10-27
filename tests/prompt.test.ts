@@ -17,7 +17,7 @@ function tenLineSong(m: SongMeta = meta): Source {
   return buildSong(m, rows);
 }
 
-const SONG: SongContext = { who: '俺が元恋人に', what: '強がりの裏の未練を見せる曲' };
+const SONG: SongContext = { who: '語り手から元恋人へ', what: '強がりの裏の未練を見せる曲' };
 
 function recordWith(source: Source, uids: number[], song?: SongContext): SongRecord {
   const r = emptyRecord('1', '/x', meta);
@@ -84,7 +84,7 @@ describe('SYSTEM_PROMPT', () => {
   });
 
   it('limits the preface to one short who and a plain, short what', () => {
-    expect(SYSTEM_PROMPT).toContain('「誰が誰に」の1文（40字以内。括弧書きやMV・経歴の情報は書かない）');
+    expect(SYSTEM_PROMPT).toContain('「AからBへ」の形の自然な1文（例：語り手から別れた恋人へ／兄から弟へ。40字以内。矢印・括弧書き・MVや経歴の情報は書かない）');
     expect(SYSTEM_PROMPT).toContain('歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）');
     expect(SYSTEM_PROMPT).not.toContain('あらすじではなく狙いや構図');
   });
@@ -222,7 +222,7 @@ describe('buildPrompt: resuming', () => {
   it('passes tone and motifs back too', () => {
     const song: SongContext = { ...SONG, tone: '強気', motifs: [{ en: 'gas', ja: '最高' }] };
     const p = buildPrompt(source, recordWith(source, done, song), targets);
-    expect(p.user).toContain('{"t":"song","who":"俺が元恋人に","what":"強がりの裏の未練を見せる曲","tone":"強気","motifs":[{"en":"gas","ja":"最高"}]}');
+    expect(p.user).toContain('{"t":"song","who":"語り手から元恋人へ","what":"強がりの裏の未練を見せる曲","tone":"強気","motifs":[{"en":"gas","ja":"最高"}]}');
   });
 
   it('asks for the song record again when lines exist but the song record was never produced', () => {
