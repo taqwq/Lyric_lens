@@ -35,7 +35,7 @@
 
 ```bash
 npm install
-npm run check        # 型チェック + 単体テスト（364件）+ ビルド → dist/lyric-lens.user.js
+npm run check        # 型チェック + 単体テスト + ビルド → dist/lyric-lens.user.js
 ```
 
 - **開発用ページ**：`node scripts/build.mjs --dev` → `node scripts/serve.mjs` → http://localhost:5178/ 。Genius を模したページと、API を呼ばない疑似モデル（`dev/mock-llm.js`）で動きます。`localStorage['ll-mock-mode']` を `cut` / `quota` / `busy-first` / `slow` / `garbage` にすると失敗ケースを再現できます。
