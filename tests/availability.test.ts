@@ -16,35 +16,35 @@ describe('availability', () => {
   beforeEach(() => setKV(memoryStorage()));
 
   it('uses the id format gemini:endpoint:keytag:model', () => {
-    expect(id('gemini-a')).toMatch(new RegExp(`^gemini:${BASE.replace(/[.]/g, '\\.')}:[0-9a-z]+:gemini-a$`));
+    expect(id('gemini-3.5-flash')).toMatch(new RegExp(`^gemini:${BASE.replace(/[.]/g, '\\.')}:[0-9a-z]+:gemini-3.5-flash$`));
   });
 
   it('is ok when nothing is known to be exhausted', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
   });
 
   it('reports the earliest reset when every model is out of quota', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
-      [id('gemini-b')]: { until: now + 3_000_000, reason: 'quota' },
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 3_000_000, reason: 'quota' },
     });
     expect(await availability(gemini())).toEqual({ ok: false, until: now + 3_000_000 });
   });
 
   it('treats busy or rate-limited models as worth trying', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
-      [id('gemini-b')]: { until: now + 60_000, reason: 'overloaded' },
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 60_000, reason: 'overloaded' },
     });
     expect((await availability(gemini())).ok).toBe(true);
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
-      [id('gemini-b')]: { until: now + 60_000, reason: 'rate' },
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 60_000, reason: 'rate' },
     });
     expect((await availability(gemini())).ok).toBe(true);
   });
@@ -54,11 +54,11 @@ describe('availability', () => {
   // the real (short) wait as a 'rate' error (tests/chain.test.ts), so the reader is never told
   // that today's quota is over for a one-minute limit.
   it('stays ok when every model is only rate-limited or busy, and names no reset', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 60_000, reason: 'rate' },
-      [id('gemini-b')]: { until: now + 90_000, reason: 'rate' },
+      [id('gemini-3.5-flash')]: { until: now + 60_000, reason: 'rate' },
+      [id('gemini-3.4-flash')]: { until: now + 90_000, reason: 'rate' },
     });
     expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
     const status = await keyStatus(gemini());
@@ -68,29 +68,29 @@ describe('availability', () => {
   // A model that went silent is benched for five minutes: like a busy one, that is a short wait,
   // never "out for the day".
   it('treats models benched for going silent (timeout) like busy ones', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
-      [id('gemini-b')]: { until: now + 300_000, reason: 'timeout' },
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 300_000, reason: 'timeout' },
     });
     expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
   });
 
   it('stays ok, and names no reset, when every model was only benched for going silent', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 240_000, reason: 'timeout' },
-      [id('gemini-b')]: { until: now + 300_000, reason: 'timeout' },
+      [id('gemini-3.5-flash')]: { until: now + 240_000, reason: 'timeout' },
+      [id('gemini-3.4-flash')]: { until: now + 300_000, reason: 'timeout' },
     });
     expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
     expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
   });
 
   it('ignores cooldowns that have already ended', async () => {
-    await models(gemini(), 'gemini-a');
-    await setJSON('ll3:cooldowns', { [id('gemini-a')]: { until: Date.now() - 1000, reason: 'quota' } });
+    await models(gemini(), 'gemini-3.5-flash');
+    await setJSON('ll3:cooldowns', { [id('gemini-3.5-flash')]: { until: Date.now() - 1000, reason: 'quota' } });
     expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
   });
 
@@ -103,9 +103,9 @@ describe('availability', () => {
     it("is ok when only another key's models are out of quota", async () => {
       const spent = gemini('key-one');
       const fresh = gemini('key-two');
-      await models(spent, 'gemini-a');
-      await models(fresh, 'gemini-a');
-      await setJSON('ll3:cooldowns', { [id('gemini-a', spent)]: { until: Date.now() + 5_000_000, reason: 'quota' } });
+      await models(spent, 'gemini-3.5-flash');
+      await models(fresh, 'gemini-3.5-flash');
+      await setJSON('ll3:cooldowns', { [id('gemini-3.5-flash', spent)]: { until: Date.now() + 5_000_000, reason: 'quota' } });
       expect((await availability(spent)).ok).toBe(false);
       expect((await availability(fresh)).ok).toBe(true);
     });
@@ -114,8 +114,8 @@ describe('availability', () => {
       // key-two has a list in which its only model is spent; key-one has no list and no cooldowns.
       const one = gemini('key-one');
       const two = gemini('key-two');
-      await models(two, 'gemini-a');
-      await setJSON('ll3:cooldowns', { [id('gemini-a', two)]: { until: Date.now() + 5_000_000, reason: 'quota' } });
+      await models(two, 'gemini-3.5-flash');
+      await setJSON('ll3:cooldowns', { [id('gemini-3.5-flash', two)]: { until: Date.now() + 5_000_000, reason: 'quota' } });
       expect((await availability(one)).ok).toBe(true);
       expect((await availability(two)).ok).toBe(false);
     });
@@ -132,16 +132,16 @@ describe('keyStatus', () => {
 
   it('is "ok" for a key nothing is known against', async () => {
     expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
-    await models(gemini(), 'gemini-a');
+    await models(gemini(), 'gemini-3.5-flash');
     expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
   });
 
   it('is "resting" until the earliest reset when every model is out of quota', async () => {
-    await models(gemini(), 'gemini-a', 'gemini-b');
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
     const now = Date.now();
     await setJSON('ll3:cooldowns', {
-      [id('gemini-a')]: { until: now + 5_000_000, reason: 'quota' },
-      [id('gemini-b')]: { until: now + 3_000_000, reason: 'quota' },
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 3_000_000, reason: 'quota' },
     });
     expect(await keyStatus(gemini())).toEqual({ kind: 'resting', until: now + 3_000_000 });
   });
@@ -154,11 +154,26 @@ describe('keyStatus', () => {
   });
 
   it('a bad key wins over a cooldown, and forgiving it restores the other states', async () => {
-    await models(gemini(), 'gemini-a');
-    await setJSON('ll3:cooldowns', { [id('gemini-a')]: { until: Date.now() + 5_000_000, reason: 'quota' } });
+    await models(gemini(), 'gemini-3.5-flash');
+    await setJSON('ll3:cooldowns', { [id('gemini-3.5-flash')]: { until: Date.now() + 5_000_000, reason: 'quota' } });
     await markKey(gemini(), true);
     expect(await keyStatus(gemini())).toEqual({ kind: 'bad' });
     await markKey(gemini(), false);
     expect((await keyStatus(gemini())).kind).toBe('resting');
+  });
+});
+
+describe('availability: tier slots', () => {
+  beforeEach(() => setKV(memoryStorage()));
+
+  it('is ok when only Flash is out of quota and Flash-Lite still has some', async () => {
+    const flash = Array.from({ length: 8 }, (_, i) => `gemini-3.${9 - i}-flash`);
+    await setJSON(`ll3:models:${cooldownId(gemini(), '')}`, {
+      at: Date.now(),
+      models: [...flash, 'gemini-3.5-flash-lite'].map((m) => ({ id: m, label: m, rank: m.endsWith('lite') ? 135 : 1030 })),
+    });
+    const until = Date.now() + 3_000_000;
+    await setJSON('ll3:cooldowns', Object.fromEntries(flash.map((m) => [id(m), { until, reason: 'quota' }])));
+    expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
   });
 });

@@ -660,11 +660,21 @@ ${req.user}` : req.user }] }],
     } catch {
     }
   }
+  function modelTier(id) {
+    const rank2 = rankGeminiModel(id);
+    return rank2 >= 1e3 ? 0 : rank2 >= 10 ? 1 : 2;
+  }
+  var TIER_CAPS = [6, 3, 1];
+  function selectCandidates(ids) {
+    const taken = [0, 0, 0];
+    return ids.filter((id) => {
+      const tier = modelTier(id);
+      if (taken[tier] >= TIER_CAPS[tier]) return false;
+      taken[tier] += 1;
+      return true;
+    });
+  }
   function orderByHealth(ids, stats, now = Date.now()) {
-    const tier = (id) => {
-      const rank2 = rankGeminiModel(id);
-      return rank2 >= 1e3 ? 0 : rank2 >= 10 ? 1 : 2;
-    };
     const bucket = (h2) => {
       if (!h2) return 1;
       const failedSince = h2.bad !== void 0 && (h2.ok === void 0 || h2.bad > h2.ok);
@@ -674,7 +684,7 @@ ${req.user}` : req.user }] }],
     };
     return ids.map((id, index) => {
       const h2 = stats[id];
-      return { id, index, tier: tier(id), bucket: bucket(h2), ms: Number.isFinite(h2?.ms) ? h2.ms : Infinity };
+      return { id, index, tier: modelTier(id), bucket: bucket(h2), ms: Number.isFinite(h2?.ms) ? h2.ms : Infinity };
     }).sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
       if (a.bucket !== b.bucket) return a.bucket - b.bucket;
@@ -700,10 +710,10 @@ ${req.user}` : req.user }] }],
     if (!apiKey.trim()) return { ok: false, until: 0 };
     const cooldowns = await loadCooldowns();
     const cached2 = await getJSON(MODELS_KEY + cooldownId(apiKey, ""), null);
-    const ids = cached2?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI;
+    const ids = selectCandidates(cached2?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI);
     if (!ids.length) return { ok: true, until: 0 };
     let earliest = Infinity;
-    for (const id of ids.slice(0, 10)) {
+    for (const id of ids) {
       const cd = cooldowns[cooldownId(apiKey, id)];
       if (!cd || cd.reason === "overloaded" || cd.reason === "timeout" || cd.reason === "rate") return { ok: true, until: 0 };
       earliest = Math.min(earliest, cd.until);
@@ -725,11 +735,11 @@ ${req.user}` : req.user }] }],
     try {
       const models = await modelsFor(apiKey, { signal });
       const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-      if (auto.length) return await orderedByHealth(apiKey, auto.slice(0, 10));
+      if (auto.length) return await orderedByHealth(apiKey, selectCandidates(auto));
     } catch (error) {
       if (!(error instanceof LLMError) || error.kind === "auth" || error.kind === "aborted") throw error;
     }
-    return orderedByHealth(apiKey, FALLBACK_GEMINI);
+    return orderedByHealth(apiKey, selectCandidates(FALLBACK_GEMINI));
   }
   async function cleanOtherProviders(apiKey) {
     try {

@@ -127,6 +127,28 @@ async function noteHealth(apiKey: string, model: string, outcome: { ms: number }
   } catch { /* advice only */ }
 }
 
+/** 0 = Flash, 1 = Flash-Lite, 2 = Gemma (and anything else ranked below them). */
+function modelTier(id: string): number {
+  const rank = rankGeminiModel(id);
+  return rank >= 1000 ? 0 : rank >= 10 ? 1 : 2;
+}
+
+/** How many models of each tier are candidates. Without caps the newest Flash models fill the
+ *  list and the tiers behind them (with their own, separate quotas) are never reached. */
+const TIER_CAPS = [6, 3, 1] as const;
+
+/** The models worth trying, from ids sorted best-rank first: the first few of every tier. The one
+ *  place that decides the set, for both the chain and `availability`. Keeps the given order. */
+export function selectCandidates(ids: string[]): string[] {
+  const taken = [0, 0, 0];
+  return ids.filter((id) => {
+    const tier = modelTier(id);
+    if (taken[tier]! >= TIER_CAPS[tier]!) return false;
+    taken[tier]! += 1;
+    return true;
+  });
+}
+
 /** Reorders automatically picked Gemini models by what was seen of them. Flash stays ahead of
  *  Flash-Lite, and both ahead of Gemma, whatever the speed. Within each of those tiers (a stable
  *  sort, so ties keep the given rank order): models that answered within a week and have not
@@ -134,7 +156,6 @@ async function noteHealth(apiKey: string, model: string, outcome: { ms: number }
  *  rank order after them; models that were overloaded or silent in the last half hour, and
  *  have not answered since, go last. `stats` is keyed like `ids`. */
 export function orderByHealth(ids: string[], stats: Record<string, ModelHealth | undefined>, now = Date.now()): string[] {
-  const tier = (id: string) => { const rank = rankGeminiModel(id); return rank >= 1000 ? 0 : rank >= 10 ? 1 : 2; };
   const bucket = (h: ModelHealth | undefined) => {
     if (!h) return 1;
     const failedSince = h.bad !== undefined && (h.ok === undefined || h.bad > h.ok);
@@ -145,7 +166,7 @@ export function orderByHealth(ids: string[], stats: Record<string, ModelHealth |
   return ids
     .map((id, index) => {
       const h = stats[id];
-      return { id, index, tier: tier(id), bucket: bucket(h), ms: Number.isFinite(h?.ms) ? h!.ms! : Infinity };
+      return { id, index, tier: modelTier(id), bucket: bucket(h), ms: Number.isFinite(h?.ms) ? h!.ms! : Infinity };
     })
     .sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
@@ -191,10 +212,10 @@ export async function availability(apiKey: string): Promise<Availability> {
   if (!apiKey.trim()) return { ok: false, until: 0 };
   const cooldowns = await loadCooldowns();
   const cached = await getJSON<{ models: ModelInfo[] } | null>(MODELS_KEY + cooldownId(apiKey, ''), null);
-  const ids = cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI;
+  const ids = selectCandidates(cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI);
   if (!ids.length) return { ok: true, until: 0 };
   let earliest = Infinity;
-  for (const id of ids.slice(0, 10)) {
+  for (const id of ids) {
     const cd = cooldowns[cooldownId(apiKey, id)];
     if (!cd || cd.reason === 'overloaded' || cd.reason === 'timeout' || cd.reason === 'rate') return { ok: true, until: 0 };
     earliest = Math.min(earliest, cd.until);
@@ -221,12 +242,12 @@ async function candidateModels(apiKey: string, signal?: AbortSignal): Promise<st
   try {
     const models = await modelsFor(apiKey, { signal });
     const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-    if (auto.length) return await orderedByHealth(apiKey, auto.slice(0, 10));
+    if (auto.length) return await orderedByHealth(apiKey, selectCandidates(auto));
   } catch (error) {
     // Gemini has known model ids to fall back on.
     if (!(error instanceof LLMError) || error.kind === 'auth' || error.kind === 'aborted') throw error;
   }
-  return orderedByHealth(apiKey, FALLBACK_GEMINI);
+  return orderedByHealth(apiKey, selectCandidates(FALLBACK_GEMINI));
 }
 
 /** Removes what earlier versions stored for other services (and other keys' bad-key marks),

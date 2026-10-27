@@ -12,6 +12,7 @@ import {
   markKey as markKeyOf,
   nextPacificMidnight,
   orderByHealth,
+  selectCandidates,
   type ChainResult,
   type ModelHealth,
 } from '../src/llm/chain';
@@ -682,6 +683,34 @@ describe('generateWithFallback: a 200 that produced no accepted line', () => {
     reply(C, ok('junk'));
     const { error } = await settle(start(gemini(), undefined, () => false));
     expect(error?.kind).toBe('unusable');
+  });
+});
+
+describe('selectCandidates', () => {
+  const flash = Array.from({ length: 9 }, (_, i) => `gemini-3.${9 - i}-flash`);
+  const lite = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.0-flash-lite'];
+  const gemma = ['gemma-4-31b-it', 'gemma-3-27b-it'];
+
+  it('keeps the first 6 Flash, 3 Flash-Lite and 1 Gemma, in the given order', () => {
+    expect(selectCandidates([...flash, ...lite, ...gemma])).toEqual([...flash.slice(0, 6), ...lite.slice(0, 3), 'gemma-4-31b-it']);
+  });
+
+  it('passes shorter lists through untouched', () => {
+    expect(selectCandidates([A, C])).toEqual([A, C]);
+    expect(selectCandidates([])).toEqual([]);
+  });
+});
+
+describe('generateWithFallback: tier slots', () => {
+  it('starts on Flash-Lite when every Flash candidate is in a quota cooldown', async () => {
+    const flash = Array.from({ length: 8 }, (_, i) => `gemini-3.${9 - i}-flash`);
+    listReply = { status: 200, body: JSON.stringify({ models: [...flash, C].map((id) => ({ name: `models/${id}`, supportedGenerationMethods: ['generateContent'] })) }) };
+    const until = Date.now() + 5 * 3600_000;
+    await seedCooldowns(Object.fromEntries(flash.map((m) => [cooldownKey(m), { until, reason: 'quota' }])));
+    reply(C, ok('L1: あ\n'));
+    const result = await start(gemini()).promise;
+    expect(generated).toEqual([C]);
+    expect(result.model).toBe(C);
   });
 });
 
