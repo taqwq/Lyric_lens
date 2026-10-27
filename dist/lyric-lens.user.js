@@ -910,9 +910,9 @@ ${req.user}` : req.user }] }],
     let flashSpoke = false;
     let flashTried = false;
     let flashNoted = false;
-    const firstTextTimeout = (model, handOver) => {
+    const firstTextTimeout = (model, handOver, extraMs = 0) => {
       if (onlyModels?.length || flashSpoke || !handOver || modelTier(model) !== 0) return FIRST_TEXT_TIMEOUT_MS;
-      const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt);
+      const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt) - extraMs;
       return left < FLASH_MIN_ATTEMPT_MS ? null : Math.min(left, FIRST_TEXT_TIMEOUT_MS);
     };
     const noteFlashDegraded = async () => {
@@ -1007,7 +1007,7 @@ ${req.user}` : req.user }] }],
               return { finish: "unknown", finishDetail: error.kind, text: "", model, error };
             }
             budgetCut = error.kind === "timeout" && firstTextMs === null && firstTextTimeoutMs < FIRST_TEXT_TIMEOUT_MS;
-            if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
+            if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS && firstTextTimeout(model, handOver, error.retryAfterMs + 500) !== null) {
               for (let left = Math.ceil((error.retryAfterMs + 500) / 1e3); left > 0; left -= 1) {
                 onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
                 await sleep(1e3, signal);
