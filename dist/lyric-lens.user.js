@@ -1539,7 +1539,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   function definedTerms(sentence) {
     const body = sentence.replace(DEFINITION_TAIL, "");
     const meaning = body.split(/[＝=]/).pop().replace(/^[^は]{1,24}は/, "");
-    return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A0-\u30FF]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
+    return (meaning.match(/[\u3400-\u9FFF々]+|[\u30A1-\u30FA\u30FC]{2,}/g) ?? []).filter((t) => !GENERIC.has(t));
   }
   function trimDefinition(note, ja) {
     if (note.kind !== "slang" && note.kind !== "idiom") return note;

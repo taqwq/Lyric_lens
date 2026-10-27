@@ -1115,6 +1115,17 @@ describe('trimDefinition', () => {
     expect(trimDefinition(n('slang', 'チーズ＝お金を意味するスラング'), '金が山積み')).toBeNull();
   });
 
+  it('splits a definition at the middle dot: ・ is not katakana', () => {
+    const note: Note = { kind: 'slang', phrase: 'blicky', text: '拳銃・ハジキを指すスラング。' };
+    expect(trimDefinition(note, 'ハジキを腰に差して')).toBeNull();
+    expect(trimDefinition(note, '拳銃を腰に差して')).toBeNull();
+    expect(trimDefinition(n('slang', '銃・ライフルを指すスラング。'), 'ライフルを担いで')).toBeNull();
+    // neither term in ja: the definition stays
+    expect(trimDefinition(note, 'ブリッキーを腰に差して')).toEqual(note);
+    // the long-vowel mark still belongs to a katakana run
+    expect(trimDefinition(n('slang', 'チーズ＝ホーミーを意味するスラング'), 'ホーミーが来た')).toBeNull();
+  });
+
   it('keeps the definition when the translation kept the word itself', () => {
     for (const [text, ja] of [
       ['チーズ＝お金を意味するスラング', 'パルメザンが山積み'],
