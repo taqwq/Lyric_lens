@@ -552,7 +552,7 @@ describe('translateSong: errors become a stop, never an exception', () => {
 
   it.each([
     ['overloaded', 'busy'], ['auth', 'auth'], ['blocked', 'blocked'], ['network', 'network'], ['timeout', 'network'],
-    ['bad-request', 'unusable'], ['not-found', 'unusable'], ['empty', 'unusable'], ['unknown', 'unusable'],
+    ['bad-request', 'rejected'], ['not-found', 'no-model'], ['empty', 'empty'], ['unknown', 'unusable'],
   ] as Array<[LLMErrorKind, string]>)('a thrown "%s" error becomes the stop reason "%s"', async (kind, reason) => {
     script({ text: '', throws: new LLMError(kind, 'x') });
     const out = await translateSong(makeSource(), newRecord(), options);
@@ -569,7 +569,10 @@ describe('stopFromError', () => {
     expect(reason('network')).toEqual({ reason: 'network', at: 1000 });
     expect(reason('timeout')).toEqual({ reason: 'network', at: 1000 });
     expect(reason('aborted')).toEqual({ reason: 'stopped', at: 1000 });
-    for (const kind of ['bad-request', 'not-found', 'truncated', 'empty', 'unknown'] as const) {
+    expect(reason('bad-request')).toEqual({ reason: 'rejected', at: 1000 });
+    expect(reason('not-found')).toEqual({ reason: 'no-model', at: 1000 });
+    expect(reason('empty')).toEqual({ reason: 'empty', at: 1000 });
+    for (const kind of ['truncated', 'unknown', 'unusable'] as const) {
       expect(reason(kind)).toEqual({ reason: 'unusable', at: 1000 });
     }
   });

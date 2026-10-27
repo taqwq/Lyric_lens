@@ -258,6 +258,13 @@ describe('exportSongs', () => {
     expect(text).not.toContain('secret-key-value');
   });
 
+  it('keeps the newer stop reasons through a save and a load', async () => {
+    for (const reason of ['rejected', 'no-model', 'empty'] as const) {
+      await saveSong(rec(reason, { stop: { reason, at: 5 } }));
+      expect((await loadSong(reason))!.stop?.reason).toBe(reason);
+    }
+  });
+
   it('is an empty list when nothing is saved', async () => {
     expect((JSON.parse(await exportSongs()) as { songs: unknown[] }).songs).toEqual([]);
   });
