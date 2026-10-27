@@ -1069,7 +1069,7 @@ ${req.user}` : req.user }] }],
     }
     const lines = list.filter((a) => kept.has(a.order)).map((a) => {
       const text2 = a.text.length > ANNOTATION_EACH ? `${a.text.slice(0, ANNOTATION_EACH)}…` : a.text;
-      return `- [id:${a.id}] ▲${a.votes}${a.verified ? " 公認" : ""} 「${a.fragment}」: ${text2}`;
+      return `- [id:${a.id}] ▲${a.votes}${a.verified || a.accepted ? " 公認" : ""} 「${a.fragment}」: ${text2}`;
     });
     return ["# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）", ...lines].join("\n");
   }
@@ -1553,7 +1553,7 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
       const votes = Number(ann.votes_total ?? 0);
       const trusted = ann.verified || ann.state === "accepted";
       if (!trusted && votes < 3) continue;
-      out.push({ id: String(r.id ?? out.length), fragment, text: text2, votes, ...ann.verified ? { verified: true } : {} });
+      out.push({ id: String(r.id ?? out.length), fragment, text: text2, votes, ...ann.verified ? { verified: true } : {}, ...ann.state === "accepted" ? { accepted: true } : {} });
     }
     return out;
   }
@@ -1990,6 +1990,7 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
       lines,
       ...stop ? { stop } : {},
       ...typeof raw.model === "string" && raw.model ? { model: raw.model } : {},
+      ...typeof raw.carried === "number" && raw.carried > 0 ? { carried: Math.floor(raw.carried) } : {},
       createdAt: stamp(raw.createdAt, updatedAt),
       updatedAt
     });
@@ -4544,10 +4545,15 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
           if (retranslate) {
             let landed = outcome.complete;
             if (!landed && stored && outcome.stop && ["gaps", "length"].includes(outcome.stop.reason)) {
+              let carried = 0;
               for (const u of missingLines(source, record)) {
                 const old = stored.lines[u.key];
-                if (old?.ja) record.lines[u.key] = old;
+                if (old?.ja) {
+                  record.lines[u.key] = old;
+                  carried += 1;
+                }
               }
+              if (carried) record.carried = carried;
               if (!missingLines(source, record).length) delete record.stop;
               landed = true;
             }

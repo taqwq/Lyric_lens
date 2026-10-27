@@ -114,7 +114,7 @@ function annotationsBlock(source: SongSource): string {
   }
   const lines = list.filter((a) => kept.has(a.order)).map((a) => {
     const text = a.text.length > ANNOTATION_EACH ? `${a.text.slice(0, ANNOTATION_EACH)}…` : a.text;
-    return `- [id:${a.id}] ▲${a.votes}${a.verified ? ' 公認' : ''} 「${a.fragment}」: ${text}`;
+    return `- [id:${a.id}] ▲${a.votes}${a.verified || a.accepted ? ' 公認' : ''} 「${a.fragment}」: ${text}`;
   });
   return ['# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）', ...lines].join('\n');
 }

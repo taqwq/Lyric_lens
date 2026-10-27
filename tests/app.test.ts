@@ -158,6 +158,24 @@ describe('translate: the finished edition cannot be saved', () => {
     log.mockRestore();
   });
 
+  it('records how many lines a landed retranslation carried over from the old edition', async () => {
+    const page = pageOf(ENGLISH);
+    const old = emptyRecord(identityOf(page), page.path, page.source.meta);
+    for (const u of page.source.unique) old.lines[u.key] = { ja: '古い訳' };
+    await saveSong(old);
+    m.translateSong.mockImplementationOnce(async (source: SongSource, record: SongRecord) => {
+      record.song = { who: '新', what: '新しい版', motifs: [{ en: 'a', ja: 'あ' }] };
+      for (const u of source.unique.slice(0, 2)) record.lines[u.key] = { ja: '新しい訳' };
+      return { record, complete: false, model: 'test', stop: { reason: 'gaps', at: Date.now() } };
+    });
+    const app = appOn(page, old);
+    await app.translate('retranslate');
+    const saved = (await loadSong(identityOf(page)))!;
+    expect(saved.carried).toBe(page.source.unique.length - 2);
+    expect(saved.song?.motifs).toEqual([{ en: 'a', ja: 'あ' }]);
+    expect(saved.lines[page.source.unique[0]!.key]!.ja).toBe('新しい訳');
+  });
+
   it('keeps a retranslated edition on screen when it cannot be stored', async () => {
     const page = pageOf(ENGLISH);
     const old = emptyRecord(identityOf(page), page.path, page.source.meta);
