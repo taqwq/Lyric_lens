@@ -17,6 +17,7 @@ import {
   type ChainResult,
   type ModelHealth,
 } from '../src/llm/chain';
+import { stopFromError } from '../src/core/pipeline';
 import { LLMError } from '../src/llm/errors';
 import { FIRST_TEXT_TIMEOUT_MS } from '../src/llm/gemini';
 import type { HttpResult, StreamRequest } from '../src/platform/http';
@@ -402,6 +403,77 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     expect(error?.kind).toBe('quota'); // as before: nothing better to say
     expect(error?.retryAfterMs).toBe(0);
     expect(error?.message).toContain('上限');
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('names a rejected prompt (bad-request cooldowns) as rejected, never as quota or a wait', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const until = Date.now() + 6 * 3600_000;
+    await seedCooldowns(Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until, reason: 'bad-request' }])));
+
+    const { error } = await settle(start(g));
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error?.kind).toBe('bad-request');
+    expect(stopFromError(error!).reason).toBe('rejected');
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('names an unreadable answer (unusable cooldowns) as unusable, never as quota or a wait', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const until = Date.now() + 10 * 60_000;
+    await seedCooldowns(Object.fromEntries([A, B, C].map((m) => [cooldownId(g, m), { until, reason: 'unusable' }])));
+
+    const { error } = await settle(start(g));
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error?.kind).toBe('unusable');
+    expect(stopFromError(error!).reason).toBe('unusable');
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('a non-quota cooldown beats quota ones, even a longer one', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const now = Date.now();
+    await seedCooldowns({
+      [cooldownId(g, A)]: { until: now + 3 * 3600_000, reason: 'quota' },
+      [cooldownId(g, B)]: { until: now + 3 * 3600_000, reason: 'quota' },
+      [cooldownId(g, C)]: { until: now + 6 * 3600_000, reason: 'bad-request' },
+    });
+
+    const { error } = await settle(start(g));
+    expect(error?.kind).toBe('bad-request');
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it('the soonest-ending non-quota cooldown decides: a short wait, then unusable, then rejected', async () => {
+    const g = gemini();
+    await seedModels(g, A, B, C);
+    const now = Date.now();
+    await seedCooldowns({
+      [cooldownId(g, A)]: { until: now + 6 * 3600_000, reason: 'bad-request' },
+      [cooldownId(g, B)]: { until: now + 10 * 60_000, reason: 'unusable' },
+      [cooldownId(g, C)]: { until: now + 5 * 60_000, reason: 'timeout' },
+    });
+    const wait = (await settle(start(g))).error;
+    expect(wait?.kind).toBe('rate');
+    expect(wait?.retryAfterMs).toBeGreaterThan(4 * 60_000);
+    expect(wait?.retryAfterMs).toBeLessThanOrEqual(5 * 60_000);
+
+    await seedCooldowns({
+      [cooldownId(g, A)]: { until: now + 6 * 3600_000, reason: 'bad-request' },
+      [cooldownId(g, B)]: { until: now + 10 * 60_000, reason: 'unusable' },
+      [cooldownId(g, C)]: { until: now + 3 * 3600_000, reason: 'rate' },
+    });
+    expect((await settle(start(g))).error?.kind).toBe('unusable');
+
+    await seedCooldowns({
+      [cooldownId(g, A)]: { until: now + 3600_000, reason: 'bad-request' },
+      [cooldownId(g, B)]: { until: now + 10 * 60_000 + 3600_000, reason: 'unusable' },
+      [cooldownId(g, C)]: { until: now + 3 * 3600_000, reason: 'rate' },
+    });
+    expect((await settle(start(g))).error?.kind).toBe('bad-request');
     expect(http).not.toHaveBeenCalled();
   });
 

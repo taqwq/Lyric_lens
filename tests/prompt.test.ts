@@ -292,10 +292,24 @@ describe('note ceiling per song', () => {
     expect(noteAllowance(source, withNotes(5))).toEqual({ notesLeft: 0, bonusLeft: 0 });
   });
 
-  it('states the remaining budget in the prompt, and asks for none when it is spent', () => {
+  it('states the remaining budget in the prompt', () => {
     expect(buildPrompt(source, withNotes(1), pick(source, [6])).user).toContain('多くても1件');
-    const spent = buildPrompt(source, withNotes(2), pick(source, [6])).user;
+  });
+
+  it('past the ceiling, allows only wordplay or ambiguous notes, as many as the bonus left', () => {
+    const atCeiling = buildPrompt(source, withNotes(2), pick(source, [6])).user;
+    expect(atCeiling).toContain('掛詞か二通りに読めるものに限り');
+    expect(atCeiling).toContain('多くても2件');
+    expect(atCeiling).not.toContain('書かないでください');
+    const oneBonusUsed = buildPrompt(source, withNotes(3), pick(source, [6])).user;
+    expect(oneBonusUsed).toContain('掛詞か二通りに読めるものに限り');
+    expect(oneBonusUsed).toContain('多くても1件');
+  });
+
+  it('asks for no notes once the ceiling and the bonus are both spent', () => {
+    const spent = buildPrompt(source, withNotes(5), pick(source, [6])).user;
     expect(spent).not.toContain('多くても');
+    expect(spent).not.toContain('掛詞');
     expect(spent).toContain('注は今回は書かないでください');
   });
 });

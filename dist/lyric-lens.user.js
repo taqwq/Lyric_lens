@@ -221,8 +221,8 @@
     if (status === 401 || status === 403 || /API_KEY_INVALID|API key not valid|invalid api key|PERMISSION_DENIED|unauthorized/i.test(everything)) {
       return new LLMError("auth", message, opts);
     }
-    if (status === 429 || /RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(everything)) {
-      const perDay = /PerDay|per.day|daily|limit: 0\b|insufficient_quota|credits/i.test(everything);
+    if (status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(everything)) {
+      const perDay = /PerDay|per.day|daily|limit: 0\b/i.test(everything);
       const perMinute = /PerMinute|per.minute/i.test(everything);
       const daily = perDay || !perMinute && /free_tier|FreeTier/i.test(everything);
       return new LLMError(daily ? "quota" : "rate", message, opts);
@@ -724,7 +724,7 @@ ${req.user}` : req.user }] }],
     let earliest = Infinity;
     for (const id of ids) {
       const cd = cooldowns[cooldownId(apiKey, id)];
-      if (!cd || cd.reason === "overloaded" || cd.reason === "timeout" || cd.reason === "rate") return { ok: true, until: 0 };
+      if (!cd || cd.reason !== "quota" && cd.reason !== "not-found") return { ok: true, until: 0 };
       earliest = Math.min(earliest, cd.until);
     }
     return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
@@ -816,7 +816,7 @@ ${req.user}` : req.user }] }],
     const cooldowns = await loadCooldowns();
     const errors = [];
     let models;
-    let skippedForCooldown = 0;
+    const skipped = [];
     const busyNow = /* @__PURE__ */ new Set();
     const provider = new GeminiProvider(apiKey);
     const remember = async (model, error) => {
@@ -845,6 +845,22 @@ ${req.user}` : req.user }] }],
         detail: base?.detail
       });
       if (base) error.model = base.model;
+      return error;
+    };
+    const fromSkipped = () => {
+      let soonest = null;
+      for (const skip of skipped) {
+        const { reason: reason2, until: until2 } = skip.cooldown;
+        if (reason2 === "quota" || reason2 === "not-found") continue;
+        if (!soonest || until2 < soonest.cooldown.until) soonest = skip;
+      }
+      if (!soonest) return fromCooldown(null);
+      const { reason, until } = soonest.cooldown;
+      let error;
+      if (reason === "bad-request") error = new LLMError("bad-request", "Gemini がこの依頼を受け付けませんでした。", { status: 400 });
+      else if (reason === "unusable") error = new LLMError("unusable", "Gemini の返事から訳を読み取れませんでした。", { status: 200 });
+      else error = new LLMError("rate", "使えるモデルがすべて上限に達しています。", { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
+      error.model = soonest.model;
       return error;
     };
     let keyRejected = false;
@@ -879,7 +895,7 @@ ${req.user}` : req.user }] }],
         const cd = cooldowns[cooldownId(apiKey, model)];
         if (cd && cd.until > Date.now() && !onlyModels?.length) {
           if (cd.reason === "overloaded") busyLast.push(model);
-          else skippedForCooldown += 1;
+          else skipped.push({ model, cooldown: cd });
           continue;
         }
         order.push(model);
@@ -957,7 +973,7 @@ ${req.user}` : req.user }] }],
       const busy = busyNow.size > 0 && passErrors.every((e) => ["overloaded", "not-found", "timeout", "network", "quota"].includes(e.kind));
       if (!busy) break;
     }
-    if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+    if (!errors.length && skipped.length) throw fromSkipped();
     if (!errors.length) throw new LLMError("not-found", "使えるモデルが見つかりませんでした。");
     const reported = pickReportedError(errors);
     throw reported.kind === "quota" ? fromCooldown(reported) : reported;
@@ -1073,8 +1089,10 @@ ${req.user}` : req.user }] }],
     });
     return ["# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）", ...lines].join("\n");
   }
-  function noteSentence(left) {
-    return left > 0 ? `注は今回の行全体で多くても${left}件。` : "注は今回は書かないでください。";
+  function noteSentence(left, bonus) {
+    if (left > 0) return `注は今回の行全体で多くても${left}件。`;
+    if (bonus > 0) return `注は、掛詞か二通りに読めるものに限り、今回の行全体で多くても${bonus}件。`;
+    return "注は今回は書かないでください。";
   }
   function noteBudget(lines) {
     return Math.max(2, Math.round(lines / 6));
@@ -1100,8 +1118,9 @@ ${req.user}` : req.user }] }],
     const all = targets.length === source.unique.length;
     const ask = haveSong ? "song レコードは書かずに、" : "まず song レコードを書き、";
     const what = all ? `L1〜L${source.unique.length} をすべて訳してください。` : `次の ID だけを訳してください：${formatIdList(targets)}。`;
+    const { notesLeft, bonusLeft } = noteAllowance(source, record);
     blocks.push(`# 指示
-${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {"t":"end"} を書いてください。`);
+${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書いてください。`);
     const expectedChars = targets.reduce((sum, t) => sum + Math.min(220, t.text.length * 1.4 + 60), haveSong ? 40 : 500);
     return { system: SYSTEM_PROMPT, user: blocks.join("\n\n"), targets, expectedChars };
   }

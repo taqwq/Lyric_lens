@@ -88,6 +88,41 @@ describe('availability', () => {
     expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
   });
 
+  // A prompt Gemini rejected (bad-request, six hours) or an answer nothing could be read from
+  // (unusable, ten minutes) is no quota news: the button must stay on, and the chain says why.
+  it.each(['bad-request', 'unusable'] as const)('stays ok, and names no reset, when every model is benched as %s', async (reason) => {
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
+    const now = Date.now();
+    await setJSON('ll3:cooldowns', {
+      [id('gemini-3.5-flash')]: { until: now + 6 * 3600_000, reason },
+      [id('gemini-3.4-flash')]: { until: now + 600_000, reason },
+    });
+    expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
+    expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });
+  });
+
+  it('stays ok when quota is spent on one model and another is only benched as bad-request or unusable', async () => {
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
+    const now = Date.now();
+    for (const reason of ['bad-request', 'unusable'] as const) {
+      await setJSON('ll3:cooldowns', {
+        [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+        [id('gemini-3.4-flash')]: { until: now + 600_000, reason },
+      });
+      expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
+    }
+  });
+
+  it('is not ok when every model is out of quota or missing', async () => {
+    await models(gemini(), 'gemini-3.5-flash', 'gemini-3.4-flash');
+    const now = Date.now();
+    await setJSON('ll3:cooldowns', {
+      [id('gemini-3.5-flash')]: { until: now + 5_000_000, reason: 'quota' },
+      [id('gemini-3.4-flash')]: { until: now + 3_000_000, reason: 'not-found' },
+    });
+    expect(await availability(gemini())).toEqual({ ok: false, until: now + 3_000_000 });
+  });
+
   it('ignores cooldowns that have already ended', async () => {
     await models(gemini(), 'gemini-3.5-flash');
     await setJSON('ll3:cooldowns', { [id('gemini-3.5-flash')]: { until: Date.now() - 1000, reason: 'quota' } });

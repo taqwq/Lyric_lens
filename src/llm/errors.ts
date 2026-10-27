@@ -53,7 +53,7 @@ export function retryAfterMs(body: unknown, rawHeaders = ''): number {
   return m ? Math.ceil(Number(m[1]) * 1000) : 0;
 }
 
-/** Maps an HTTP failure to an error kind. Shared by every provider. */
+/** Maps an HTTP failure from the Gemini API to an error kind. */
 export function classifyHttpError(status: number, bodyText: string, rawHeaders = ''): LLMError {
   let body: unknown = null;
   try { body = JSON.parse(bodyText); } catch { /* not JSON */ }
@@ -67,10 +67,10 @@ export function classifyHttpError(status: number, bodyText: string, rawHeaders =
   if (status === 401 || status === 403 || /API_KEY_INVALID|API key not valid|invalid api key|PERMISSION_DENIED|unauthorized/i.test(everything)) {
     return new LLMError('auth', message, opts);
   }
-  if (status === 429 || /RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(everything)) {
+  if (status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(everything)) {
     // Free-tier errors say "free_tier" whatever the window, so name the window first:
     // a per-minute limit must not bench a model until the daily reset.
-    const perDay = /PerDay|per.day|daily|limit: 0\b|insufficient_quota|credits/i.test(everything);
+    const perDay = /PerDay|per.day|daily|limit: 0\b/i.test(everything);
     const perMinute = /PerMinute|per.minute/i.test(everything);
     const daily = perDay || (!perMinute && /free_tier|FreeTier/i.test(everything));
     return new LLMError(daily ? 'quota' : 'rate', message, opts);
