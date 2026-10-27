@@ -6,11 +6,9 @@
  * API keys never go into the DOM except as the value of the input while the reader types, and
  * as the masked tail of a saved key (••••abcd). Errors from the providers are never logged.
  */
-import { createProvider, keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
+import { keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
 import { LLMError } from '../llm/errors';
-import { presetFor } from '../llm/presets';
-import type { ProviderConfig } from '../llm/types';
-import { SERVICE_ORDER, currentSettings, loadSettings, providerFor, setProviderKey } from '../store/settings';
+import { currentSettings, loadSettings, setApiKey } from '../store/settings';
 import { deleteAllSongs, exportSongs, importSongs, storageSummary } from '../store/songs';
 import { h } from './dom';
 import css from './sheet.css';
@@ -18,18 +16,12 @@ import { formatDate, formatWhen } from './time';
 
 export interface SheetSong { title: string; model?: string; translatedAt?: number }
 
-/** The services a settings row can be emphasised for (SERVICE_ORDER). */
-export type SheetService = 'gemini' | 'groq' | 'openrouter';
-
 export interface OpenSheetOptions {
   mode: 'first-run' | 'settings';
   /** Desktop: the 設定 button the panel anchors under. */
   anchor?: HTMLElement | null;
   /** Shows the 「この曲」 section (settings mode) when given. */
   song?: SheetSong | null;
-  /** Settings mode: the service row to scroll to, emphasise and focus (e.g. the free service
-   *  the reader has not set up yet, when quota blocks them). Ignored in first-run mode. */
-  focusService?: SheetService;
   /** Id of the song a request is writing right now (here or in another tab). 読み込む leaves it alone. */
   busySongId?: string | null;
   /** Called after the reader confirms 訳し直す. */
@@ -58,8 +50,7 @@ const COPY = {
   network: '確かめられませんでした。接続を確認してください',
   settingsTitle: 'Lyric Lens の設定',
   close: '閉じる',
-  services: '翻訳に使うサービス',
-  servicesLead: '上から順に使い、混雑や上限のときは自動で次に切り替えます',
+  services: '翻訳に使うAI',
   save: '保存',
   makeKey: 'キーを作る',
   removeKey: 'キーを消す',
@@ -87,12 +78,7 @@ const COPY = {
 
 const AI_STUDIO_URL = 'https://aistudio.google.com/app/apikey';
 
-/** Row labels are fixed by the design; the preset labels are shorter. */
-const SERVICE_LABEL: Record<string, string> = {
-  gemini: 'Google AI Studio（Gemini）',
-  groq: 'Groq',
-  openrouter: 'OpenRouter（無料モデル）',
-};
+const SERVICE_LABEL = 'Google AI Studio（Gemini）';
 
 /* ---------- small helpers ---------- */
 
@@ -190,7 +176,7 @@ type RowKind = 'pending' | 'checking' | 'missing' | 'ok' | 'resting' | 'bad';
 
 interface Row {
   id: string;
-  config: ProviderConfig;
+  apiKey: string;
   kind: RowKind;
   until: number;
   message: string;
@@ -448,9 +434,9 @@ function mount(options: OpenSheetOptions): Active {
   }
 
   /** Verifies a key with the provider's model list (never a generation call). */
-  async function verify(config: ProviderConfig): Promise<'ok' | 'auth' | 'network' | 'aborted'> {
+  async function verify(apiKey: string): Promise<'ok' | 'auth' | 'network' | 'aborted'> {
     try {
-      await modelsFor(createProvider(config), { refresh: true });
+      await modelsFor(apiKey, { refresh: true });
       return 'ok';
     } catch (error) {
       if (isAborted(error)) return 'aborted';
@@ -506,9 +492,7 @@ function mount(options: OpenSheetOptions): Active {
       input.removeAttribute('aria-invalid');
       setBusy(true);
       say(COPY.checking);
-      const base = currentSettings().providers.find((p) => p.preset === 'gemini') ?? providerFor('gemini');
-      const config: ProviderConfig = { ...base, apiKey: key };
-      const verdict = await verify(config);
+      const verdict = await verify(key);
       if (closed || verdict === 'aborted') return;
       if (verdict !== 'ok') {
         setBusy(false);
@@ -518,8 +502,8 @@ function mount(options: OpenSheetOptions): Active {
         return;
       }
       try {
-        await markKey(config, false);
-        await setProviderKey('gemini', key);
+        await markKey(key, false);
+        await setApiKey(key);
       } catch {
         if (closed) return;
         setBusy(false);
@@ -553,7 +537,6 @@ function mount(options: OpenSheetOptions): Active {
     const servicesBox = h('div', { class: 'services' });
     body.append(h('section', { class: 'section' },
       h('h3', { class: 'section-title' }, COPY.services),
-      h('p', { class: 'section-lead' }, COPY.servicesLead),
       servicesBox));
 
     const rows: Row[] = [];
@@ -566,7 +549,7 @@ function mount(options: OpenSheetOptions): Active {
       row.msgEl.textContent = row.message;
       if (row.message) row.msgEl.dataset.kind = 'error'; else delete row.msgEl.dataset.kind;
       row.el.setAttribute('aria-busy', String(row.busy));
-      const want = row.config.apiKey.trim() ? 'key' : 'input';
+      const want = row.apiKey.trim() ? 'key' : 'input';
       if (row.mode !== want) buildControls(row, want);
       // A rejected key is replaced, not merely removed: say so, since that is the next step.
       if (row.removeButton) row.removeButton.textContent = row.kind === 'bad' ? COPY.reenterKey : COPY.removeKey;
@@ -584,17 +567,15 @@ function mount(options: OpenSheetOptions): Active {
       if (mode === 'key') {
         const remove = button(COPY.removeKey, 'text', () => { void removeKey(row); });
         row.removeButton = remove;
-        row.controls.replaceChildren(h('div', { class: 'inline' }, h('span', { class: 'mask' }, maskKey(row.config.apiKey)), remove));
+        row.controls.replaceChildren(h('div', { class: 'inline' }, h('span', { class: 'mask' }, maskKey(row.apiKey)), remove));
         return;
       }
-      const label = SERVICE_LABEL[row.id] ?? presetFor(row.id).label;
-      const input = keyInput(`${label} のAPIキー`, () => { void saveKey(row); }, () => {
+      const input = keyInput(`${SERVICE_LABEL} のAPIキー`, () => { void saveKey(row); }, () => {
         if (!row.busy && (row.kind === 'bad' || row.message)) { row.kind = 'missing'; row.message = ''; paintRow(row); }
       });
       row.input = input;
-      const keyUrl = presetFor(row.id).keyUrl;
       row.controls.replaceChildren(h('div', { class: 'inline' }, input, button(COPY.save, 'outline', () => { void saveKey(row); })));
-      if (keyUrl) row.controls.append(externalLink(COPY.makeKey, keyUrl));
+      row.controls.append(externalLink(COPY.makeKey, AI_STUDIO_URL));
     }
 
     async function saveKey(row: Row): Promise<void> {
@@ -606,8 +587,7 @@ function mount(options: OpenSheetOptions): Active {
       row.kind = 'checking';
       row.message = '';
       paintRow(row);
-      const config: ProviderConfig = { ...row.config, apiKey: key };
-      const verdict = await verify(config);
+      const verdict = await verify(key);
       if (closed || verdict === 'aborted') return;
       if (verdict !== 'ok') {
         row.busy = false;
@@ -618,9 +598,8 @@ function mount(options: OpenSheetOptions): Active {
         return;
       }
       try {
-        await markKey(config, false);
-        const saved = await setProviderKey(row.id, key);
-        row.config = saved.providers.find((p) => p.preset === row.id) ?? config;
+        await markKey(key, false);
+        row.apiKey = (await setApiKey(key)).apiKey;
       } catch {
         if (closed) return;
         row.busy = false;
@@ -632,7 +611,7 @@ function mount(options: OpenSheetOptions): Active {
       }
       if (closed) return;
       changed = true;
-      const status = await statusOf(row.config);
+      const status = await statusOf(row.apiKey);
       if (closed) return;
       row.busy = false;
       row.message = '';
@@ -647,8 +626,7 @@ function mount(options: OpenSheetOptions): Active {
       row.busy = true;
       paintRow(row);
       try {
-        const saved = await setProviderKey(row.id, '');
-        row.config = saved.providers.find((p) => p.preset === row.id) ?? { ...row.config, apiKey: '' };
+        row.apiKey = (await setApiKey('')).apiKey;
       } catch {
         if (closed) return;
         row.busy = false;
@@ -674,26 +652,26 @@ function mount(options: OpenSheetOptions): Active {
       row.until = status.kind === 'resting' ? status.until : 0;
     }
 
-    async function statusOf(config: ProviderConfig): Promise<KeyStatus> {
+    async function statusOf(apiKey: string): Promise<KeyStatus> {
       try {
-        return await keyStatus(config);
+        return await keyStatus(apiKey);
       } catch {
-        return config.apiKey.trim() ? { kind: 'ok' } : { kind: 'missing' };
+        return apiKey.trim() ? { kind: 'ok' } : { kind: 'missing' };
       }
     }
 
-    function buildRow(config: ProviderConfig): Row {
-      const id = config.preset;
+    function buildRow(apiKey: string): Row {
+      const id = 'gemini';
       const dot = h('span', { class: 'dot', 'aria-hidden': 'true' });
       const statusEl = h('span', { class: 'status' });
       const msgEl = h('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
       const controls = h('div', { class: 'controls' });
       const el = h('div', { class: 'service', 'data-service': id },
-        h('div', { class: 'service-head' }, dot, h('span', { class: 'service-name' }, SERVICE_LABEL[id] ?? presetFor(id).label), statusEl),
+        h('div', { class: 'service-head' }, dot, h('span', { class: 'service-name' }, SERVICE_LABEL), statusEl),
         controls,
         msgEl);
       return {
-        id, config, kind: config.apiKey.trim() ? 'pending' : 'missing', until: 0, message: '', busy: false,
+        id, apiKey, kind: apiKey.trim() ? 'pending' : 'missing', until: 0, message: '', busy: false,
         el, dot, statusEl, msgEl, controls, mode: null, input: null, removeButton: null,
       };
     }
@@ -885,48 +863,29 @@ function mount(options: OpenSheetOptions): Active {
     const firstEmptyInput = (): HTMLInputElement | null => rows.find((r) => r.input)?.input ?? null;
 
     void (async () => {
-      let configs: ProviderConfig[];
+      let apiKey: string;
       try {
-        const settings = await loadSettings();
-        configs = SERVICE_ORDER.map((id) => settings.providers.find((p) => p.preset === id) ?? providerFor(id));
+        apiKey = (await loadSettings()).apiKey;
       } catch {
-        configs = SERVICE_ORDER.map((id) => currentSettings().providers.find((p) => p.preset === id) ?? providerFor(id));
+        apiKey = currentSettings().apiKey;
       }
       if (closed) return;
-      for (const config of configs) {
-        const row = buildRow(config);
-        rows.push(row);
-        servicesBox.append(row.el);
-        paintRow(row);
-      }
-      // The row the app wants seen (e.g. the free service not set up yet, when quota blocks the reader).
-      const wanted = options.focusService ? rows.find((r) => r.id === options.focusService) : undefined;
-      // Emphasised by sheet.css ([data-focus]).
-      if (wanted) wanted.el.dataset.focus = 'true';
+      const row = buildRow(apiKey);
+      rows.push(row);
+      servicesBox.append(row.el);
+      paintRow(row);
       place(true);
       // 閉じる has focus until now.
       const untouched = (shadow as ShadowRoot & { activeElement: Element | null }).activeElement === closeButton;
-      if (wanted) {
-        try { wanted.el.scrollIntoView?.({ block: 'nearest' }); } catch { /* old browsers */ }
-        if (untouched) {
-          // A key field on a desktop; on a phone the keyboard would cover the sheet, so the row itself.
-          if (isDesktop() && wanted.input) focusEl(wanted.input);
-          else { wanted.el.tabIndex = -1; focusEl(wanted.el); }
-        }
-      } else {
-        // On a desktop, move to the first empty key field; a phone keyboard would cover the sheet.
-        const target = firstEmptyInput();
-        if (target && isDesktop() && untouched) focusEl(target);
-      }
+      // On a desktop, move to the key field when it is empty; a phone keyboard would cover the sheet.
+      const target = firstEmptyInput();
+      if (target && isDesktop() && untouched) focusEl(target);
 
-      await Promise.all(rows.map(async (row) => {
-        if (!row.config.apiKey.trim()) return;
-        const config = row.config;
-        const status = await statusOf(config);
-        if (closed || row.busy || row.config !== config) return;
-        applyStatus(row, status);
-        paintRow(row);
-      }));
+      if (!row.apiKey.trim()) return;
+      const status = await statusOf(row.apiKey);
+      if (closed || row.busy || row.apiKey !== apiKey) return;
+      applyStatus(row, status);
+      paintRow(row);
     })();
 
     return { focus: () => focusEl(closeButton) };

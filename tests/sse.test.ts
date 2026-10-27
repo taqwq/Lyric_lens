@@ -2,7 +2,6 @@ import './setup';
 
 import { describe, expect, it } from 'vitest';
 import { SseParser } from '../src/llm/sse';
-import { ThinkFilter } from '../src/llm/openai';
 
 function parseChunks(chunks: string[]): string[] {
   const p = new SseParser();
@@ -72,49 +71,5 @@ describe('SseParser', () => {
 
   it('keeps multi-byte text intact', () => {
     expect(parseChunks(['data: {"t":"こん', 'にちは"}\n\n'])).toEqual(['{"t":"こんにちは"}']);
-  });
-});
-
-describe('ThinkFilter', () => {
-  function run(chunks: string[]): string {
-    const f = new ThinkFilter();
-    return chunks.map((c) => f.feed(c)).join('');
-  }
-
-  it('passes text without tags through unchanged', () => {
-    expect(run(['L1: こんにちは\n'])).toBe('L1: こんにちは\n');
-  });
-
-  it('removes a <think> block inside one chunk', () => {
-    expect(run(['<think>reasoning</think>L1: あ\n'])).toBe('L1: あ\n');
-    expect(run(['before <think>x</think> after'])).toBe('before  after');
-  });
-
-  it('removes a block split across chunks, including inside the tags themselves', () => {
-    expect(run(['<thi', 'nk>secret', ' stuff</th', 'ink>L1: あ\n'])).toBe('L1: あ\n');
-    expect(run(['Hello <thi', 'nk>secret</th', 'ink> world'])).toBe('Hello  world');
-  });
-
-  it('gives the same output when fed one character at a time', () => {
-    const text = 'L1: a\n<think>hmm\nmore</think>L2: b\n<think></think>L3: c\n';
-    expect(run(Array.from(text))).toBe('L1: a\nL2: b\nL3: c\n');
-    expect(run([text])).toBe('L1: a\nL2: b\nL3: c\n');
-  });
-
-  it('releases a false partial tag once the next chunk shows it is ordinary text', () => {
-    const f = new ThinkFilter();
-    expect(f.feed('a <')).toBe('a ');
-    expect(f.feed('b')).toBe('<b');
-    expect(run(['x <thin', 'g>'])).toBe('x <thing>');
-  });
-
-  it('hides everything after an unclosed <think>', () => {
-    const f = new ThinkFilter();
-    expect(f.feed('ok <think>never closed')).toBe('ok ');
-    expect(f.feed(' still hidden')).toBe('');
-  });
-
-  it('handles several blocks and text between them', () => {
-    expect(run(['<think>a</think>X<think>b</think>Y<think>c</think>Z'])).toBe('XYZ');
   });
 });

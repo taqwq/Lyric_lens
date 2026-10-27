@@ -20,14 +20,6 @@
 // @grant        GM.registerMenuCommand
 // @grant        GM_info
 // @connect      generativelanguage.googleapis.com
-// @connect      api.groq.com
-// @connect      api.cerebras.ai
-// @connect      openrouter.ai
-// @connect      api.mistral.ai
-// @connect      models.github.ai
-// @connect      localhost
-// @connect      127.0.0.1
-// @connect      *
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==

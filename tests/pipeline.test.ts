@@ -3,7 +3,6 @@ import './setup';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateWithFallback, nextPacificMidnight, type ChainResult } from '../src/llm/chain';
 import { LLMError, type LLMErrorKind } from '../src/llm/errors';
-import type { ProviderConfig } from '../src/llm/types';
 import { RecordBuilder, contiguousPhrase, stopFromError, stripGlosses, tidyWhat, tidyWho, translateSong, trimDefinition, widenParens } from '../src/core/pipeline';
 import type { ProtocolEvent } from '../src/core/protocol';
 import { buildSong, emptyRecord, missingLines } from '../src/core/song';
@@ -43,7 +42,7 @@ let returned: Array<Array<boolean | void>> = [];
 /** Makes the next chain calls stream the given scripts through request.onText. */
 function script(...rounds: Script[]): void {
   for (const round of rounds) {
-    chain.mockImplementationOnce(async (_providers: ProviderConfig[], request: ChainRequest) => {
+    chain.mockImplementationOnce(async (_apiKey: string, request: ChainRequest) => {
       const text = round.text ?? '';
       const size = round.chunk ?? 3;
       const pieces = round.chunks ?? Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size));
@@ -60,9 +59,9 @@ function script(...rounds: Script[]): void {
       const model = round.model ?? 'fake-model';
       if (round.breaks) {
         if (!useful) throw round.breaks;
-        return { finish: 'unknown', finishDetail: round.breaks.kind, text: '', model, provider: 'Fake', error: round.breaks } satisfies ChainResult;
+        return { finish: 'unknown', finishDetail: round.breaks.kind, text: '', model, error: round.breaks } satisfies ChainResult;
       }
-      return { finish: round.finish ?? 'stop', finishDetail: '', text: pieces.join(''), model, provider: 'Fake' } satisfies ChainResult;
+      return { finish: round.finish ?? 'stop', finishDetail: '', text: pieces.join(''), model } satisfies ChainResult;
     });
   }
 }
@@ -90,7 +89,7 @@ function makeSource(lines: string[] = LYRICS): SongSource {
 const fullAnswer = () => jsonl(songRec(), ...HEADS.map((h, i) => lineRec(i + 1, h, JA[i]!)), endRec());
 
 const newRecord = () => emptyRecord('1', '/s', meta);
-const options = { providers: [] as ProviderConfig[], thinking: 'low' as const };
+const options = { apiKey: 'test-key' };
 const userOf = (call: number): string => (chain.mock.calls[call]![1] as ChainRequest).user;
 const jaOf = (source: SongSource, record: SongRecord, uid: number) => record.lines[source.unique[uid - 1]!.key]?.ja;
 
@@ -140,7 +139,6 @@ describe('translateSong: a complete song', () => {
     const req = chain.mock.calls[0]![1] as ChainRequest;
     expect(req.user).toContain('まず song レコードを書き、');
     expect(req.user).toContain('L1〜L4 をすべて訳してください');
-    expect(req.thinking).toBe('low');
     expect(req.system.length).toBeGreaterThan(100);
     expect(typeof req.onText).toBe('function');
   });

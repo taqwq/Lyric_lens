@@ -1,9 +1,9 @@
 /*
  * Runs the real pipeline against a real provider and writes a side-by-side report.
  *
- *   npm run live -- <genius-url | tmp/songs/x.json> [--model gemini-3.6-flash] [--thinking low|medium|high] [--preset groq]
+ *   npm run live -- <genius-url | tmp/songs/x.json> [--model gemini-3.6-flash]
  *
- * Keys come from .env.local (GEMINI_API_KEY, GROQ_API_KEY, …). Reports go to tmp/ (gitignored).
+ * The key comes from .env.local (GEMINI_API_KEY). Reports go to tmp/ (gitignored).
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
@@ -14,8 +14,6 @@ import { readPage } from '../src/genius/extract';
 import { fetchAnnotations } from '../src/genius/annotations';
 import { useFetchTransport } from '../src/platform/http';
 import { setKV, type KV } from '../src/platform/storage';
-import { newProvider } from '../src/store/settings';
-import type { ThinkingLevel } from '../src/llm/types';
 
 function env(): Record<string, string> {
   if (!existsSync('.env.local')) return {};
@@ -47,7 +45,7 @@ async function loadSource(target: string): Promise<{ source: SongSource; path: s
 
 const target = process.argv[2];
 if (!target) {
-  console.error('usage: npm run live -- <genius-url | tmp/songs/x.json> [--model id] [--thinking level] [--preset id]');
+  console.error('usage: npm run live -- <genius-url | tmp/songs/x.json> [--model id]');
   process.exit(1);
 }
 
@@ -66,10 +64,8 @@ function fileKV(path: string): KV {
 mkdirSync('tmp', { recursive: true });
 setKV(fileKV('tmp/kv.json'));
 const keys = env();
-const presetId = arg('preset') ?? 'gemini';
-const keyName = `${presetId.toUpperCase()}_API_KEY`;
-const provider = { ...newProvider(presetId, keys[keyName] ?? ''), model: arg('model') ?? '' };
-const thinking = (arg('thinking') ?? 'medium') as ThinkingLevel;
+const apiKey = keys.GEMINI_API_KEY ?? '';
+const pinned = arg('model');
 
 const { source, path, songId } = await loadSource(target);
 if (songId && !process.argv.includes('--no-annotations')) {
@@ -81,8 +77,8 @@ const record = emptyRecord(songId ? `id:${songId}` : `path:${path}`, path, sourc
 const started = Date.now();
 let firstLineAt = 0;
 const outcome = await translateSong(source, record, {
-  providers: [provider],
-  thinking,
+  apiKey,
+  ...(pinned ? { onlyModels: [pinned] } : {}),
   onStatus: (s) => console.log(`  [status] ${s}`),
   onUpdate: (r) => {
     if (!firstLineAt && Object.keys(r.lines).length) firstLineAt = Date.now();
@@ -97,7 +93,7 @@ const notes = Object.values(record.lines).flatMap((l) => l.notes ?? []);
 const status = songStatus(source, record);
 console.log(`model=${outcome?.model ?? record.model} total=${seconds(Date.now() - started)}s firstLine=${firstLineAt ? seconds(firstLineAt - started) : '-'}s status=${status.kind} stop=${record.stop?.reason ?? '-'} notes=${notes.length}`);
 
-const out: string[] = [`# ${source.meta.artist} – ${source.meta.title}`, '', `model: ${record.model} / thinking: ${thinking}`, ''];
+const out: string[] = [`# ${source.meta.artist} – ${source.meta.title}`, '', `model: ${record.model}`, ''];
 if (record.song) out.push(`**誰が誰に**: ${record.song.who}`, '', `**この曲は**: ${record.song.what}`, '', `tone: ${record.song.tone ?? ''} / motifs: ${JSON.stringify(record.song.motifs ?? [])}`, '');
 let section = -1;
 for (const line of source.lines) {
@@ -111,6 +107,6 @@ for (const line of source.lines) {
   for (const n of r?.notes ?? []) out.push(`    - [${n.kind}${n.conjecture ? '?' : ''}${n.genius ? ` g:${n.genius}` : ''}] «${n.phrase}» ${n.text}`);
 }
 mkdirSync('tmp', { recursive: true });
-const file = `tmp/report-${path.split('/').pop()}-${(record.model ?? 'x').replace(/[^\w.-]/g, '_')}-${thinking}.md`;
+const file = `tmp/report-${path.split('/').pop()}-${(record.model ?? 'x').replace(/[^\w.-]/g, '_')}.md`;
 writeFileSync(file, out.join('\n'));
 console.log(`report: ${file}`);

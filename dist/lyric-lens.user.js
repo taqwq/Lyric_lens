@@ -20,14 +20,6 @@
 // @grant        GM.registerMenuCommand
 // @grant        GM_info
 // @connect      generativelanguage.googleapis.com
-// @connect      api.groq.com
-// @connect      api.cerebras.ai
-// @connect      openrouter.ai
-// @connect      api.mistral.ai
-// @connect      models.github.ai
-// @connect      localhost
-// @connect      127.0.0.1
-// @connect      *
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -191,7 +183,6 @@
       __publicField(this, "retryAfterMs");
       __publicField(this, "detail");
       __publicField(this, "model", "");
-      __publicField(this, "provider", "");
       this.name = "LLMError";
       this.kind = kind;
       this.status = opts.status ?? 0;
@@ -484,23 +475,24 @@
     if (/flash/.test(id)) return 1e3 + version * 10 - preview;
     return 0;
   }
-  var FIRST_TEXT_TIMEOUT_MS = { low: 3e4, medium: 75e3, high: 12e4 };
-  function thinkingConfig(model, level) {
+  var FIRST_TEXT_TIMEOUT_MS = 3e4;
+  var GEMINI_BASE = "https://generativelanguage.googleapis.com";
+  function thinkingConfig(model) {
     if (model.startsWith("gemma-")) return null;
     const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(model)?.[1] ?? 0);
-    if (version >= 3) return { thinkingLevel: level };
-    if (version >= 2.5) return { thinkingBudget: level === "low" ? 1024 : level === "medium" ? 4096 : 12e3 };
+    if (version >= 3) return { thinkingLevel: "low" };
+    if (version >= 2.5) return { thinkingBudget: 1024 };
     return null;
   }
   var GeminiProvider = class {
-    constructor(config) {
-      __publicField(this, "config", config);
+    constructor(apiKey) {
+      __publicField(this, "apiKey", apiKey);
     }
     get base() {
-      return (this.config.baseUrl || "https://generativelanguage.googleapis.com").replace(/\/+$/, "");
+      return GEMINI_BASE;
     }
     headers() {
-      return { "Content-Type": "application/json", "x-goog-api-key": this.config.apiKey.trim() };
+      return { "Content-Type": "application/json", "x-goog-api-key": this.apiKey.trim() };
     }
     async listModels(signal) {
       const res = await streamRequest({ url: `${this.base}/v1beta/models?pageSize=1000`, method: "GET", headers: this.headers(), signal, idleTimeoutMs: 2e4 });
@@ -523,7 +515,7 @@
     }
     async generateOnce(req, withThinking) {
       const gemma = req.model.startsWith("gemma-");
-      const thinking = withThinking ? thinkingConfig(req.model, req.thinking) : null;
+      const thinking = withThinking ? thinkingConfig(req.model) : null;
       const budget = typeof thinking?.thinkingBudget === "number" ? thinking.thinkingBudget : 0;
       const generationConfig = { maxOutputTokens: Math.min(65536, req.maxOutputTokens + budget) };
       if (thinking) generationConfig.thinkingConfig = thinking;
@@ -567,7 +559,7 @@ ${req.user}` : req.user }] }],
         headers: this.headers(),
         body: JSON.stringify(body),
         signal: req.signal,
-        firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS[req.thinking],
+        firstByteTimeoutMs: FIRST_TEXT_TIMEOUT_MS,
         idleTimeoutMs: 9e4,
         onText: (chunk) => {
           for (const payload of sse.feed(chunk)) handle(payload);
@@ -586,260 +578,19 @@ ${req.user}` : req.user }] }],
     }
   };
 
-  // src/llm/presets.ts
-  var PRESETS = [
-    {
-      id: "gemini",
-      kind: "gemini",
-      label: "Google Gemini",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      needsKey: true,
-      keyUrl: "https://aistudio.google.com/app/apikey",
-      hint: "無料枠あり。訳の質が最も安定。"
-    },
-    {
-      id: "groq",
-      kind: "openai",
-      label: "Groq",
-      baseUrl: "https://api.groq.com/openai/v1",
-      needsKey: true,
-      keyUrl: "https://console.groq.com/keys",
-      recommended: ["openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct-0905", "moonshotai/kimi-k2-instruct", "qwen/qwen3-32b", "llama-3.3-70b-versatile"],
-      hint: "無料枠あり。非常に速い。"
-    },
-    {
-      id: "cerebras",
-      kind: "openai",
-      label: "Cerebras",
-      baseUrl: "https://api.cerebras.ai/v1",
-      needsKey: true,
-      keyUrl: "https://cloud.cerebras.ai/",
-      recommended: ["gpt-oss-120b", "qwen-3-235b-a22b-instruct-2507", "llama-3.3-70b"],
-      hint: "無料枠あり。速い。"
-    },
-    {
-      id: "openrouter",
-      kind: "openai",
-      label: "OpenRouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      needsKey: true,
-      keyUrl: "https://openrouter.ai/keys",
-      hint: "「:free」付きモデルは無料（1日の回数は少なめ）。"
-    },
-    {
-      id: "mistral",
-      kind: "openai",
-      label: "Mistral",
-      baseUrl: "https://api.mistral.ai/v1",
-      needsKey: true,
-      keyUrl: "https://console.mistral.ai/api-keys",
-      recommended: ["mistral-medium-latest", "mistral-small-latest"],
-      hint: "無料の Experiment プランあり。"
-    },
-    {
-      id: "ollama",
-      kind: "openai",
-      label: "Ollama（ローカル）",
-      baseUrl: "http://localhost:11434/v1",
-      needsKey: false,
-      hint: "自分のPCで動かすモデル。回数制限なし。"
-    },
-    {
-      id: "custom",
-      kind: "openai",
-      label: "その他（OpenAI 互換）",
-      baseUrl: "",
-      needsKey: false,
-      hint: "OpenAI 互換 API のベース URL を指定。"
-    }
-  ];
-  function presetFor(id) {
-    return PRESETS.find((p) => p.id === id) ?? PRESETS[PRESETS.length - 1];
-  }
-
-  // src/llm/openai.ts
-  var ThinkFilter = class {
-    constructor() {
-      __publicField(this, "inside", false);
-      __publicField(this, "pending", "");
-    }
-    feed(chunk) {
-      let input = this.pending + chunk;
-      this.pending = "";
-      let out = "";
-      while (input) {
-        const tag = this.inside ? "</think>" : "<think>";
-        const at = input.indexOf(tag);
-        if (at >= 0) {
-          if (!this.inside) out += input.slice(0, at);
-          input = input.slice(at + tag.length);
-          this.inside = !this.inside;
-          continue;
-        }
-        let keep = 0;
-        for (let k = Math.min(tag.length - 1, input.length); k > 0; k -= 1) {
-          if (tag.startsWith(input.slice(-k))) {
-            keep = k;
-            break;
-          }
-        }
-        if (!this.inside) out += input.slice(0, input.length - keep);
-        this.pending = input.slice(input.length - keep);
-        input = "";
-      }
-      return out;
-    }
-    /** Emits a held-back partial tag once the stream has ended. */
-    flush() {
-      const rest = this.inside ? "" : this.pending;
-      this.pending = "";
-      return rest;
-    }
-  };
-  var OpenAICompatibleProvider = class {
-    constructor(config) {
-      __publicField(this, "config", config);
-    }
-    get base() {
-      return (this.config.baseUrl || presetFor(this.config.preset).baseUrl).replace(/\/+$/, "");
-    }
-    headers() {
-      const headers = { "Content-Type": "application/json" };
-      const key = this.config.apiKey.trim();
-      if (key) headers.Authorization = `Bearer ${key}`;
-      if (this.config.preset === "openrouter") {
-        headers["HTTP-Referer"] = "https://genius.com/";
-        headers["X-Title"] = "Lyric Lens";
-      }
-      return headers;
-    }
-    async listModels(signal) {
-      const res = await streamRequest({ url: `${this.base}/models`, method: "GET", headers: this.headers(), signal, idleTimeoutMs: 2e4 });
-      if (res.status < 200 || res.status >= 300) throw classifyHttpError(res.status, res.text, res.headers);
-      const data = JSON.parse(res.text);
-      const raw = data.data ?? data.models ?? [];
-      const preset = presetFor(this.config.preset);
-      const recommended = preset.recommended ?? [];
-      return raw.map((m) => {
-        const id = String(m.id ?? m.model ?? m.name ?? "");
-        let rank2 = 1;
-        const rec = recommended.findIndex((r) => id === r || id.endsWith(`/${r}`));
-        if (rec >= 0) rank2 = 100 - rec;
-        if (preset.id === "openrouter") rank2 = id.endsWith(":free") ? Math.max(rank2, 10) : 0;
-        if (/whisper|tts|embed|guard|moderation|image|vision-only|audio|rerank/i.test(id)) rank2 = -1;
-        return { id, label: m.name || id, rank: rank2 };
-      }).filter((m) => m.id && m.rank >= 0).sort((a, b) => b.rank - a.rank || a.id.localeCompare(b.id));
-    }
-    async generate(req) {
-      let completionTokens = this.config.preset === "openai" || this.config.preset === "groq";
-      let flippedTokens = false;
-      let reasoning = /gpt-oss/i.test(req.model) && (this.config.preset === "groq" || this.config.preset === "cerebras");
-      for (; ; ) {
-        try {
-          return await this.generateOnce(req, completionTokens, reasoning);
-        } catch (error) {
-          if (!(error instanceof LLMError) || error.kind !== "bad-request") throw error;
-          if (!flippedTokens && /max_(completion_)?tokens/i.test(error.message)) {
-            completionTokens = !completionTokens;
-            flippedTokens = true;
-            continue;
-          }
-          if (reasoning && /reasoning/i.test(error.message)) {
-            reasoning = false;
-            continue;
-          }
-          throw error;
-        }
-      }
-    }
-    async generateOnce(req, completionTokens, reasoning) {
-      const body = {
-        model: req.model,
-        messages: [
-          { role: "system", content: req.system },
-          { role: "user", content: req.user }
-        ],
-        stream: true,
-        temperature: 0.6
-      };
-      body[completionTokens ? "max_completion_tokens" : "max_tokens"] = req.maxOutputTokens;
-      if (reasoning) body.reasoning_effort = req.thinking;
-      const sse = new SseParser();
-      const think = new ThinkFilter();
-      let text2 = "";
-      let finishReason = "";
-      let streamError = null;
-      const handle = (payload) => {
-        if (payload.trim() === "[DONE]") return;
-        let data;
-        try {
-          data = JSON.parse(payload);
-        } catch {
-          return;
-        }
-        if (data.error) {
-          streamError = classifyHttpError(Number(data.error.code) || 500, JSON.stringify(data));
-          return;
-        }
-        const choice = data.choices?.[0];
-        const content = choice?.delta?.content;
-        if (content) {
-          const visible = think.feed(content);
-          if (visible) {
-            text2 += visible;
-            req.onText(visible);
-          }
-        }
-        if (choice?.finish_reason) finishReason = choice.finish_reason;
-      };
-      const res = await streamRequest({
-        url: `${this.base}/chat/completions`,
-        headers: this.headers(),
-        body: JSON.stringify(body),
-        signal: req.signal,
-        firstByteTimeoutMs: 12e4,
-        idleTimeoutMs: 9e4,
-        onText: (chunk) => {
-          for (const payload of sse.feed(chunk)) handle(payload);
-        }
-      });
-      for (const payload of sse.flush()) handle(payload);
-      const tail = think.flush();
-      if (tail) {
-        text2 += tail;
-        req.onText(tail);
-      }
-      if (res.status < 200 || res.status >= 300) throw classifyHttpError(res.status, res.text, res.headers);
-      if (streamError) throw streamError;
-      if (!text2 && finishReason === "content_filter") throw new LLMError("blocked", "モデルが生成を止めました（content_filter）", { status: 200 });
-      if (!text2) throw new LLMError("empty", "モデルから内容が返りませんでした。", { status: 200, detail: res.text.slice(0, 2e3) });
-      const finish = finishReason === "stop" ? "stop" : finishReason === "length" ? "length" : finishReason === "content_filter" ? "blocked" : "unknown";
-      return { finish, finishDetail: finishReason, text: text2 };
-    }
-  };
-
   // src/llm/chain.ts
   var COOLDOWN_KEY = "ll3:cooldowns";
   var MODELS_KEY = "ll3:models:";
   var MODEL_LIST_TTL = 24 * 60 * 60 * 1e3;
   var MAX_INLINE_WAIT_MS = 3e4;
-  function createProvider(config) {
-    return config.kind === "gemini" ? new GeminiProvider(config) : new OpenAICompatibleProvider(config);
-  }
-  function isUsable(config) {
-    if (!config.enabled) return false;
-    const preset = presetFor(config.preset);
-    if (preset.needsKey && !config.apiKey.trim()) return false;
-    if (config.kind === "openai" && !(config.baseUrl || preset.baseUrl)) return false;
-    return true;
-  }
-  function keyTag(config) {
+  function keyTag(apiKey) {
     let h2 = 0;
-    for (const ch of config.apiKey.trim()) h2 = Math.imul(h2, 31) + ch.charCodeAt(0) | 0;
+    for (const ch of apiKey.trim()) h2 = Math.imul(h2, 31) + ch.charCodeAt(0) | 0;
     return (h2 >>> 0).toString(36);
   }
-  function cooldownId(config, model) {
-    return `${config.preset}:${config.baseUrl}:${keyTag(config)}:${model}`;
+  var ID_PREFIX = `gemini:${GEMINI_BASE}:`;
+  function cooldownId(apiKey, model) {
+    return `${ID_PREFIX}${keyTag(apiKey)}:${model}`;
   }
   function nextPacificMidnight(now = Date.now()) {
     const parts = Object.fromEntries(
@@ -848,16 +599,12 @@ ${req.user}` : req.user }] }],
     const elapsed = Number(parts.hour) % 24 * 3600 + Number(parts.minute) * 60 + Number(parts.second);
     return now + (86400 - elapsed) * 1e3 + 6e4;
   }
-  function nextUtcMidnight(now = Date.now()) {
-    const d = new Date(now);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 6e4;
-  }
-  function cooldownFor(config, error) {
+  function cooldownFor(error) {
     const now = Date.now();
     switch (error.kind) {
       case "quota":
         if (error.retryAfterMs > 6e4) return now + error.retryAfterMs;
-        return config.kind === "gemini" ? nextPacificMidnight(now) : nextUtcMidnight(now);
+        return nextPacificMidnight(now);
       case "rate":
         return now + Math.max(error.retryAfterMs, 6e4);
       case "overloaded":
@@ -893,10 +640,10 @@ ${req.user}` : req.user }] }],
       return {};
     }
   }
-  async function noteHealth(config, model, outcome) {
+  async function noteHealth(apiKey, model, outcome) {
     try {
       const table = await loadHealth();
-      const id = cooldownId(config, model);
+      const id = cooldownId(apiKey, model);
       const now = Date.now();
       const entry = { ...table[id] };
       if (outcome === "bad") {
@@ -932,62 +679,73 @@ ${req.user}` : req.user }] }],
       return a.index - b.index;
     }).map((m) => m.id);
   }
-  async function orderedByHealth(config, ids) {
+  async function orderedByHealth(apiKey, ids) {
     const table = await loadHealth();
-    return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(config, id)]])));
+    return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(apiKey, id)]])));
   }
   var BAD_KEY_PREFIX = "ll3:badkey:";
-  async function keyStatus(config) {
-    if (!config.apiKey.trim()) return { kind: "missing" };
-    if (await getJSON(BAD_KEY_PREFIX + keyTag(config), false)) return { kind: "bad" };
-    const a = await availability([config]);
+  async function keyStatus(apiKey) {
+    if (!apiKey.trim()) return { kind: "missing" };
+    if (await getJSON(BAD_KEY_PREFIX + keyTag(apiKey), false)) return { kind: "bad" };
+    const a = await availability(apiKey);
     return a.ok ? { kind: "ok" } : { kind: "resting", until: a.until };
   }
-  async function markKey(config, bad) {
-    if (bad) await setJSON(BAD_KEY_PREFIX + keyTag(config), true);
-    else await setJSON(BAD_KEY_PREFIX + keyTag(config), false);
+  async function markKey(apiKey, bad) {
+    await setJSON(BAD_KEY_PREFIX + keyTag(apiKey), bad);
   }
-  async function availability(configs) {
-    const usable = configs.filter(isUsable);
-    if (!usable.length) return { ok: false, until: 0 };
+  async function availability(apiKey) {
+    if (!apiKey.trim()) return { ok: false, until: 0 };
     const cooldowns = await loadCooldowns();
+    const cached2 = await getJSON(MODELS_KEY + cooldownId(apiKey, ""), null);
+    const ids = cached2?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI;
+    if (!ids.length) return { ok: true, until: 0 };
     let earliest = Infinity;
-    for (const config of usable) {
-      if (config.model) return { ok: true, until: 0 };
-      const cached2 = await getJSON(MODELS_KEY + cooldownId(config, ""), null);
-      const ids = cached2?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? (config.kind === "gemini" ? FALLBACK_GEMINI : []);
-      if (!ids.length) return { ok: true, until: 0 };
-      for (const id of config.kind === "gemini" ? ids.slice(0, 10) : ids.slice(0, 3)) {
-        const cd = cooldowns[cooldownId(config, id)];
-        if (!cd || cd.reason === "overloaded" || cd.reason === "timeout" || cd.reason === "rate") return { ok: true, until: 0 };
-        earliest = Math.min(earliest, cd.until);
-      }
+    for (const id of ids.slice(0, 10)) {
+      const cd = cooldowns[cooldownId(apiKey, id)];
+      if (!cd || cd.reason === "overloaded" || cd.reason === "timeout" || cd.reason === "rate") return { ok: true, until: 0 };
+      earliest = Math.min(earliest, cd.until);
     }
     return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
   }
-  async function modelsFor(provider, opts = {}) {
-    const key = MODELS_KEY + cooldownId(provider.config, "");
+  async function modelsFor(apiKey, opts = {}) {
+    const key = MODELS_KEY + cooldownId(apiKey, "");
     if (!opts.refresh) {
       const cached2 = await getJSON(key, null);
       if (cached2 && Date.now() - cached2.at < MODEL_LIST_TTL && cached2.models.length) return cached2.models;
     }
-    const models = await provider.listModels(opts.signal);
+    const models = await new GeminiProvider(apiKey).listModels(opts.signal);
     await setJSON(key, { at: Date.now(), models });
     return models;
   }
   var FALLBACK_GEMINI = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
-  async function candidateModels(provider, signal) {
-    const { config } = provider;
-    if (config.model) return [config.model];
+  async function candidateModels(apiKey, signal) {
     try {
-      const models = await modelsFor(provider, { signal });
+      const models = await modelsFor(apiKey, { signal });
       const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-      if (auto.length) return config.kind === "gemini" ? await orderedByHealth(config, auto.slice(0, 10)) : auto.slice(0, 3);
+      if (auto.length) return await orderedByHealth(apiKey, auto.slice(0, 10));
     } catch (error) {
-      if (!(error instanceof LLMError) || error.kind === "auth" || error.kind === "aborted" || config.kind !== "gemini") throw error;
+      if (!(error instanceof LLMError) || error.kind === "auth" || error.kind === "aborted") throw error;
     }
-    if (config.kind === "gemini") return orderedByHealth(config, FALLBACK_GEMINI);
-    throw new LLMError("not-found", "使えるモデルが見つからない。設定でモデルを指定して。");
+    return orderedByHealth(apiKey, FALLBACK_GEMINI);
+  }
+  async function cleanOtherProviders(apiKey) {
+    try {
+      const keep = ID_PREFIX;
+      for (const k of await listKeys()) {
+        if (k.startsWith(MODELS_KEY) && !k.startsWith(MODELS_KEY + keep)) await remove(k);
+        else if (k.startsWith(BAD_KEY_PREFIX) && k !== BAD_KEY_PREFIX + keyTag(apiKey)) await remove(k);
+      }
+      for (const key of [COOLDOWN_KEY, HEALTH_KEY]) {
+        const table = await getJSON(key, null);
+        if (!table || typeof table !== "object" || Array.isArray(table)) continue;
+        const ids = Object.keys(table);
+        const foreign = ids.filter((id) => !id.startsWith(keep));
+        if (!foreign.length) continue;
+        for (const id of foreign) delete table[id];
+        await setJSON(key, table);
+      }
+    } catch {
+    }
   }
   var PRIORITY = ["auth", "rate", "overloaded", "blocked", "timeout", "network", "quota", "bad-request", "not-found", "empty", "unknown"];
   var BUSY_PASS_WAITS_MS = [1e4, 25e3];
@@ -1014,31 +772,28 @@ ${req.user}` : req.user }] }],
       signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
-  async function generateWithFallback(configs, request, options = {}) {
-    const { signal, onStatus } = options;
-    const usable = configs.filter(isUsable);
-    if (!usable.length) throw new LLMError("auth", "APIキーが設定されていません。");
+  async function generateWithFallback(apiKey, request, options = {}) {
+    const { signal, onStatus, onlyModels } = options;
+    if (!apiKey.trim()) throw new LLMError("auth", "APIキーが設定されていません。");
     const cooldowns = await loadCooldowns();
     const errors = [];
-    const modelLists = /* @__PURE__ */ new Map();
-    const badProviders = /* @__PURE__ */ new Set();
+    let models;
     let skippedForCooldown = 0;
     const busyNow = /* @__PURE__ */ new Set();
-    const remember = async (config, model, error) => {
-      if (error.kind === "overloaded" || error.kind === "timeout") await noteHealth(config, model, "bad");
-      const until = cooldownFor(config, error);
+    const provider = new GeminiProvider(apiKey);
+    const remember = async (model, error) => {
+      if (error.kind === "overloaded" || error.kind === "timeout") await noteHealth(apiKey, model, "bad");
+      const until = cooldownFor(error);
       if (!until) return;
-      cooldowns[cooldownId(config, model)] = { until, reason: error.kind };
+      cooldowns[cooldownId(apiKey, model)] = { until, reason: error.kind };
       await setJSON(COOLDOWN_KEY, cooldowns);
     };
     const fromCooldown = (base) => {
       const now = Date.now();
       let best = null;
-      for (const config of usable) {
-        for (const m of modelLists.get(config.id) ?? []) {
-          const cd = cooldowns[cooldownId(config, m)];
-          if (cd && cd.reason !== "not-found" && cd.until > now && (!best || cd.until < best.until)) best = cd;
-        }
+      for (const m of models ?? []) {
+        const cd = cooldowns[cooldownId(apiKey, m)];
+        if (cd && cd.reason !== "not-found" && cd.until > now && (!best || cd.until < best.until)) best = cd;
       }
       const message = base?.message ?? "使えるモデルがすべて上限に達しています。";
       if (!best) return base ?? new LLMError("quota", message, { status: 429 });
@@ -1050,13 +805,11 @@ ${req.user}` : req.user }] }],
         retryAfterMs: kind === "quota" ? Math.max(60001, wait) : wait,
         detail: base?.detail
       });
-      if (base) {
-        error.model = base.model;
-        error.provider = base.provider;
-      }
+      if (base) error.model = base.model;
       return error;
     };
-    for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length; pass += 1) {
+    let keyRejected = false;
+    for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
       if (pass > 0) {
         const wait = BUSY_PASS_WAITS_MS[pass - 1];
         for (let left = Math.ceil(wait / 1e3); left > 0; left -= 1) {
@@ -1065,107 +818,97 @@ ${req.user}` : req.user }] }],
         }
       }
       const passErrors = [];
-      for (const config of usable) {
-        if (badProviders.has(config.id)) continue;
-        const provider = createProvider(config);
-        const label = presetFor(config.preset).label;
-        let models = modelLists.get(config.id);
-        if (!models) {
+      if (!models) {
+        try {
+          models = onlyModels?.length ? onlyModels : await candidateModels(apiKey, signal);
+        } catch (error) {
+          if (!(error instanceof LLMError)) throw error;
+          if (error.kind === "aborted") throw error;
+          errors.push(error);
+          if (error.kind === "auth") await markKey(apiKey, true);
+          break;
+        }
+      }
+      const order = [];
+      const busyLast = [];
+      for (const model of models) {
+        if (pass > 0) {
+          if (busyNow.has(cooldownId(apiKey, model)) && order.length < 2) order.push(model);
+          continue;
+        }
+        const cd = cooldowns[cooldownId(apiKey, model)];
+        if (cd && cd.until > Date.now() && !onlyModels?.length) {
+          if (cd.reason === "overloaded") busyLast.push(model);
+          else skippedForCooldown += 1;
+          continue;
+        }
+        order.push(model);
+      }
+      order.push(...busyLast);
+      let blocked = 0;
+      for (const model of order) {
+        let error = null;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          onStatus?.(`Google Gemini · ${shortModel(model)}`);
+          options.onAttempt?.();
+          let produced = false;
+          const startedAt = Date.now();
+          let firstTextMs = null;
           try {
-            models = await candidateModels(provider, signal);
-          } catch (error) {
-            if (!(error instanceof LLMError)) throw error;
-            if (error.kind === "aborted") throw error;
-            error.provider = label;
-            passErrors.push(error);
-            badProviders.add(config.id);
-            if (error.kind === "auth") await markKey(config, true);
-            continue;
-          }
-          modelLists.set(config.id, models);
-        }
-        const order = [];
-        const busyLast = [];
-        for (const model of models) {
-          if (pass > 0) {
-            if (busyNow.has(cooldownId(config, model)) && order.length < 2) order.push(model);
-            continue;
-          }
-          const cd = cooldowns[cooldownId(config, model)];
-          if (cd && cd.until > Date.now() && !config.model) {
-            if (cd.reason === "overloaded") busyLast.push(model);
-            else skippedForCooldown += 1;
-            continue;
-          }
-          order.push(model);
-        }
-        order.push(...busyLast);
-        let blocked = 0;
-        for (const model of order) {
-          let error = null;
-          for (let attempt = 1; attempt <= 2; attempt += 1) {
-            onStatus?.(`${label} · ${shortModel(model)}`);
-            options.onAttempt?.();
-            let produced = false;
-            const startedAt = Date.now();
-            let firstTextMs = null;
-            try {
-              const result = await provider.generate({
-                ...request,
-                model,
-                signal,
-                onText: (chunk) => {
-                  if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
-                  const useful = request.onText(chunk);
-                  if (useful === void 0 || useful) produced = true;
-                }
-              });
-              const id = cooldownId(config, model);
-              if (cooldowns[id]) {
-                delete cooldowns[id];
-                await setJSON(COOLDOWN_KEY, cooldowns);
+            const result = await provider.generate({
+              ...request,
+              model,
+              signal,
+              onText: (chunk) => {
+                if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
+                const useful = request.onText(chunk);
+                if (useful === void 0 || useful) produced = true;
               }
-              await noteHealth(config, model, { ms: firstTextMs ?? Date.now() - startedAt });
-              return { ...result, model, provider: label };
-            } catch (raw) {
-              if (!(raw instanceof LLMError)) throw raw;
-              if (raw.kind === "aborted") throw raw;
-              error = raw;
-              error.model = model;
-              error.provider = label;
-              if (produced) {
-                await remember(config, model, error);
-                return { finish: "unknown", finishDetail: error.kind, text: "", model, provider: label, error };
-              }
-              if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
-                for (let left = Math.ceil((error.retryAfterMs + 500) / 1e3); left > 0; left -= 1) {
-                  onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
-                  await sleep(1e3, signal);
-                }
-                continue;
-              }
-              if (error.kind === "network" && attempt === 1) {
-                onStatus?.(`${shortModel(model)} · 再接続しています`);
-                await sleep(2e3, signal);
-                continue;
-              }
-              break;
+            });
+            const id = cooldownId(apiKey, model);
+            if (cooldowns[id]) {
+              delete cooldowns[id];
+              await setJSON(COOLDOWN_KEY, cooldowns);
             }
-          }
-          if (!error) continue;
-          passErrors.push(error);
-          await remember(config, model, error);
-          if (error.kind === "overloaded") busyNow.add(cooldownId(config, model));
-          else busyNow.delete(cooldownId(config, model));
-          if (error.kind === "auth") {
-            badProviders.add(config.id);
-            await markKey(config, true);
+            await noteHealth(apiKey, model, { ms: firstTextMs ?? Date.now() - startedAt });
+            return { ...result, model };
+          } catch (raw) {
+            if (!(raw instanceof LLMError)) throw raw;
+            if (raw.kind === "aborted") throw raw;
+            error = raw;
+            error.model = model;
+            if (produced) {
+              await remember(model, error);
+              return { finish: "unknown", finishDetail: error.kind, text: "", model, error };
+            }
+            if (error.kind === "rate" && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
+              for (let left = Math.ceil((error.retryAfterMs + 500) / 1e3); left > 0; left -= 1) {
+                onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
+                await sleep(1e3, signal);
+              }
+              continue;
+            }
+            if (error.kind === "network" && attempt === 1) {
+              onStatus?.(`${shortModel(model)} · 再接続しています`);
+              await sleep(2e3, signal);
+              continue;
+            }
             break;
           }
-          if (error.kind === "blocked" && ++blocked >= 2) break;
-          const reason = error.kind === "overloaded" ? "混雑" : error.kind === "timeout" ? "応答なし" : error.kind === "quota" ? "今日の上限" : error.kind === "rate" ? "回数制限" : "エラー";
-          onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
         }
+        if (!error) continue;
+        passErrors.push(error);
+        await remember(model, error);
+        if (error.kind === "overloaded") busyNow.add(cooldownId(apiKey, model));
+        else busyNow.delete(cooldownId(apiKey, model));
+        if (error.kind === "auth") {
+          keyRejected = true;
+          await markKey(apiKey, true);
+          break;
+        }
+        if (error.kind === "blocked" && ++blocked >= 2) break;
+        const reason = error.kind === "overloaded" ? "混雑" : error.kind === "timeout" ? "応答なし" : error.kind === "quota" ? "今日の上限" : error.kind === "rate" ? "回数制限" : "エラー";
+        onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
       }
       errors.push(...passErrors);
       const busy = busyNow.size > 0 && passErrors.every((e) => ["overloaded", "not-found", "timeout", "network", "quota"].includes(e.kind));
@@ -1682,16 +1425,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     let stop;
     let finished = false;
     try {
-      const result = await generateWithFallback(options.providers, {
+      const result = await generateWithFallback(options.apiKey, {
         system: prompt.system,
         user: prompt.user,
         maxOutputTokens: outputBudget(prompt.expectedChars),
-        thinking: options.thinking,
         onText: (chunk) => {
           if (builder.apply(parser.feed(chunk))) options.onUpdate?.(record);
           return builder.added > 0;
         }
-      }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset() });
+      }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels });
       if (builder.apply(parser.flush())) options.onUpdate?.(record);
       model = result.model;
       if (result.error) stop = stopFromError(result.error);
@@ -1984,25 +1726,24 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   }
 
   // src/store/settings.ts
-  var SERVICE_ORDER = ["gemini", "groq", "openrouter"];
   var KEY2 = "ll3:settings";
   var LEGACY_GEMINI_KEY = "gemini_api_key";
-  function providerFor(presetId, apiKey = "") {
-    const preset = presetFor(presetId);
-    return { id: preset.id, kind: preset.kind, preset: preset.id, baseUrl: preset.baseUrl, apiKey, model: "", enabled: true };
-  }
   function defaultSettings() {
-    return { providers: SERVICE_ORDER.map((id) => providerFor(id)), thinking: "low", hideTranslation: false };
+    return { apiKey: "", hideTranslation: false };
   }
   function sanitize(raw) {
     const base = defaultSettings();
     if (!raw || typeof raw !== "object") return base;
-    const stored = Array.isArray(raw.providers) ? raw.providers : [];
-    const keyFor = (preset) => String(stored.find((p) => p && p.preset === preset && p.apiKey)?.apiKey ?? "").trim();
+    const r = raw;
+    let apiKey = typeof r.apiKey === "string" ? r.apiKey : "";
+    if (!apiKey && Array.isArray(r.providers)) {
+      const gemini = r.providers.find((p) => p && typeof p === "object" && (p.preset === "gemini" || p.kind === "gemini"));
+      const key = gemini?.apiKey;
+      if (typeof key === "string") apiKey = key;
+    }
     return {
-      providers: SERVICE_ORDER.map((id) => providerFor(id, keyFor(id))),
-      thinking: raw.thinking === "medium" || raw.thinking === "high" ? raw.thinking : "low",
-      hideTranslation: typeof raw.hideTranslation === "boolean" ? raw.hideTranslation : raw.showTranslation === false
+      apiKey: apiKey.trim(),
+      hideTranslation: typeof r.hideTranslation === "boolean" ? r.hideTranslation : r.showTranslation === false
     };
   }
   var cached = defaultSettings();
@@ -2013,7 +1754,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     if (!stored) {
       const legacy = (await getRaw(LEGACY_GEMINI_KEY))?.replace(/^"|"$/g, "").trim();
       if (legacy) {
-        settings = { ...settings, providers: settings.providers.map((p) => p.preset === "gemini" ? { ...p, apiKey: legacy } : p) };
+        settings = { ...settings, apiKey: legacy };
         await setJSON(KEY2, settings);
       }
     }
@@ -2033,15 +1774,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     await write(change(fresh));
     return cached;
   }
-  async function setProviderKey(preset, apiKey) {
-    return updateSettings((s) => ({ ...s, providers: s.providers.map((p) => p.preset === preset ? { ...p, apiKey: apiKey.trim() } : p) }));
+  async function setApiKey(apiKey) {
+    return updateSettings((s) => ({ ...s, apiKey: apiKey.trim() }));
   }
   function onSettings(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);
   }
-  function hasAnyKey(settings) {
-    return settings.providers.some((p) => p.enabled && p.apiKey.trim());
+  function hasKey(settings) {
+    return Boolean(settings.apiKey.trim());
   }
 
   // src/store/songs.ts
@@ -2700,441 +2441,438 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   };
 
   // src/ui/sheet.css
-  var sheet_default = `/*
- * Lyric Lens sheet (first run / settings). Lives inside a shadow root, so none of this can
- * leak into Genius and none of Genius' CSS reaches in. Tokens follow docs/DESIGN.md section 6.
- */
-
-:host { all: initial; }
-
-*, *::before, *::after { box-sizing: border-box; }
-
-.root {
-  --sheet-bg: #FFFFFF;
-  --sheet-ink: #1A1C20;
-  --accent: #B0503A;
-  --on-accent: #FFFFFF;
-  --label: #6E7581;
-  --rule: #D9DCE1;
-  --note-bg: #F7F3EE;
-  --ok: #3F7D5A;
-  --rest: #A9761B;
-  --shadow: 0 10px 32px rgba(0, 0, 0, .18);
-
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  color-scheme: light;
-  color: var(--sheet-ink);
-  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.6;
-  font-style: normal;
-  text-align: left;
-  -webkit-text-size-adjust: 100%;
-
-  /* Japanese typesetting (section 6) */
-  line-break: strict;
-  word-break: normal;
-  overflow-wrap: anywhere;
-  font-feature-settings: "palt" 1;
-  letter-spacing: .02em;
-  text-spacing-trim: trim-start;
-  hanging-punctuation: none;
-}
-
-@supports (word-break: auto-phrase) {
-  .root { word-break: auto-phrase; }
-}
-
-.root[data-theme="dark"] {
-  --sheet-bg: #1C1E22;
-  --sheet-ink: #E6E8EB;
-  --accent: #E3876C;
-  --on-accent: #1C1E22;
-  --label: #9AA1AC;
-  --rule: #3A3F46;
-  --note-bg: #23262B;
-  --ok: #7FC29B;
-  --rest: #E0B45C;
-  --shadow: 0 10px 32px rgba(0, 0, 0, .5);
-  color-scheme: dark;
-}
-
-/* ---------- layout ---------- */
-
-.backdrop {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: transparent;
-}
-
-.panel {
-  position: fixed;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--sheet-bg);
-  color: var(--sheet-ink);
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  box-shadow: var(--shadow);
-  outline: none;
-  animation: ll-sheet-fade 180ms ease-out both;
-}
-
-/* Desktop: 400px panel. JS sets left/top (or bottom) and max-height when anchored. */
-.root[data-layout="desktop"] .panel {
-  width: 400px;
-  max-width: calc(100vw - 16px);
-  max-height: 70vh;
-  top: 8px;
-  left: 8px;
-}
-
-.root[data-layout="desktop"][data-place="center"] .panel {
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-/* Phone: bottom sheet over a dimmed backdrop. */
-.root[data-layout="phone"] .backdrop {
-  background: rgba(0, 0, 0, .32);
-  animation: ll-sheet-fade 180ms ease-out both;
-}
-
-.root[data-layout="phone"] .panel {
-  left: 0;
-  right: 0;
-  bottom: 0;
-  width: min(100%, 560px);
-  margin: 0 auto;
-  max-height: 85vh;
-  max-height: 85dvh;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-bottom: 0;
-  border-radius: 14px 14px 0 0;
-  animation-name: ll-sheet-rise;
-}
-
-@keyframes ll-sheet-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes ll-sheet-rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel, .backdrop { animation: none !important; }
-}
-
-.head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px 8px 20px;
-  border-bottom: 1px solid var(--rule);
-}
-
-.title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  padding: 14px 20px 18px;
-}
-
-.root[data-layout="phone"] .body { padding-bottom: 22px; }
-
-/* ---------- text ---------- */
-
-.section + .section {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--rule);
-}
-
-.section-title {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: .04em;
-}
-
-.section-lead {
-  margin: 0 0 6px;
-  color: var(--label);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.line {
-  margin: 0 0 10px;
-  color: var(--label);
-}
-
-.line:last-child { margin-bottom: 0; }
-
-.note {
-  margin: 10px 0 14px;
-  color: var(--label);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.msg {
-  margin: 0;
-  color: var(--label);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.msg:not(:empty) { margin-top: 6px; }
-.msg[data-kind="error"] { color: var(--accent); }
-
-/* ---------- first run ---------- */
-
-.steps {
-  list-style: none;
-  margin: 0 0 14px;
-  padding: 0;
-  counter-reset: step;
-}
-
-.steps li {
-  position: relative;
-  margin: 0 0 10px;
-  padding-left: 30px;
-  counter-increment: step;
-}
-
-.steps li::before {
-  content: counter(step);
-  position: absolute;
-  left: 0;
-  top: 2px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--note-bg);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 20px;
-  text-align: center;
-}
-
-.steps .link { display: block; margin-top: 2px; }
-
-/* ---------- controls ---------- */
-
-.btn {
-  appearance: none;
-  -webkit-appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-weight: 600;
-  letter-spacing: inherit;
-  font-feature-settings: inherit;
-  line-height: 1.3;
-  text-align: center;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.btn[data-v="outline"] { border-color: var(--accent); }
-
-.btn[data-v="solid"] {
-  background: var(--accent);
-  color: var(--on-accent);
-  padding: 8px 16px;
-}
-
-.btn[data-v="close"] { flex: none; }
-
-.btn:disabled {
-  opacity: .5;
-  cursor: default;
-}
-
-@media (hover: hover) {
-  .btn[data-v="text"]:hover:not(:disabled),
-  .btn[data-v="close"]:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
-  .btn[data-v="outline"]:hover:not(:disabled) { background: var(--note-bg); }
-  .btn[data-v="solid"]:hover:not(:disabled) { filter: brightness(1.08); }
-}
-
-.link {
-  display: inline-block;
-  padding: 6px 0;
-  color: var(--accent);
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-
-.input {
-  flex: 1 1 auto;
-  min-width: 0;
-  width: 100%;
-  min-height: 36px;
-  margin: 0;
-  padding: 7px 10px;
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: var(--sheet-bg);
-  color: var(--sheet-ink);
-  font: inherit;
-  letter-spacing: normal;
-  font-feature-settings: normal;
-}
-
-.input::placeholder { color: var(--label); opacity: 1; }
-.input:focus { border-color: var(--accent); }
-.input[aria-invalid="true"] { border-color: var(--accent); }
-.input:disabled { opacity: .6; }
-
-.btn:focus-visible,
-.link:focus-visible,
-.input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.actions[data-stack="true"] { margin-top: 4px; }
-
-.inline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* The key field and mask absorb the remaining width; a button is never squeezed or broken inside a word. */
-.inline > .btn { flex: none; white-space: nowrap; }
-
-/* ---------- services ---------- */
-
-.service { padding: 10px 0; }
-.service + .service { border-top: 1px solid var(--rule); }
-/* the row the app pointed to (focusService): the free service that would unblock the reader */
-.service[data-focus="true"] { margin: 0 -10px; padding: 10px; border-radius: 8px; background: var(--note-bg); box-shadow: inset 2px 0 0 var(--accent); }
-.service[data-focus="true"] + .service { border-top-color: transparent; }
-
-.service-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--rule);
-}
-
-.dot[data-s="ok"] { background: var(--ok); }
-.dot[data-s="missing"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--label); }
-.dot[data-s="resting"] { background: var(--rest); }
-.dot[data-s="bad"] { background: var(--accent); }
-
-.service-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-weight: 600;
-}
-
-.status {
-  flex: 0 1 auto;
-  color: var(--label);
-  font-size: 12.5px;
-  text-align: right;
-}
-
-.controls { margin-top: 6px; }
-
-.mask {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--label);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: .08em;
-  font-feature-settings: normal;
-}
-
-.service .link { font-size: 12.5px; }
-
-/* ---------- inline confirm ---------- */
-
-.confirm {
-  margin-top: 8px;
-  padding: 8px 12px;
-  border-left: 2px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  background: var(--note-bg);
-}
-
-.confirm-text { margin: 0 0 6px; }
-
-/* ---------- phone ---------- */
-
-.root[data-layout="phone"] .btn,
-.root[data-layout="phone"] .input { min-height: 44px; }
-
-.root[data-layout="phone"] .btn { min-width: 44px; }
-
-.root[data-layout="phone"] .input { font-size: 16px; }
-
-.root[data-layout="phone"] .link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-}
-
-.root[data-layout="phone"] .steps .link { display: flex; }
-
-.root[data-layout="phone"] .actions[data-stack="true"] {
-  flex-direction: column;
-  align-items: stretch;
-}
+  var sheet_default = `/*\r
+ * Lyric Lens sheet (first run / settings). Lives inside a shadow root, so none of this can\r
+ * leak into Genius and none of Genius' CSS reaches in. Tokens follow docs/DESIGN.md section 6.\r
+ */\r
+\r
+:host { all: initial; }\r
+\r
+*, *::before, *::after { box-sizing: border-box; }\r
+\r
+.root {\r
+  --sheet-bg: #FFFFFF;\r
+  --sheet-ink: #1A1C20;\r
+  --accent: #B0503A;\r
+  --on-accent: #FFFFFF;\r
+  --label: #6E7581;\r
+  --rule: #D9DCE1;\r
+  --note-bg: #F7F3EE;\r
+  --ok: #3F7D5A;\r
+  --rest: #A9761B;\r
+  --shadow: 0 10px 32px rgba(0, 0, 0, .18);\r
+\r
+  position: absolute;\r
+  top: 0;\r
+  left: 0;\r
+  right: 0;\r
+  bottom: 0;\r
+  color-scheme: light;\r
+  color: var(--sheet-ink);\r
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;\r
+  font-size: 14px;\r
+  font-weight: 400;\r
+  line-height: 1.6;\r
+  font-style: normal;\r
+  text-align: left;\r
+  -webkit-text-size-adjust: 100%;\r
+\r
+  /* Japanese typesetting (section 6) */\r
+  line-break: strict;\r
+  word-break: normal;\r
+  overflow-wrap: anywhere;\r
+  font-feature-settings: "palt" 1;\r
+  letter-spacing: .02em;\r
+  text-spacing-trim: trim-start;\r
+  hanging-punctuation: none;\r
+}\r
+\r
+@supports (word-break: auto-phrase) {\r
+  .root { word-break: auto-phrase; }\r
+}\r
+\r
+.root[data-theme="dark"] {\r
+  --sheet-bg: #1C1E22;\r
+  --sheet-ink: #E6E8EB;\r
+  --accent: #E3876C;\r
+  --on-accent: #1C1E22;\r
+  --label: #9AA1AC;\r
+  --rule: #3A3F46;\r
+  --note-bg: #23262B;\r
+  --ok: #7FC29B;\r
+  --rest: #E0B45C;\r
+  --shadow: 0 10px 32px rgba(0, 0, 0, .5);\r
+  color-scheme: dark;\r
+}\r
+\r
+/* ---------- layout ---------- */\r
+\r
+.backdrop {\r
+  position: absolute;\r
+  top: 0;\r
+  left: 0;\r
+  right: 0;\r
+  bottom: 0;\r
+  background: transparent;\r
+}\r
+\r
+.panel {\r
+  position: fixed;\r
+  display: flex;\r
+  flex-direction: column;\r
+  overflow: hidden;\r
+  background: var(--sheet-bg);\r
+  color: var(--sheet-ink);\r
+  border: 1px solid var(--rule);\r
+  border-radius: 10px;\r
+  box-shadow: var(--shadow);\r
+  outline: none;\r
+  animation: ll-sheet-fade 180ms ease-out both;\r
+}\r
+\r
+/* Desktop: 400px panel. JS sets left/top (or bottom) and max-height when anchored. */\r
+.root[data-layout="desktop"] .panel {\r
+  width: 400px;\r
+  max-width: calc(100vw - 16px);\r
+  max-height: 70vh;\r
+  top: 8px;\r
+  left: 8px;\r
+}\r
+\r
+.root[data-layout="desktop"][data-place="center"] .panel {\r
+  top: 50%;\r
+  left: 50%;\r
+  transform: translate(-50%, -50%);\r
+}\r
+\r
+/* Phone: bottom sheet over a dimmed backdrop. */\r
+.root[data-layout="phone"] .backdrop {\r
+  background: rgba(0, 0, 0, .32);\r
+  animation: ll-sheet-fade 180ms ease-out both;\r
+}\r
+\r
+.root[data-layout="phone"] .panel {\r
+  left: 0;\r
+  right: 0;\r
+  bottom: 0;\r
+  width: min(100%, 560px);\r
+  margin: 0 auto;\r
+  max-height: 85vh;\r
+  max-height: 85dvh;\r
+  padding-bottom: env(safe-area-inset-bottom, 0px);\r
+  border-bottom: 0;\r
+  border-radius: 14px 14px 0 0;\r
+  animation-name: ll-sheet-rise;\r
+}\r
+\r
+@keyframes ll-sheet-fade {\r
+  from { opacity: 0; }\r
+  to { opacity: 1; }\r
+}\r
+\r
+@keyframes ll-sheet-rise {\r
+  from { opacity: 0; transform: translateY(12px); }\r
+  to { opacity: 1; transform: none; }\r
+}\r
+\r
+@media (prefers-reduced-motion: reduce) {\r
+  .panel, .backdrop { animation: none !important; }\r
+}\r
+\r
+.head {\r
+  flex: none;\r
+  display: flex;\r
+  align-items: center;\r
+  justify-content: space-between;\r
+  gap: 12px;\r
+  padding: 10px 12px 8px 20px;\r
+  border-bottom: 1px solid var(--rule);\r
+}\r
+\r
+.title {\r
+  margin: 0;\r
+  font-size: 16px;\r
+  font-weight: 600;\r
+  line-height: 1.4;\r
+}\r
+\r
+.body {\r
+  flex: 1 1 auto;\r
+  min-height: 0;\r
+  overflow-y: auto;\r
+  overscroll-behavior: contain;\r
+  -webkit-overflow-scrolling: touch;\r
+  padding: 14px 20px 18px;\r
+}\r
+\r
+.root[data-layout="phone"] .body { padding-bottom: 22px; }\r
+\r
+/* ---------- text ---------- */\r
+\r
+.section + .section {\r
+  margin-top: 20px;\r
+  padding-top: 16px;\r
+  border-top: 1px solid var(--rule);\r
+}\r
+\r
+.section-title {\r
+  margin: 0 0 4px;\r
+  font-size: 13px;\r
+  font-weight: 600;\r
+  letter-spacing: .04em;\r
+}\r
+\r
+.section-lead {\r
+  margin: 0 0 6px;\r
+  color: var(--label);\r
+  font-size: 12.5px;\r
+  line-height: 1.6;\r
+}\r
+\r
+.line {\r
+  margin: 0 0 10px;\r
+  color: var(--label);\r
+}\r
+\r
+.line:last-child { margin-bottom: 0; }\r
+\r
+.note {\r
+  margin: 10px 0 14px;\r
+  color: var(--label);\r
+  font-size: 12.5px;\r
+  line-height: 1.6;\r
+}\r
+\r
+.msg {\r
+  margin: 0;\r
+  color: var(--label);\r
+  font-size: 12.5px;\r
+  line-height: 1.6;\r
+}\r
+\r
+.msg:not(:empty) { margin-top: 6px; }\r
+.msg[data-kind="error"] { color: var(--accent); }\r
+\r
+/* ---------- first run ---------- */\r
+\r
+.steps {\r
+  list-style: none;\r
+  margin: 0 0 14px;\r
+  padding: 0;\r
+  counter-reset: step;\r
+}\r
+\r
+.steps li {\r
+  position: relative;\r
+  margin: 0 0 10px;\r
+  padding-left: 30px;\r
+  counter-increment: step;\r
+}\r
+\r
+.steps li::before {\r
+  content: counter(step);\r
+  position: absolute;\r
+  left: 0;\r
+  top: 2px;\r
+  width: 20px;\r
+  height: 20px;\r
+  border-radius: 50%;\r
+  background: var(--note-bg);\r
+  color: var(--accent);\r
+  font-size: 12px;\r
+  font-weight: 600;\r
+  line-height: 20px;\r
+  text-align: center;\r
+}\r
+\r
+.steps .link { display: block; margin-top: 2px; }\r
+\r
+/* ---------- controls ---------- */\r
+\r
+.btn {\r
+  appearance: none;\r
+  -webkit-appearance: none;\r
+  display: inline-flex;\r
+  align-items: center;\r
+  justify-content: center;\r
+  margin: 0;\r
+  min-height: 36px;\r
+  padding: 6px 10px;\r
+  border: 1px solid transparent;\r
+  border-radius: 8px;\r
+  background: transparent;\r
+  color: var(--accent);\r
+  font: inherit;\r
+  font-weight: 600;\r
+  letter-spacing: inherit;\r
+  font-feature-settings: inherit;\r
+  line-height: 1.3;\r
+  text-align: center;\r
+  cursor: pointer;\r
+  -webkit-tap-highlight-color: transparent;\r
+}\r
+\r
+.btn[data-v="outline"] { border-color: var(--accent); }\r
+\r
+.btn[data-v="solid"] {\r
+  background: var(--accent);\r
+  color: var(--on-accent);\r
+  padding: 8px 16px;\r
+}\r
+\r
+.btn[data-v="close"] { flex: none; }\r
+\r
+.btn:disabled {\r
+  opacity: .5;\r
+  cursor: default;\r
+}\r
+\r
+@media (hover: hover) {\r
+  .btn[data-v="text"]:hover:not(:disabled),\r
+  .btn[data-v="close"]:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }\r
+  .btn[data-v="outline"]:hover:not(:disabled) { background: var(--note-bg); }\r
+  .btn[data-v="solid"]:hover:not(:disabled) { filter: brightness(1.08); }\r
+}\r
+\r
+.link {\r
+  display: inline-block;\r
+  padding: 6px 0;\r
+  color: var(--accent);\r
+  font-weight: 600;\r
+  text-decoration: underline;\r
+  text-underline-offset: 3px;\r
+  cursor: pointer;\r
+}\r
+\r
+.input {\r
+  flex: 1 1 auto;\r
+  min-width: 0;\r
+  width: 100%;\r
+  min-height: 36px;\r
+  margin: 0;\r
+  padding: 7px 10px;\r
+  border: 1px solid var(--rule);\r
+  border-radius: 8px;\r
+  background: var(--sheet-bg);\r
+  color: var(--sheet-ink);\r
+  font: inherit;\r
+  letter-spacing: normal;\r
+  font-feature-settings: normal;\r
+}\r
+\r
+.input::placeholder { color: var(--label); opacity: 1; }\r
+.input:focus { border-color: var(--accent); }\r
+.input[aria-invalid="true"] { border-color: var(--accent); }\r
+.input:disabled { opacity: .6; }\r
+\r
+.btn:focus-visible,\r
+.link:focus-visible,\r
+.input:focus-visible {\r
+  outline: 2px solid var(--accent);\r
+  outline-offset: 2px;\r
+}\r
+\r
+.actions {\r
+  display: flex;\r
+  flex-wrap: wrap;\r
+  align-items: center;\r
+  gap: 8px;\r
+}\r
+\r
+.actions[data-stack="true"] { margin-top: 4px; }\r
+\r
+.inline {\r
+  display: flex;\r
+  align-items: center;\r
+  gap: 8px;\r
+}\r
+\r
+/* The key field and mask absorb the remaining width; a button is never squeezed or broken inside a word. */\r
+.inline > .btn { flex: none; white-space: nowrap; }\r
+\r
+/* ---------- services ---------- */\r
+\r
+.service { padding: 10px 0; }\r
+.service + .service { border-top: 1px solid var(--rule); }\r
+\r
+.service-head {\r
+  display: flex;\r
+  align-items: center;\r
+  gap: 8px;\r
+}\r
+\r
+.dot {\r
+  flex: none;\r
+  width: 8px;\r
+  height: 8px;\r
+  border-radius: 50%;\r
+  background: var(--rule);\r
+}\r
+\r
+.dot[data-s="ok"] { background: var(--ok); }\r
+.dot[data-s="missing"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--label); }\r
+.dot[data-s="resting"] { background: var(--rest); }\r
+.dot[data-s="bad"] { background: var(--accent); }\r
+\r
+.service-name {\r
+  flex: 1 1 auto;\r
+  min-width: 0;\r
+  font-weight: 600;\r
+}\r
+\r
+.status {\r
+  flex: 0 1 auto;\r
+  color: var(--label);\r
+  font-size: 12.5px;\r
+  text-align: right;\r
+}\r
+\r
+.controls { margin-top: 6px; }\r
+\r
+.mask {\r
+  flex: 1 1 auto;\r
+  min-width: 0;\r
+  color: var(--label);\r
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r
+  letter-spacing: .08em;\r
+  font-feature-settings: normal;\r
+}\r
+\r
+.service .link { font-size: 12.5px; }\r
+\r
+/* ---------- inline confirm ---------- */\r
+\r
+.confirm {\r
+  margin-top: 8px;\r
+  padding: 8px 12px;\r
+  border-left: 2px solid var(--accent);\r
+  border-radius: 0 6px 6px 0;\r
+  background: var(--note-bg);\r
+}\r
+\r
+.confirm-text { margin: 0 0 6px; }\r
+\r
+/* ---------- phone ---------- */\r
+\r
+.root[data-layout="phone"] .btn,\r
+.root[data-layout="phone"] .input { min-height: 44px; }\r
+\r
+.root[data-layout="phone"] .btn { min-width: 44px; }\r
+\r
+.root[data-layout="phone"] .input { font-size: 16px; }\r
+\r
+.root[data-layout="phone"] .link {\r
+  display: inline-flex;\r
+  align-items: center;\r
+  min-height: 44px;\r
+}\r
+\r
+.root[data-layout="phone"] .steps .link { display: flex; }\r
+\r
+.root[data-layout="phone"] .actions[data-stack="true"] {\r
+  flex-direction: column;\r
+  align-items: stretch;\r
+}\r
 `;
 
   // src/ui/time.ts
@@ -3164,8 +2902,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     network: "確かめられませんでした。接続を確認してください",
     settingsTitle: "Lyric Lens の設定",
     close: "閉じる",
-    services: "翻訳に使うサービス",
-    servicesLead: "上から順に使い、混雑や上限のときは自動で次に切り替えます",
+    services: "翻訳に使うAI",
     save: "保存",
     makeKey: "キーを作る",
     removeKey: "キーを消す",
@@ -3191,11 +2928,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     cancel: "やめる"
   };
   var AI_STUDIO_URL = "https://aistudio.google.com/app/apikey";
-  var SERVICE_LABEL = {
-    gemini: "Google AI Studio（Gemini）",
-    groq: "Groq",
-    openrouter: "OpenRouter（無料モデル）"
-  };
+  var SERVICE_LABEL = "Google AI Studio（Gemini）";
   var HOST_STYLE = [
     "all:initial",
     "display:block",
@@ -3509,9 +3242,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       input.setAttribute("autocomplete", "off");
       return input;
     }
-    async function verify(config) {
+    async function verify(apiKey) {
       try {
-        await modelsFor(createProvider(config), { refresh: true });
+        await modelsFor(apiKey, { refresh: true });
         return "ok";
       } catch (error) {
         if (isAborted(error)) return "aborted";
@@ -3582,9 +3315,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         input.removeAttribute("aria-invalid");
         setBusy(true);
         say(COPY.checking);
-        const base = currentSettings().providers.find((p) => p.preset === "gemini") ?? providerFor("gemini");
-        const config = { ...base, apiKey: key };
-        const verdict = await verify(config);
+        const verdict = await verify(key);
         if (closed || verdict === "aborted") return;
         if (verdict !== "ok") {
           setBusy(false);
@@ -3594,8 +3325,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           return;
         }
         try {
-          await markKey(config, false);
-          await setProviderKey("gemini", key);
+          await markKey(key, false);
+          await setApiKey(key);
         } catch {
           if (closed) return;
           setBusy(false);
@@ -3628,7 +3359,6 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         "section",
         { class: "section" },
         h("h3", { class: "section-title" }, COPY.services),
-        h("p", { class: "section-lead" }, COPY.servicesLead),
         servicesBox
       ));
       const rows = [];
@@ -3639,7 +3369,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         if (row.message) row.msgEl.dataset.kind = "error";
         else delete row.msgEl.dataset.kind;
         row.el.setAttribute("aria-busy", String(row.busy));
-        const want = row.config.apiKey.trim() ? "key" : "input";
+        const want = row.apiKey.trim() ? "key" : "input";
         if (row.mode !== want) buildControls(row, want);
         if (row.removeButton) row.removeButton.textContent = row.kind === "bad" ? COPY.reenterKey : COPY.removeKey;
         if (row.input) {
@@ -3658,11 +3388,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
             void removeKey(row);
           });
           row.removeButton = remove2;
-          row.controls.replaceChildren(h("div", { class: "inline" }, h("span", { class: "mask" }, maskKey(row.config.apiKey)), remove2));
+          row.controls.replaceChildren(h("div", { class: "inline" }, h("span", { class: "mask" }, maskKey(row.apiKey)), remove2));
           return;
         }
-        const label = SERVICE_LABEL[row.id] ?? presetFor(row.id).label;
-        const input = keyInput(`${label} のAPIキー`, () => {
+        const input = keyInput(`${SERVICE_LABEL} のAPIキー`, () => {
           void saveKey(row);
         }, () => {
           if (!row.busy && (row.kind === "bad" || row.message)) {
@@ -3672,11 +3401,10 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           }
         });
         row.input = input;
-        const keyUrl = presetFor(row.id).keyUrl;
         row.controls.replaceChildren(h("div", { class: "inline" }, input, button(COPY.save, "outline", () => {
           void saveKey(row);
         })));
-        if (keyUrl) row.controls.append(externalLink(COPY.makeKey, keyUrl));
+        row.controls.append(externalLink(COPY.makeKey, AI_STUDIO_URL));
       }
       async function saveKey(row) {
         const input = row.input;
@@ -3690,8 +3418,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         row.kind = "checking";
         row.message = "";
         paintRow(row);
-        const config = { ...row.config, apiKey: key };
-        const verdict = await verify(config);
+        const verdict = await verify(key);
         if (closed || verdict === "aborted") return;
         if (verdict !== "ok") {
           row.busy = false;
@@ -3702,9 +3429,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           return;
         }
         try {
-          await markKey(config, false);
-          const saved = await setProviderKey(row.id, key);
-          row.config = saved.providers.find((p) => p.preset === row.id) ?? config;
+          await markKey(key, false);
+          row.apiKey = (await setApiKey(key)).apiKey;
         } catch {
           if (closed) return;
           row.busy = false;
@@ -3716,7 +3442,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         }
         if (closed) return;
         changed = true;
-        const status = await statusOf(row.config);
+        const status = await statusOf(row.apiKey);
         if (closed) return;
         row.busy = false;
         row.message = "";
@@ -3730,8 +3456,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         row.busy = true;
         paintRow(row);
         try {
-          const saved = await setProviderKey(row.id, "");
-          row.config = saved.providers.find((p) => p.preset === row.id) ?? { ...row.config, apiKey: "" };
+          row.apiKey = (await setApiKey("")).apiKey;
         } catch {
           if (closed) return;
           row.busy = false;
@@ -3755,15 +3480,15 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         row.kind = status.kind;
         row.until = status.kind === "resting" ? status.until : 0;
       }
-      async function statusOf(config) {
+      async function statusOf(apiKey) {
         try {
-          return await keyStatus(config);
+          return await keyStatus(apiKey);
         } catch {
-          return config.apiKey.trim() ? { kind: "ok" } : { kind: "missing" };
+          return apiKey.trim() ? { kind: "ok" } : { kind: "missing" };
         }
       }
-      function buildRow(config) {
-        const id = config.preset;
+      function buildRow(apiKey) {
+        const id = "gemini";
         const dot = h("span", { class: "dot", "aria-hidden": "true" });
         const statusEl = h("span", { class: "status" });
         const msgEl = h("p", { class: "msg", role: "status", "aria-live": "polite" });
@@ -3771,14 +3496,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         const el = h(
           "div",
           { class: "service", "data-service": id },
-          h("div", { class: "service-head" }, dot, h("span", { class: "service-name" }, SERVICE_LABEL[id] ?? presetFor(id).label), statusEl),
+          h("div", { class: "service-head" }, dot, h("span", { class: "service-name" }, SERVICE_LABEL), statusEl),
           controls,
           msgEl
         );
         return {
           id,
-          config,
-          kind: config.apiKey.trim() ? "pending" : "missing",
+          apiKey,
+          kind: apiKey.trim() ? "pending" : "missing",
           until: 0,
           message: "",
           busy: false,
@@ -3973,48 +3698,26 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       void refreshSummary();
       const firstEmptyInput = () => rows.find((r) => r.input)?.input ?? null;
       void (async () => {
-        let configs;
+        let apiKey;
         try {
-          const settings = await loadSettings();
-          configs = SERVICE_ORDER.map((id) => settings.providers.find((p) => p.preset === id) ?? providerFor(id));
+          apiKey = (await loadSettings()).apiKey;
         } catch {
-          configs = SERVICE_ORDER.map((id) => currentSettings().providers.find((p) => p.preset === id) ?? providerFor(id));
+          apiKey = currentSettings().apiKey;
         }
         if (closed) return;
-        for (const config of configs) {
-          const row = buildRow(config);
-          rows.push(row);
-          servicesBox.append(row.el);
-          paintRow(row);
-        }
-        const wanted = options.focusService ? rows.find((r) => r.id === options.focusService) : void 0;
-        if (wanted) wanted.el.dataset.focus = "true";
+        const row = buildRow(apiKey);
+        rows.push(row);
+        servicesBox.append(row.el);
+        paintRow(row);
         place(true);
         const untouched = shadow.activeElement === closeButton;
-        if (wanted) {
-          try {
-            wanted.el.scrollIntoView?.({ block: "nearest" });
-          } catch {
-          }
-          if (untouched) {
-            if (isDesktop() && wanted.input) focusEl(wanted.input);
-            else {
-              wanted.el.tabIndex = -1;
-              focusEl(wanted.el);
-            }
-          }
-        } else {
-          const target = firstEmptyInput();
-          if (target && isDesktop() && untouched) focusEl(target);
-        }
-        await Promise.all(rows.map(async (row) => {
-          if (!row.config.apiKey.trim()) return;
-          const config = row.config;
-          const status = await statusOf(config);
-          if (closed || row.busy || row.config !== config) return;
-          applyStatus(row, status);
-          paintRow(row);
-        }));
+        const target = firstEmptyInput();
+        if (target && isDesktop() && untouched) focusEl(target);
+        if (!row.apiKey.trim()) return;
+        const status = await statusOf(row.apiKey);
+        if (closed || row.busy || row.apiKey !== apiKey) return;
+        applyStatus(row, status);
+        paintRow(row);
       })();
       return { focus: () => focusEl(closeButton) };
     }
@@ -4048,7 +3751,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       rate: "AIの回数制限にかかりました。1分ほどおいてから続きを訳せます",
       quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}続きを訳せます`,
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
-      blocked: i.onlyGemini ? "この先はAIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります" : "この先はAIの安全フィルタで止められました。もう一度試すと通ることもあります",
+      blocked: "この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れました。つながったら続きを訳せます",
       unusable: "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
       stopped: "ここで止めました",
@@ -4065,7 +3768,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       rate: "AIの回数制限にかかりました。1分ほどおいてから訳せます",
       quota: `今日の無料枠が終わりました。${at ? `${at}ごろから` : "あとで"}訳せます`,
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
-      blocked: i.onlyGemini ? "AIの安全フィルタで止められました。設定で Groq か OpenRouter のキーを足すと通ることがあります" : "AIの安全フィルタで止められ、訳せませんでした",
+      blocked: "この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れて、訳し始められませんでした。つながったら訳せます",
       unusable: "AIの返事をうまく読み取れませんでした。もう一度試せます",
       length: "長い曲なので、一度では訳し切れませんでした"
@@ -4089,13 +3792,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     };
     return text2[stop.reason];
   }
-  function seamFor(stop, i, blocker, spareHint) {
+  function seamFor(stop, i, blocker) {
     const text2 = seamText(stop, i);
     if (stop.reason === "auth") return { text: text2, button: { id: "settings", label: "設定を開く" } };
-    if (blocker && spareHint) {
-      const reason = stop.reason === "quota" ? text2 : `${text2.split("。")[0]}。${blocker}`;
-      return { text: `${reason}。${spareHint}`, button: { id: "addKey", label: "キーを足す" } };
-    }
     if (blocker && stop.reason !== "quota") return { text: `${text2.split("。")[0]}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };
     let disabled = Boolean(blocker);
     if (stop.reason === "rate" && stop.until && i.now < stop.until) disabled = true;
@@ -4106,7 +3805,6 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     const missing = i.total - i.done;
     const quotaUntil = i.avail.ok ? null : i.avail.until;
     const blocker = i.otherSong ? "別の曲を訳し終えると続きを訳せます" : quotaUntil != null ? `今日の無料枠は終わりました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から訳せます` : "あとで訳せます"}` : null;
-    const spareHint = !i.otherSong && quotaUntil != null && i.spare ? `${i.spare.name}の無料キーを足すと、今日も続けて訳せます` : null;
     const none = { slots: false, gaps: false, breathing: false, seam: null };
     const writing = { slots: true, gaps: false, breathing: true, seam: null };
     const hide = hideAction(i);
@@ -4144,14 +3842,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           state: "S2q",
           status: blocker ?? "",
           tone: "muted",
-          ...spareHint ? { note: spareHint } : {},
-          actions: [i.spare ? { id: "addKey", label: "キーを足す" } : SETTINGS],
+          actions: [SETTINGS],
           preface: false,
           lines: none
         };
       }
       if (stop && stop.reason !== "closed" && stop.reason !== "stopped") {
-        const seam2 = seamFor(stop, i, null, null);
+        const seam2 = seamFor(stop, i, null);
         const button = { ...seam2.button, label: seam2.button.label === "続きを訳す" ? "日本語で読む" : seam2.button.label, primary: true };
         if (button.id === "resume") button.id = "start";
         return { state: "S2f", status: startFailText(stop, i) || seam2.text, actions: stop.reason === "auth" ? [button] : [button, SETTINGS], preface: false, lines: none };
@@ -4180,8 +3877,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         lines: { slots: true, gaps: false, breathing: false, seam: null }
       };
     }
-    const seam = seamFor(stop, i, blocker, spareHint);
-    const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === "auth" || seam.button.id === "addKey");
+    const seam = seamFor(stop, i, blocker);
+    const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === "auth");
     return {
       state: "S6",
       status: `途中まで訳してあります（${i.done}/${i.total}行）`,
@@ -4193,7 +3890,6 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
   }
 
   // src/app.ts
-  var SERVICE_NAMES = { gemini: "Google AI Studio", groq: "Groq", openrouter: "OpenRouter" };
   function identityOf(page) {
     return page.songId ? `id:${page.songId}` : `path:${page.path}`;
   }
@@ -4243,7 +3939,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "refreshAgain", false);
     }
     async start() {
-      await loadSettings();
+      const settings = await loadSettings();
+      await cleanOtherProviders(settings.apiKey);
       this.applyDisplay();
       onSettings(() => {
         this.applyDisplay();
@@ -4288,7 +3985,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           await this.refreshKeys();
           this.detectTheme();
           this.renderNow();
-          if (fresh && page.songId && (hasAnyKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
+          if (fresh && page.songId && (hasKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
         } while (this.refreshAgain);
       })().finally(() => {
         this.refreshing = null;
@@ -4371,10 +4068,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     }
     /** What the configured keys allow right now, from what is already known (no request). */
     async refreshKeys() {
-      const providers = currentSettings().providers;
-      this.avail = await availability(providers);
-      const keyed = providers.filter((p) => p.enabled && p.apiKey.trim());
-      this.keyBad = !keyed.length || (await Promise.all(keyed.map((p) => keyStatus(p)))).every((st) => st.kind === "bad");
+      const { apiKey } = currentSettings();
+      this.avail = await availability(apiKey);
+      this.keyBad = !apiKey.trim() || (await keyStatus(apiKey)).kind === "bad";
     }
     /** A lock held by another tab. */
     async otherLock() {
@@ -4525,17 +4221,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       const run = this.run;
       const here = run && run.id === this.identity ? run : null;
       const shown = this.shown();
-      const keyed = settings.providers.filter((p) => p.enabled && p.apiKey.trim());
-      const spare = settings.providers.find((p) => p.enabled && !p.apiKey.trim());
       return {
         now: Date.now(),
         online: navigator.onLine,
         streams: transportStreams(),
         hidden: settings.hideTranslation,
-        hasKey: hasAnyKey(settings),
+        hasKey: hasKey(settings),
         keyBad: this.keyBad,
-        onlyGemini: keyed.length === 1 && keyed[0].preset === "gemini",
-        spare: spare ? { id: spare.preset, name: SERVICE_NAMES[spare.preset] ?? spare.preset } : null,
         total: page.source.lines.length,
         done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
         stop: shown?.stop,
@@ -4607,9 +4299,6 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         case "firstRun":
           this.openFirstRun();
           break;
-        case "addKey":
-          this.openSettings(el, input.spare?.id);
-          break;
         case "noop":
           break;
       }
@@ -4673,7 +4362,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       };
       try {
         const settings = await loadSettings();
-        if (!hasAnyKey(settings)) {
+        if (!hasKey(settings)) {
           this.openFirstRun();
           return;
         }
@@ -4730,8 +4419,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
           const annotations = await this.loadAnnotations(page);
           const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
           const outcome = await translateSong(input, record, {
-            providers: settings.providers,
-            thinking: settings.thinking,
+            apiKey: settings.apiKey,
             signal: current.controller.signal,
             onUpdate: () => {
               if (!retranslate) current.saver.schedule(record);
@@ -4837,14 +4525,13 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       await loadSettings();
       await this.refresh();
     }
-    openSettings(anchor, focusService) {
+    openSettings(anchor) {
       const record = this.record;
       const id = this.identity;
       const busy = Boolean(this.run || this.foreignLock && this.foreignLock.id === id);
       openSheet({
         mode: "settings",
         anchor,
-        ...focusService ? { focusService } : {},
         busySongId: busy ? id : null,
         song: this.page && !busy && hasLines(record) ? { title: record.title, model: record.model, translatedAt: record.updatedAt } : null,
         onRetranslate: () => {

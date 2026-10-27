@@ -1,32 +1,18 @@
 /*
- * Runs one generation across every configured provider and model until one works.
+ * Runs one generation across Gemini's models until one works.
  * Free tiers fail in predictable ways (busy models, per-minute and per-day limits),
  * so failures are remembered: a model that is out of daily quota is skipped until
  * its reset instead of burning a request to rediscover it.
  */
-import { getJSON, setJSON } from '../platform/storage';
+import { getJSON, listKeys, remove, setJSON } from '../platform/storage';
 import { LLMError, type LLMErrorKind } from './errors';
-import { GeminiProvider, rankGeminiModel } from './gemini';
-import { OpenAICompatibleProvider } from './openai';
-import { presetFor } from './presets';
-import type { GenerateRequest, GenerateResult, ModelInfo, Provider, ProviderConfig } from './types';
+import { GEMINI_BASE, GeminiProvider, rankGeminiModel } from './gemini';
+import type { GenerateRequest, GenerateResult, ModelInfo } from './types';
 
 const COOLDOWN_KEY = 'll3:cooldowns';
 const MODELS_KEY = 'll3:models:';
 const MODEL_LIST_TTL = 24 * 60 * 60 * 1000;
 const MAX_INLINE_WAIT_MS = 30_000;
-
-export function createProvider(config: ProviderConfig): Provider {
-  return config.kind === 'gemini' ? new GeminiProvider(config) : new OpenAICompatibleProvider(config);
-}
-
-export function isUsable(config: ProviderConfig): boolean {
-  if (!config.enabled) return false;
-  const preset = presetFor(config.preset);
-  if (preset.needsKey && !config.apiKey.trim()) return false;
-  if (config.kind === 'openai' && !(config.baseUrl || preset.baseUrl)) return false;
-  return true;
-}
 
 /* ---------- cooldowns ---------- */
 
@@ -35,14 +21,16 @@ type Cooldowns = Record<string, Cooldown>;
 
 /** Short fingerprint of the API key: quotas belong to a key's project, so a second key
  *  must not inherit the first key's exhausted models. */
-export function keyTag(config: ProviderConfig): string {
+export function keyTag(apiKey: string): string {
   let h = 0;
-  for (const ch of config.apiKey.trim()) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
+  for (const ch of apiKey.trim()) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
   return (h >>> 0).toString(36);
 }
 
-export function cooldownId(config: ProviderConfig, model: string): string {
-  return `${config.preset}:${config.baseUrl}:${keyTag(config)}:${model}`;
+const ID_PREFIX = `gemini:${GEMINI_BASE}:`;
+
+export function cooldownId(apiKey: string, model: string): string {
+  return `${ID_PREFIX}${keyTag(apiKey)}:${model}`;
 }
 
 /** Gemini free-tier daily quotas reset at midnight Pacific time. */
@@ -56,18 +44,13 @@ export function nextPacificMidnight(now = Date.now()): number {
   return now + (86_400 - elapsed) * 1000 + 60_000;
 }
 
-function nextUtcMidnight(now = Date.now()): number {
-  const d = new Date(now);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 60_000;
-}
-
-function cooldownFor(config: ProviderConfig, error: LLMError): number {
+function cooldownFor(error: LLMError): number {
   const now = Date.now();
   switch (error.kind) {
     case 'quota':
       // Google states the exact wait ("retryDelay": "57083s"); otherwise assume the daily reset.
       if (error.retryAfterMs > 60_000) return now + error.retryAfterMs;
-      return config.kind === 'gemini' ? nextPacificMidnight(now) : nextUtcMidnight(now);
+      return nextPacificMidnight(now);
     case 'rate': return now + Math.max(error.retryAfterMs, 60_000);
     case 'overloaded': return now + 2 * 60_000;
     // A model that never answered would hang the next tap for as long again; bench it longer than a 503.
@@ -123,10 +106,10 @@ async function loadHealth(): Promise<HealthTable> {
 
 /** One read-modify-write at the end of an attempt. It only advises the order of models, so a
  *  storage failure must never turn a good answer (or the next fallback) into an error. */
-async function noteHealth(config: ProviderConfig, model: string, outcome: { ms: number } | 'bad'): Promise<void> {
+async function noteHealth(apiKey: string, model: string, outcome: { ms: number } | 'bad'): Promise<void> {
   try {
     const table = await loadHealth();
-    const id = cooldownId(config, model);
+    const id = cooldownId(apiKey, model);
     const now = Date.now();
     const entry: ModelHealth = { ...table[id] };
     if (outcome === 'bad') {
@@ -171,27 +154,26 @@ export function orderByHealth(ids: string[], stats: Record<string, ModelHealth |
     .map((m) => m.id);
 }
 
-async function orderedByHealth(config: ProviderConfig, ids: string[]): Promise<string[]> {
+async function orderedByHealth(apiKey: string, ids: string[]): Promise<string[]> {
   const table = await loadHealth();
-  return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(config, id)]])));
+  return orderByHealth(ids, Object.fromEntries(ids.map((id) => [id, table[cooldownId(apiKey, id)]])));
 }
 
 const BAD_KEY_PREFIX = 'll3:badkey:';
 
 export type KeyStatus = { kind: 'missing' } | { kind: 'bad' } | { kind: 'resting'; until: number } | { kind: 'ok' };
 
-/** What the settings sheet shows next to a service. Uses only what is already known. */
-export async function keyStatus(config: ProviderConfig): Promise<KeyStatus> {
-  if (!config.apiKey.trim()) return { kind: 'missing' };
-  if (await getJSON<boolean>(BAD_KEY_PREFIX + keyTag(config), false)) return { kind: 'bad' };
-  const a = await availability([config]);
+/** What the settings sheet shows next to the key. Uses only what is already known. */
+export async function keyStatus(apiKey: string): Promise<KeyStatus> {
+  if (!apiKey.trim()) return { kind: 'missing' };
+  if (await getJSON<boolean>(BAD_KEY_PREFIX + keyTag(apiKey), false)) return { kind: 'bad' };
+  const a = await availability(apiKey);
   return a.ok ? { kind: 'ok' } : { kind: 'resting', until: a.until };
 }
 
 /** Remembers (or clears) that a key was rejected, keyed by its fingerprint. */
-export async function markKey(config: ProviderConfig, bad: boolean): Promise<void> {
-  if (bad) await setJSON(BAD_KEY_PREFIX + keyTag(config), true);
-  else await setJSON(BAD_KEY_PREFIX + keyTag(config), false);
+export async function markKey(apiKey: string, bad: boolean): Promise<void> {
+  await setJSON(BAD_KEY_PREFIX + keyTag(apiKey), bad);
 }
 
 export interface Availability {
@@ -203,61 +185,73 @@ export interface Availability {
 
 /** Answers "is it worth sending a request?" from what we already know, without any
  *  network access, so an exhausted free tier never costs a wasted attempt. */
-export async function availability(configs: ProviderConfig[]): Promise<Availability> {
-  const usable = configs.filter(isUsable);
-  if (!usable.length) return { ok: false, until: 0 };
+export async function availability(apiKey: string): Promise<Availability> {
+  if (!apiKey.trim()) return { ok: false, until: 0 };
   const cooldowns = await loadCooldowns();
+  const cached = await getJSON<{ models: ModelInfo[] } | null>(MODELS_KEY + cooldownId(apiKey, ''), null);
+  const ids = cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI;
+  if (!ids.length) return { ok: true, until: 0 };
   let earliest = Infinity;
-  for (const config of usable) {
-    if (config.model) return { ok: true, until: 0 };
-    const cached = await getJSON<{ models: ModelInfo[] } | null>(MODELS_KEY + cooldownId(config, ''), null);
-    const ids = cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? (config.kind === 'gemini' ? FALLBACK_GEMINI : []);
-    if (!ids.length) return { ok: true, until: 0 };
-    for (const id of config.kind === 'gemini' ? ids.slice(0, 10) : ids.slice(0, 3)) {
-      const cd = cooldowns[cooldownId(config, id)];
-      if (!cd || cd.reason === 'overloaded' || cd.reason === 'timeout' || cd.reason === 'rate') return { ok: true, until: 0 };
-      earliest = Math.min(earliest, cd.until);
-    }
+  for (const id of ids.slice(0, 10)) {
+    const cd = cooldowns[cooldownId(apiKey, id)];
+    if (!cd || cd.reason === 'overloaded' || cd.reason === 'timeout' || cd.reason === 'rate') return { ok: true, until: 0 };
+    earliest = Math.min(earliest, cd.until);
   }
   return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
 }
 
 /* ---------- model lists ---------- */
 
-export async function modelsFor(provider: Provider, opts: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
-  const key = MODELS_KEY + cooldownId(provider.config, '');
+export async function modelsFor(apiKey: string, opts: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
+  const key = MODELS_KEY + cooldownId(apiKey, '');
   if (!opts.refresh) {
     const cached = await getJSON<{ at: number; models: ModelInfo[] } | null>(key, null);
     if (cached && Date.now() - cached.at < MODEL_LIST_TTL && cached.models.length) return cached.models;
   }
-  const models = await provider.listModels(opts.signal);
+  const models = await new GeminiProvider(apiKey).listModels(opts.signal);
   await setJSON(key, { at: Date.now(), models });
   return models;
 }
 
 const FALLBACK_GEMINI = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
 
-async function candidateModels(provider: Provider, signal?: AbortSignal): Promise<string[]> {
-  const { config } = provider;
-  if (config.model) return [config.model];
+async function candidateModels(apiKey: string, signal?: AbortSignal): Promise<string[]> {
   try {
-    const models = await modelsFor(provider, { signal });
+    const models = await modelsFor(apiKey, { signal });
     const auto = models.filter((m) => m.rank > 0).map((m) => m.id);
-    // Only Gemini's automatic choice adapts to what was seen of each model; the others keep their rank.
-    if (auto.length) return config.kind === 'gemini' ? await orderedByHealth(config, auto.slice(0, 10)) : auto.slice(0, 3);
+    if (auto.length) return await orderedByHealth(apiKey, auto.slice(0, 10));
   } catch (error) {
-    // Gemini has known model ids to fall back on; other endpoints do not.
-    if (!(error instanceof LLMError) || error.kind === 'auth' || error.kind === 'aborted' || config.kind !== 'gemini') throw error;
+    // Gemini has known model ids to fall back on.
+    if (!(error instanceof LLMError) || error.kind === 'auth' || error.kind === 'aborted') throw error;
   }
-  if (config.kind === 'gemini') return orderedByHealth(config, FALLBACK_GEMINI);
-  throw new LLMError('not-found', '使えるモデルが見つからない。設定でモデルを指定して。');
+  return orderedByHealth(apiKey, FALLBACK_GEMINI);
+}
+
+/** Removes what earlier versions stored for other services (and other keys' bad-key marks),
+ *  once per start. Never touches saved translations, the index, the settings or the lock. */
+export async function cleanOtherProviders(apiKey: string): Promise<void> {
+  try {
+    const keep = ID_PREFIX;
+    for (const k of await listKeys()) {
+      if (k.startsWith(MODELS_KEY) && !k.startsWith(MODELS_KEY + keep)) await remove(k);
+      else if (k.startsWith(BAD_KEY_PREFIX) && k !== BAD_KEY_PREFIX + keyTag(apiKey)) await remove(k);
+    }
+    for (const key of [COOLDOWN_KEY, HEALTH_KEY]) {
+      const table = await getJSON<Record<string, unknown> | null>(key, null);
+      if (!table || typeof table !== 'object' || Array.isArray(table)) continue;
+      const ids = Object.keys(table);
+      const foreign = ids.filter((id) => !id.startsWith(keep));
+      if (!foreign.length) continue;
+      for (const id of foreign) delete table[id];
+      await setJSON(key, table);
+    }
+  } catch { /* housekeeping only */ }
 }
 
 /* ---------- the chain ---------- */
 
 export interface ChainResult extends GenerateResult {
   model: string;
-  provider: string;
   /** Set when the stream broke after producing text: the text so far is still usable. */
   error?: LLMError;
 }
@@ -267,6 +261,8 @@ export interface ChainOptions {
   /** Called before every attempt: text from a failed attempt must not leak into the next. */
   onAttempt?: () => void;
   signal?: AbortSignal;
+  /** Scripts only: try just these models, whatever their cooldowns say. */
+  onlyModels?: string[];
 }
 
 // Transient failures outrank quota: if any model was merely busy, trying again soon can work,
@@ -294,26 +290,25 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export async function generateWithFallback(
-  configs: ProviderConfig[],
+  apiKey: string,
   request: Omit<GenerateRequest, 'model' | 'signal'>,
   options: ChainOptions = {},
 ): Promise<ChainResult> {
-  const { signal, onStatus } = options;
-  const usable = configs.filter(isUsable);
-  if (!usable.length) throw new LLMError('auth', 'APIキーが設定されていません。');
+  const { signal, onStatus, onlyModels } = options;
+  if (!apiKey.trim()) throw new LLMError('auth', 'APIキーが設定されていません。');
 
   const cooldowns = await loadCooldowns();
   const errors: LLMError[] = [];
-  const modelLists = new Map<string, string[]>();
-  const badProviders = new Set<string>();
+  let models: string[] | undefined;
   let skippedForCooldown = 0;
   const busyNow = new Set<string>();
+  const provider = new GeminiProvider(apiKey);
 
-  const remember = async (config: ProviderConfig, model: string, error: LLMError) => {
-    if (error.kind === 'overloaded' || error.kind === 'timeout') await noteHealth(config, model, 'bad');
-    const until = cooldownFor(config, error);
+  const remember = async (model: string, error: LLMError) => {
+    if (error.kind === 'overloaded' || error.kind === 'timeout') await noteHealth(apiKey, model, 'bad');
+    const until = cooldownFor(error);
     if (!until) return;
-    cooldowns[cooldownId(config, model)] = { until, reason: error.kind };
+    cooldowns[cooldownId(apiKey, model)] = { until, reason: error.kind };
     await setJSON(COOLDOWN_KEY, cooldowns);
   };
 
@@ -322,11 +317,9 @@ export async function generateWithFallback(
   const fromCooldown = (base: LLMError | null): LLMError => {
     const now = Date.now();
     let best: Cooldown | null = null;
-    for (const config of usable) {
-      for (const m of modelLists.get(config.id) ?? []) {
-        const cd = cooldowns[cooldownId(config, m)];
-        if (cd && cd.reason !== 'not-found' && cd.until > now && (!best || cd.until < best.until)) best = cd;
-      }
+    for (const m of models ?? []) {
+      const cd = cooldowns[cooldownId(apiKey, m)];
+      if (cd && cd.reason !== 'not-found' && cd.until > now && (!best || cd.until < best.until)) best = cd;
     }
     const message = base?.message ?? '使えるモデルがすべて上限に達しています。';
     if (!best) return base ?? new LLMError('quota', message, { status: 429 });
@@ -338,11 +331,12 @@ export async function generateWithFallback(
       retryAfterMs: kind === 'quota' ? Math.max(60_001, wait) : wait,
       detail: base?.detail,
     });
-    if (base) { error.model = base.model; error.provider = base.provider; }
+    if (base) error.model = base.model;
     return error;
   };
 
-  for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length; pass += 1) {
+  let keyRejected = false;
+  for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
     if (pass > 0) {
       const wait = BUSY_PASS_WAITS_MS[pass - 1]!;
       for (let left = Math.ceil(wait / 1000); left > 0; left -= 1) {
@@ -352,115 +346,104 @@ export async function generateWithFallback(
     }
     const passErrors: LLMError[] = [];
 
-    for (const config of usable) {
-      if (badProviders.has(config.id)) continue;
-      const provider = createProvider(config);
-      const label = presetFor(config.preset).label;
-      let models = modelLists.get(config.id);
-      if (!models) {
+    if (!models) {
+      try {
+        models = onlyModels?.length ? onlyModels : await candidateModels(apiKey, signal);
+      } catch (error) {
+        if (!(error instanceof LLMError)) throw error;
+        if (error.kind === 'aborted') throw error;
+        errors.push(error);
+        if (error.kind === 'auth') await markKey(apiKey, true);
+        break;
+      }
+    }
+
+    // Models out of quota, rate-limited, silent (timeout) or missing are skipped until their
+    // cooldown ends; models that were only busy recently go last. A retry pass only revisits
+    // models busy in this run.
+    const order: string[] = [];
+    const busyLast: string[] = [];
+    for (const model of models) {
+      // Retry passes only revisit the best two busy models: every attempt may count against quota.
+      if (pass > 0) { if (busyNow.has(cooldownId(apiKey, model)) && order.length < 2) order.push(model); continue; }
+      const cd = cooldowns[cooldownId(apiKey, model)];
+      if (cd && cd.until > Date.now() && !onlyModels?.length) {
+        if (cd.reason === 'overloaded') busyLast.push(model);
+        else skippedForCooldown += 1;
+        continue;
+      }
+      order.push(model);
+    }
+    order.push(...busyLast);
+
+    let blocked = 0;
+    for (const model of order) {
+      let error: LLMError | null = null;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        onStatus?.(`Google Gemini · ${shortModel(model)}`);
+        options.onAttempt?.();
+        let produced = false;
+        const startedAt = Date.now();
+        let firstTextMs: number | null = null;
         try {
-          models = await candidateModels(provider, signal);
-        } catch (error) {
-          if (!(error instanceof LLMError)) throw error;
-          if (error.kind === 'aborted') throw error;
-          error.provider = label;
-          passErrors.push(error);
-          badProviders.add(config.id);
-          if (error.kind === 'auth') await markKey(config, true);
-          continue;
-        }
-        modelLists.set(config.id, models);
-      }
-
-      // Models out of quota, rate-limited, silent (timeout) or missing are skipped until their
-      // cooldown ends; models that were only busy recently go last. A retry pass only revisits
-      // models busy in this run.
-      const order: string[] = [];
-      const busyLast: string[] = [];
-      for (const model of models) {
-        // Retry passes only revisit the best two busy models: every attempt may count against quota.
-        if (pass > 0) { if (busyNow.has(cooldownId(config, model)) && order.length < 2) order.push(model); continue; }
-        const cd = cooldowns[cooldownId(config, model)];
-        if (cd && cd.until > Date.now() && !config.model) {
-          if (cd.reason === 'overloaded') busyLast.push(model);
-          else skippedForCooldown += 1;
-          continue;
-        }
-        order.push(model);
-      }
-      order.push(...busyLast);
-
-      let blocked = 0;
-      for (const model of order) {
-
-        let error: LLMError | null = null;
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          onStatus?.(`${label} · ${shortModel(model)}`);
-          options.onAttempt?.();
-          let produced = false;
-          const startedAt = Date.now();
-          let firstTextMs: number | null = null;
-          try {
-            const result = await provider.generate({
-              ...request,
-              model,
-              signal,
-              onText: (chunk) => {
-                if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
-                // Without a verdict from the consumer, any text counts as output.
-                const useful = request.onText(chunk);
-                if (useful === undefined || useful) produced = true;
-              },
-            });
-            // A model that answered is no longer benched: write that back, or the next tap
-            // (often 続きを訳す within minutes) would still try it last or skip it.
-            const id = cooldownId(config, model);
-            if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
-            // A body that only arrived whole (some managers) has no earlier first text than its end.
-            await noteHealth(config, model, { ms: firstTextMs ?? Date.now() - startedAt });
-            return { ...result, model, provider: label };
-          } catch (raw) {
-            if (!(raw instanceof LLMError)) throw raw;
-            if (raw.kind === 'aborted') throw raw;
-            error = raw;
-            error.model = model;
-            error.provider = label;
-            if (produced) {
-              // Keep what arrived; the pipeline asks for the rest in a follow-up round. Bench the
-              // model first, so 続きを訳す does not go straight back to the one that just broke.
-              await remember(config, model, error);
-              return { finish: 'unknown', finishDetail: error.kind, text: '', model, provider: label, error };
-            }
-            if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
-              for (let left = Math.ceil((error.retryAfterMs + 500) / 1000); left > 0; left -= 1) {
-                onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
-                await sleep(1000, signal);
-              }
-              continue;
-            }
-            // A dropped connection is worth one retry; a model that went silent is likely overloaded.
-            if (error.kind === 'network' && attempt === 1) {
-              onStatus?.(`${shortModel(model)} · 再接続しています`);
-              await sleep(2000, signal);
-              continue;
-            }
-            break;
+          const result = await provider.generate({
+            ...request,
+            model,
+            signal,
+            onText: (chunk) => {
+              if (firstTextMs === null && chunk) firstTextMs = Date.now() - startedAt;
+              // Without a verdict from the consumer, any text counts as output.
+              const useful = request.onText(chunk);
+              if (useful === undefined || useful) produced = true;
+            },
+          });
+          // A model that answered is no longer benched: write that back, or the next tap
+          // (often 続きを訳す within minutes) would still try it last or skip it.
+          const id = cooldownId(apiKey, model);
+          if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
+          // A body that only arrived whole (some managers) has no earlier first text than its end.
+          await noteHealth(apiKey, model, { ms: firstTextMs ?? Date.now() - startedAt });
+          return { ...result, model };
+        } catch (raw) {
+          if (!(raw instanceof LLMError)) throw raw;
+          if (raw.kind === 'aborted') throw raw;
+          error = raw;
+          error.model = model;
+          if (produced) {
+            // Keep what arrived; the pipeline asks for the rest in a follow-up round. Bench the
+            // model first, so 続きを訳す does not go straight back to the one that just broke.
+            await remember(model, error);
+            return { finish: 'unknown', finishDetail: error.kind, text: '', model, error };
           }
-        }
-        if (!error) continue;
-        passErrors.push(error);
-        await remember(config, model, error);
-        if (error.kind === 'overloaded') busyNow.add(cooldownId(config, model));
-        else busyNow.delete(cooldownId(config, model));
-        if (error.kind === 'auth') {
-          badProviders.add(config.id);
-          await markKey(config, true);
+          if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
+            for (let left = Math.ceil((error.retryAfterMs + 500) / 1000); left > 0; left -= 1) {
+              onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
+              await sleep(1000, signal);
+            }
+            continue;
+          }
+          // A dropped connection is worth one retry; a model that went silent is likely overloaded.
+          if (error.kind === 'network' && attempt === 1) {
+            onStatus?.(`${shortModel(model)} · 再接続しています`);
+            await sleep(2000, signal);
+            continue;
+          }
           break;
         }
-        if (error.kind === 'blocked' && ++blocked >= 2) break; // other models will refuse too
-        const reason = error.kind === 'overloaded' ? '混雑' : error.kind === 'timeout' ? '応答なし' : error.kind === 'quota' ? '今日の上限' : error.kind === 'rate' ? '回数制限' : 'エラー';
-        onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
       }
+      if (!error) continue;
+      passErrors.push(error);
+      await remember(model, error);
+      if (error.kind === 'overloaded') busyNow.add(cooldownId(apiKey, model));
+      else busyNow.delete(cooldownId(apiKey, model));
+      if (error.kind === 'auth') {
+        keyRejected = true;
+        await markKey(apiKey, true);
+        break;
+      }
+      if (error.kind === 'blocked' && ++blocked >= 2) break; // other models will refuse too
+      const reason = error.kind === 'overloaded' ? '混雑' : error.kind === 'timeout' ? '応答なし' : error.kind === 'quota' ? '今日の上限' : error.kind === 'rate' ? '回数制限' : 'エラー';
+      onStatus?.(`${shortModel(model)} が${reason} · 次へ`);
     }
 
     errors.push(...passErrors);
@@ -472,7 +455,7 @@ export async function generateWithFallback(
   // Every candidate was skipped: say when the first one is back (a minute or a day), not always "today".
   if (!errors.length && skippedForCooldown) throw fromCooldown(null);
   const reported = pickReportedError(errors);
-  // A real quota error often carries no usable reset time (or a Gemini-style midnight that does not
-  // apply to another provider's model); the cooldown table knows when the soonest model returns.
+  // A real quota error often carries no usable reset time; the cooldown table knows when the
+  // soonest model returns.
   throw reported.kind === 'quota' ? fromCooldown(reported) : reported;
 }
