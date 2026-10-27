@@ -119,9 +119,23 @@ function annotationsBlock(source: SongSource): string {
   return ['# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）', ...lines].join('\n');
 }
 
+function noteSentence(left: number): string {
+  return left > 0 ? `注は今回の行全体で多くても${left}件。` : '注は今回は書かないでください。';
+}
+
 /** A concrete ceiling works better than "about one per six lines" on Flash-class models. */
 export function noteBudget(lines: number): number {
   return Math.max(2, Math.round(lines / 6));
+}
+
+/** What a request may still add: the ceiling comes from the whole song's line count, minus the
+ *  notes the record already holds. The 2 extra wordplay/ambiguous slots are once per song, so
+ *  only notes beyond the base ceiling use them up. */
+export function noteAllowance(source: SongSource, record: SongRecord | null | undefined): { notesLeft: number; bonusLeft: number } {
+  const base = noteBudget(source.unique.length);
+  let existing = 0;
+  for (const r of Object.values(record?.lines ?? {})) existing += r.notes?.length ?? 0;
+  return { notesLeft: Math.max(0, base - existing), bonusLeft: Math.max(0, 2 - Math.max(0, existing - base)) };
 }
 
 export interface PromptRequest {
@@ -150,7 +164,7 @@ export function buildPrompt(source: SongSource, record: SongRecord | null, targe
   const all = targets.length === source.unique.length;
   const ask = haveSong ? 'song レコードは書かずに、' : 'まず song レコードを書き、';
   const what = all ? `L1〜L${source.unique.length} をすべて訳してください。` : `次の ID だけを訳してください：${formatIdList(targets)}。`;
-  blocks.push(`# 指示\n${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)}件。最後に {"t":"end"} を書いてください。`);
+  blocks.push(`# 指示\n${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {"t":"end"} を書いてください。`);
 
   // JSON keys and quoting roughly double the bytes of the Japanese itself.
   const expectedChars = targets.reduce((sum, t) => sum + Math.min(220, t.text.length * 1.4 + 60), haveSong ? 40 : 500);

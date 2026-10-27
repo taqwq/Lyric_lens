@@ -1073,8 +1073,17 @@ ${req.user}` : req.user }] }],
     });
     return ["# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）", ...lines].join("\n");
   }
+  function noteSentence(left) {
+    return left > 0 ? `注は今回の行全体で多くても${left}件。` : "注は今回は書かないでください。";
+  }
   function noteBudget(lines) {
     return Math.max(2, Math.round(lines / 6));
+  }
+  function noteAllowance(source, record) {
+    const base = noteBudget(source.unique.length);
+    let existing = 0;
+    for (const r of Object.values(record?.lines ?? {})) existing += r.notes?.length ?? 0;
+    return { notesLeft: Math.max(0, base - existing), bonusLeft: Math.max(0, 2 - Math.max(0, existing - base)) };
   }
   function buildPrompt(source, record, targets) {
     const done = /* @__PURE__ */ new Map();
@@ -1092,7 +1101,7 @@ ${req.user}` : req.user }] }],
     const ask = haveSong ? "song レコードは書かずに、" : "まず song レコードを書き、";
     const what = all ? `L1〜L${source.unique.length} をすべて訳してください。` : `次の ID だけを訳してください：${formatIdList(targets)}。`;
     blocks.push(`# 指示
-${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)}件。最後に {"t":"end"} を書いてください。`);
+${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {"t":"end"} を書いてください。`);
     const expectedChars = targets.reduce((sum, t) => sum + Math.min(220, t.text.length * 1.4 + 60), haveSong ? 40 : 500);
     return { system: SYSTEM_PROMPT, user: blocks.join("\n\n"), targets, expectedChars };
   }
@@ -1418,8 +1427,8 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       __publicField(this, "targets");
       /** Notes this request may still add song-wide (the prompt states the same ceiling). */
       __publicField(this, "notesLeft");
-      /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only. */
-      __publicField(this, "bonusLeft", 2);
+      /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only (once per song). */
+      __publicField(this, "bonusLeft");
       /** Distinct lines accepted in this request. */
       __publicField(this, "added", 0);
       /** Line records dropped because their echoed first words did not match the line. */
@@ -1427,7 +1436,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       /** The model wrote its {"t":"end"} record. */
       __publicField(this, "ended", false);
       this.targets = new Set(targets);
-      this.notesLeft = noteBudget(targets.length);
+      ({ notesLeft: this.notesLeft, bonusLeft: this.bonusLeft } = noteAllowance(source, record));
     }
     apply(events) {
       let changed = false;
