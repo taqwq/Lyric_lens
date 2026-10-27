@@ -153,7 +153,7 @@ describe('S2b another song is being written', () => {
   it('names the other song and offers to stop it', () => {
     expectDecision(decide(view({ otherSong: 'Hello' })), {
       state: 'S2b',
-      status: '別の曲（Hello）を訳しています · 終わると訳せます',
+      status: '別の曲（Hello）を訳しています。終わるとこの曲も訳せます',
       actions: [{ id: 'stopOther', label: 'あちらを止める' }, SETTINGS],
       preface: false,
       lines: NONE,
@@ -315,7 +315,7 @@ describe('S3 reading the whole song first', () => {
 
   it('joins the wait and buffered sentences when the transport does not stream', () => {
     const d = decide(view({ ...slowBase, streams: false, waitedMs: 16_000 }));
-    expect(d.note).toBe(`${WAIT} · この環境では訳がまとめて届きます`);
+    expect(d.note).toBe(`${WAIT}。この環境では訳がまとめて届きます`);
   });
 
   it('keeps only the buffered sentence when not yet slow', () => {
@@ -437,7 +437,7 @@ describe('S8 retranslating', () => {
   it('keeps the old edition and offers only 止める', () => {
     expectDecision(decide(view({ running: 'here-retranslate', done: 40 })), {
       state: 'S8',
-      status: '訳し直しています · 終わるまで今の訳を表示します',
+      status: '訳し直しています。終わるまで今の訳を表示します',
       actions: [STOP],
       preface: false,
       lines: NONE,

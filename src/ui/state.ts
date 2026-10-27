@@ -188,7 +188,7 @@ export function decide(i: ViewInput): Decision {
 
   // S8: retranslating — the old edition stays readable until the new one is complete.
   if (i.running === 'here-retranslate') {
-    return { state: 'S8', status: '訳し直しています · 終わるまで今の訳を表示します', actions: [STOP], preface: i.hasPreface, lines: none };
+    return { state: 'S8', status: '訳し直しています。終わるまで今の訳を表示します', actions: [STOP], preface: i.hasPreface, lines: none };
   }
   // S3 / S4: this tab is writing this song. Arriving once the preface or any line is in.
   if (i.running === 'here') {
@@ -197,7 +197,7 @@ export function decide(i: ViewInput): Decision {
     const slow = !arriving && (i.waitedMs ?? 0) >= 15_000;
     const wait = '返事を待っています。混んでいると1分ほどかかることもあります';
     const buffered = 'この環境では訳がまとめて届きます';
-    const note = slow && !i.streams ? `${wait} · ${buffered}` : slow ? wait : !i.streams ? buffered : undefined;
+    const note = slow && !i.streams ? `${wait}。${buffered}` : slow ? wait : !i.streams ? buffered : undefined;
     return {
       state: arriving ? 'S4' : 'S3',
       status: arriving ? '' : '曲全体を読んでいます',
@@ -224,7 +224,7 @@ export function decide(i: ViewInput): Decision {
       return { state: 'S1', status: '日本語訳には無料のAPIキーが必要です', actions: [{ id: 'firstRun', label: 'キーを設定', primary: true }], preface: false, lines: none };
     }
     if (i.otherSong) {
-      return { state: 'S2b', status: `別の曲（${i.otherSong}）を訳しています · 終わると訳せます`, actions: [{ id: 'stopOther', label: 'あちらを止める' }, SETTINGS], preface: false, lines: none };
+      return { state: 'S2b', status: `別の曲（${i.otherSong}）を訳しています。終わるとこの曲も訳せます`, actions: [{ id: 'stopOther', label: 'あちらを止める' }, SETTINGS], preface: false, lines: none };
     }
     if (quotaUntil != null) {
       return {

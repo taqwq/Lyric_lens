@@ -2478,7 +2478,6 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           el.dataset.state = state;
           if (repeat) el.dataset.repeat = "";
           else delete el.dataset.repeat;
-          el.style.setProperty("--ll-n", String(Math.min(120, line.text.length)));
           el.replaceChildren(...this.content(state, i, result?.ja ?? "", notes.length, repeat, input));
           if (state === "filled" && wasWaiting && input.animate) {
             el.dataset.ink = "";
@@ -2707,8 +2706,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var sheet_default = `/*
  * Lyric Lens sheet (first run / settings). Lives inside a shadow root, so none of this can
  * leak into Genius and none of Genius' CSS reaches in. Tokens follow docs/DESIGN.md section 6:
- * a grouped surface (soft gray) holding white rounded groups, one tint, filled and tinted
- * buttons, and a translucent panel that rises like a system sheet.
+ * a printed insert — white paper, black type, 明朝 titles, hairline rules between sections,
+ * Genius' black for the one primary action and 金赤 only for what is destructive or wrong.
  */
 
 :host { all: initial; }
@@ -2716,22 +2715,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 *, *::before, *::after { box-sizing: border-box; }
 
 .root {
-  --sheet-bg: rgba(242, 242, 247, .88);
-  --sheet-solid: #F2F2F7;
-  --group: #FFFFFF;
-  --field: #F2F2F7;
-  --sheet-ink: #1D1D1F;
-  --accent: #BA4A30;
-  --on-accent: #FFFFFF;
-  --tint: rgba(186, 74, 48, .10);
-  --tint-strong: rgba(186, 74, 48, .17);
-  --label: #6E6E73;
-  --rule: rgba(60, 60, 67, .16);
-  --ok: #34C759;
-  --rest: #FF9F0A;
-  --danger: #D70015;
-  --shadow: 0 24px 60px rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .08);
-  --spring: cubic-bezier(.32, .72, 0, 1);
+  --paper: #FFFFFF;
+  --ink: #000000;
+  --sumi: #333333;
+  --nezumi: #767676;
+  --aka: #E60012;
+  --hai: #DDDDDD;
+  --field-line: #BDBDBD;
+  --ok: #1E8E3E;
+  --rest: #B26A00;
+  --shadow: 0 14px 40px rgba(0, 0, 0, .16);
+  --mincho: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Noto Serif JP", "Yu Mincho", YuMincho, "Noto Serif CJK JP", serif;
+  --gothic: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", "Noto Sans CJK JP", Meiryo, sans-serif;
 
   position: absolute;
   top: 0;
@@ -2739,22 +2734,21 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   right: 0;
   bottom: 0;
   color-scheme: light;
-  color: var(--sheet-ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", "Segoe UI", "Meiryo", system-ui, sans-serif;
+  color: var(--sumi);
+  font-family: var(--gothic);
   font-size: 14px;
   font-weight: 400;
-  line-height: 1.55;
+  line-height: 1.6;
   font-style: normal;
   text-align: left;
   -webkit-text-size-adjust: 100%;
-  -webkit-font-smoothing: antialiased;
 
   /* Japanese typesetting (section 6) */
   line-break: strict;
   word-break: normal;
   overflow-wrap: anywhere;
   font-feature-settings: "palt" 1;
-  letter-spacing: .01em;
+  letter-spacing: .03em;
   text-spacing-trim: trim-start;
   hanging-punctuation: none;
 }
@@ -2764,21 +2758,16 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 .root[data-theme="dark"] {
-  --sheet-bg: rgba(28, 28, 30, .88);
-  --sheet-solid: #1C1C1E;
-  --group: #2C2C2E;
-  --field: #3A3A3C;
-  --sheet-ink: #F5F5F7;
-  --accent: #F2795B;
-  --on-accent: #1C1C1E;
-  --tint: rgba(242, 121, 91, .16);
-  --tint-strong: rgba(242, 121, 91, .26);
-  --label: #98989D;
-  --rule: rgba(84, 84, 88, .65);
-  --ok: #30D158;
-  --rest: #FFD60A;
-  --danger: #FF6961;
-  --shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 0 .5px rgba(255, 255, 255, .08);
+  --paper: #1E1E1E;
+  --ink: #FFFFFF;
+  --sumi: #E6E6E6;
+  --nezumi: #A0A0A0;
+  --aka: #FF4B55;
+  --hai: #3A3A3A;
+  --field-line: #5A5A5A;
+  --ok: #5BC77A;
+  --rest: #E8A33A;
+  --shadow: 0 14px 40px rgba(0, 0, 0, .55);
   color-scheme: dark;
 }
 
@@ -2798,21 +2787,16 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--sheet-solid);
-  color: var(--sheet-ink);
-  border-radius: 14px;
+  background: var(--paper);
+  color: var(--sumi);
+  border: 1px solid rgba(0, 0, 0, .14);
+  border-radius: 4px;
   box-shadow: var(--shadow);
   outline: none;
-  animation: ll-sheet-pop 260ms var(--spring) both;
+  animation: ll-sheet-in 180ms ease-out both;
 }
 
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .panel {
-    background: var(--sheet-bg);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
-    backdrop-filter: blur(30px) saturate(180%);
-  }
-}
+.root[data-theme="dark"] .panel { border-color: rgba(255, 255, 255, .12); }
 
 /* Desktop: 400px panel. JS sets left/top (or bottom) and max-height when anchored. */
 .root[data-layout="desktop"] .panel {
@@ -2830,10 +2814,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   animation-name: ll-sheet-fade;
 }
 
-/* Phone: a bottom sheet with a grabber over a dimmed backdrop. */
+/* Phone: a bottom sheet over a dimmed backdrop. */
 .root[data-layout="phone"] .backdrop {
-  background: rgba(0, 0, 0, .28);
-  animation: ll-sheet-fade 240ms ease-out both;
+  background: rgba(0, 0, 0, .36);
+  animation: ll-sheet-fade 200ms ease-out both;
 }
 
 .root[data-layout="phone"] .panel {
@@ -2844,22 +2828,23 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   margin: 0 auto;
   max-height: 88vh;
   max-height: 88dvh;
-  padding-top: 8px;
+  padding-top: 10px;
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-radius: 16px 16px 0 0;
-  animation: ll-sheet-rise 420ms var(--spring) both;
+  border-width: 1px 0 0;
+  border-radius: 10px 10px 0 0;
+  animation: ll-sheet-rise 260ms cubic-bezier(.2, .8, .2, 1) both;
 }
 
 .root[data-layout="phone"] .panel::before {
   content: "";
   position: absolute;
-  top: 6px;
+  top: 7px;
   left: 50%;
   width: 36px;
-  height: 5px;
+  height: 4px;
   margin-left: -18px;
-  border-radius: 999px;
-  background: var(--rule);
+  border-radius: 2px;
+  background: var(--hai);
 }
 
 @keyframes ll-sheet-fade {
@@ -2867,19 +2852,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   to { opacity: 1; }
 }
 
-@keyframes ll-sheet-pop {
-  from { opacity: 0; transform: translateY(-6px) scale(.98); }
+@keyframes ll-sheet-in {
+  from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
 }
 
 @keyframes ll-sheet-rise {
-  from { transform: translateY(100%); }
-  to { transform: none; }
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .panel, .backdrop { animation: none !important; }
-  .btn { transition: none !important; }
 }
 
 .head {
@@ -2888,15 +2872,32 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 10px 6px 20px;
+  padding: 14px 12px 12px 20px;
+  border-bottom: 1px solid var(--hai);
 }
 
+/* The title carries the same edition mark as the page: a small 金赤 seal with 訳. */
 .title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
+  color: var(--ink);
+  font: 600 17px/1.4 var(--mincho);
+  letter-spacing: .04em;
+}
+
+.title::before {
+  content: "訳";
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 1px;
+  background: var(--aka);
+  color: #FFFFFF;
+  font: 600 13px/22px var(--mincho);
   letter-spacing: 0;
-  line-height: 1.35;
+  text-align: center;
 }
 
 .body {
@@ -2905,93 +2906,84 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 6px 16px 18px;
+  padding: 16px 20px 20px;
 }
 
 .root[data-layout="phone"] .body { padding-bottom: 24px; }
 
-/* ---------- groups ---------- */
+/* ---------- sections ---------- */
 
-/* Each section is one white rounded group on the soft gray surface. */
-.section {
-  padding: 12px 16px 14px;
-  border-radius: 12px;
-  background: var(--group);
+.section + .section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hai);
 }
 
-.section + .section { margin-top: 12px; }
-
 .section-title {
-  margin: 0 0 6px;
-  color: var(--label);
+  margin: 0 0 8px;
+  color: var(--nezumi);
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: .04em;
+  letter-spacing: .08em;
 }
 
 .section-lead {
   margin: 0 0 8px;
-  color: var(--label);
+  color: var(--nezumi);
   font-size: 12.5px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .line {
   margin: 0 0 10px;
-  color: var(--label);
+  color: var(--sumi);
 }
 
 .line:last-child { margin-bottom: 0; }
 
 .note {
-  margin: 10px 4px 16px;
-  color: var(--label);
+  margin: 10px 0 18px;
+  color: var(--nezumi);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .msg {
   margin: 0;
-  color: var(--label);
+  color: var(--nezumi);
   font-size: 12.5px;
   line-height: 1.6;
 }
 
-.msg:not(:empty) { margin-top: 6px; }
-.msg[data-kind="error"] { color: var(--danger); }
+.msg:not(:empty) { margin-top: 8px; }
+.msg[data-kind="error"] { color: var(--aka); }
 
 /* ---------- first run ---------- */
 
+/* A real sequence, so it is numbered: 明朝 numerals in 金赤, hanging. */
 .steps {
   list-style: none;
-  margin: 4px 0 14px;
-  padding: 14px 16px 4px;
-  border-radius: 12px;
-  background: var(--group);
+  margin: 2px 0 16px;
+  padding: 0;
   counter-reset: step;
 }
 
 .steps li {
   position: relative;
-  margin: 0 0 12px;
-  padding-left: 34px;
+  margin: 0 0 14px;
+  padding-left: 30px;
+  color: var(--sumi);
+  line-height: 1.75;
   counter-increment: step;
 }
 
 .steps li::before {
   content: counter(step);
   position: absolute;
-  left: 0;
-  top: 1px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--tint);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 22px;
-  text-align: center;
+  left: 2px;
+  top: -2px;
+  color: var(--aka);
+  font: 600 20px/1.3 var(--mincho);
 }
 
 .steps .link { display: block; margin-top: 2px; }
@@ -3006,42 +2998,57 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   justify-content: center;
   margin: 0;
   min-height: 36px;
-  padding: 6px 12px;
-  border: 0;
-  border-radius: 10px;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 2px;
   background: transparent;
-  color: var(--accent);
+  color: var(--ink);
   font: inherit;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   letter-spacing: inherit;
   font-feature-settings: inherit;
   line-height: 1.3;
   text-align: center;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: transform .25s var(--spring), background-color .2s ease, opacity .2s ease;
 }
 
-/* tinted: the secondary action of a group */
-.btn[data-v="outline"] { background: var(--tint); font-weight: 600; padding: 6px 14px; }
+/* outline: the secondary action of a section */
+.btn[data-v="outline"] {
+  padding: 6px 14px;
+  border-color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
 
-/* filled: the one thing this sheet is for */
+/* solid: the one thing this sheet is for */
 .btn[data-v="solid"] {
   min-height: 44px;
   padding: 10px 18px;
-  border-radius: 12px;
-  background: var(--accent);
-  color: var(--on-accent);
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
   font-size: 15px;
   font-weight: 600;
+  letter-spacing: .06em;
+  text-decoration: none;
 }
 
-.btn[data-v="close"] { flex: none; font-weight: 600; }
+.btn[data-v="close"] {
+  flex: none;
+  padding: 6px 8px;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--nezumi);
+}
 
 /* destructive: delete this song, delete all, and their confirmations */
-.btn[data-danger] { color: var(--danger); }
-.btn[data-v="outline"][data-danger] { background: rgba(215, 0, 21, .09); }
-.root[data-theme="dark"] .btn[data-v="outline"][data-danger] { background: rgba(255, 105, 97, .16); }
+.btn[data-danger] { color: var(--aka); }
+.btn[data-v="outline"][data-danger] { border-color: var(--aka); }
 
 .btn:disabled {
   opacity: .4;
@@ -3049,29 +3056,28 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 .btn:active:not(:disabled) { opacity: .7; }
-.btn[data-v="solid"]:active:not(:disabled),
-.btn[data-v="outline"]:active:not(:disabled) { transform: scale(.97); }
 
 @media (hover: hover) {
-  .btn[data-v="text"]:hover:not(:disabled),
-  .btn[data-v="close"]:hover:not(:disabled) { opacity: .75; }
-  .btn[data-v="outline"]:hover:not(:disabled) { background: var(--tint-strong); }
-  .btn[data-v="solid"]:hover:not(:disabled) { filter: brightness(1.07); }
+  .btn[data-v="text"]:hover:not(:disabled) { color: var(--aka); }
+  .btn[data-v="close"]:hover:not(:disabled) { color: var(--ink); }
+  .btn[data-v="outline"]:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+  .btn[data-v="outline"][data-danger]:hover:not(:disabled) { background: var(--aka); color: #FFFFFF; }
+  .btn[data-v="solid"]:hover:not(:disabled) { background: #333333; border-color: #333333; }
 }
 
 .link {
   display: inline-block;
   padding: 6px 0;
-  color: var(--accent);
+  color: var(--ink);
   font-weight: 600;
-  text-decoration: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
   cursor: pointer;
 }
 
-.link::after { content: " ›"; font-weight: 600; }
-
 @media (hover: hover) {
-  .link:hover { opacity: .75; }
+  .link:hover { color: var(--aka); }
 }
 
 .input {
@@ -3080,29 +3086,25 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   width: 100%;
   min-height: 40px;
   margin: 0;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--field);
-  color: var(--sheet-ink);
+  padding: 8px 10px;
+  border: 1px solid var(--field-line);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
   font: inherit;
   letter-spacing: normal;
   font-feature-settings: normal;
-  transition: box-shadow .2s ease;
 }
 
-/* outside a group (first run), the field sits on the gray surface: make it white */
-.body > .input { background: var(--group); }
-
-.input::placeholder { color: var(--label); opacity: 1; }
-.input:focus { outline: none; box-shadow: 0 0 0 3px var(--tint-strong); }
-.input[aria-invalid="true"] { box-shadow: 0 0 0 2px var(--danger); }
+.input::placeholder { color: var(--nezumi); opacity: 1; }
+.input:focus { outline: none; border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.input[aria-invalid="true"] { border-color: var(--aka); box-shadow: inset 0 0 0 1px var(--aka); }
 .input:disabled { opacity: .6; }
 
 .btn:focus-visible,
 .link:focus-visible,
 .input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--aka);
   outline-offset: 2px;
 }
 
@@ -3112,24 +3114,24 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 20px;
 }
 
-.actions[data-stack="true"] { margin-top: 4px; }
+.actions[data-stack="true"] { margin-top: 4px; gap: 10px; }
 
 .inline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 /* The key field and mask absorb the remaining width; a button is never squeezed or broken inside a word. */
 .inline > .btn { flex: none; white-space: nowrap; }
 
-/* ---------- services ---------- */
+/* ---------- the key row ---------- */
 
-.service { padding: 6px 0 2px; }
-.service + .service { border-top: .5px solid var(--rule); }
+.service { padding: 2px 0; }
+.service + .service { border-top: 1px solid var(--hai); }
 
 .service-head {
   display: flex;
@@ -3139,28 +3141,28 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 .dot {
   flex: none;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--rule);
+  background: var(--hai);
 }
 
 .dot[data-s="ok"] { background: var(--ok); }
-.dot[data-s="missing"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--label); }
+.dot[data-s="missing"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--nezumi); }
 .dot[data-s="resting"] { background: var(--rest); }
-.dot[data-s="bad"] { background: var(--danger); }
+.dot[data-s="bad"] { background: var(--aka); }
 
 .service-name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 15px;
+  color: var(--ink);
   font-weight: 600;
 }
 
 .status {
   flex: 0 1 auto;
-  color: var(--label);
-  font-size: 13px;
+  color: var(--nezumi);
+  font-size: 12.5px;
   text-align: right;
 }
 
@@ -3169,24 +3171,22 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 .mask {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--label);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: .08em;
+  color: var(--nezumi);
+  letter-spacing: .14em;
   font-feature-settings: normal;
 }
 
-.service .link { font-size: 13px; }
+.service .link { font-size: 12.5px; }
 
 /* ---------- inline confirm ---------- */
 
 .confirm {
   margin-top: 10px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--field);
+  padding: 10px 0 2px 14px;
+  border-left: 1px solid var(--aka);
 }
 
-.confirm-text { margin: 0 0 8px; }
+.confirm-text { margin: 0 0 8px; color: var(--ink); }
 
 /* ---------- phone ---------- */
 
@@ -3195,7 +3195,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 .root[data-layout="phone"] .btn { min-width: 44px; }
 
-.root[data-layout="phone"] .btn[data-v="solid"] { min-height: 50px; font-size: 16px; border-radius: 14px; }
+.root[data-layout="phone"] .btn[data-v="solid"] { min-height: 50px; font-size: 16px; }
 
 .root[data-layout="phone"] .input { font-size: 16px; }
 
@@ -3213,13 +3213,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 .error-detail {
-  margin: 0 0 10px;
-  color: var(--label);
+  margin: 0 0 12px;
+  color: var(--nezumi);
   font-size: 12.5px;
   line-height: 1.6;
 }
 
-.error-detail summary { cursor: pointer; color: var(--accent); font-weight: 500; }
+.error-detail summary { cursor: pointer; color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
 
 .error-detail p {
   margin: 4px 0 0;
@@ -3925,12 +3925,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           "section",
           { class: "section" },
           h("h3", { class: "section-title" }, COPY.song),
-          edition && parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.join(" · ")}`) : null,
+          edition && parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.length > 1 ? `${parts[0]}（${parts[1]}）` : parts[0]}`) : null,
           song.lastError ? h(
             "details",
             { class: "error-detail" },
             h("summary", {}, COPY.lastError),
-            h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join(" · ")),
+            h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join("／")),
             song.lastError.text ? h("p", { class: "error-text" }, song.lastError.text) : null
           ) : null,
           edition ? zone2 : null
@@ -4041,7 +4041,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const dataActions = h("div", { class: "actions" }, exportButton, importButton, deleteAll);
       zone.append(dataActions);
       function paintSummary() {
-        summaryEl.textContent = summary ? `保存した曲：${summary.count}曲 · ${formatSize(summary.bytes)}` : "保存した曲：…";
+        summaryEl.textContent = summary ? `保存した曲：${summary.count}曲（${formatSize(summary.bytes)}）` : "保存した曲：…";
         const none = !summary || summary.count === 0;
         exportButton.disabled = none || dataBusy();
         importButton.disabled = dataBusy();
@@ -4201,14 +4201,14 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const writing = { slots: true, gaps: false, breathing: true, seam: null };
     const hide = hideAction(i);
     if (i.running === "here-retranslate") {
-      return { state: "S8", status: "訳し直しています · 終わるまで今の訳を表示します", actions: [STOP], preface: i.hasPreface, lines: none };
+      return { state: "S8", status: "訳し直しています。終わるまで今の訳を表示します", actions: [STOP], preface: i.hasPreface, lines: none };
     }
     if (i.running === "here") {
       const arriving = i.hasPreface || i.done > 0;
       const slow = !arriving && (i.waitedMs ?? 0) >= 15e3;
       const wait = "返事を待っています。混んでいると1分ほどかかることもあります";
       const buffered = "この環境では訳がまとめて届きます";
-      const note = slow && !i.streams ? `${wait} · ${buffered}` : slow ? wait : !i.streams ? buffered : void 0;
+      const note = slow && !i.streams ? `${wait}。${buffered}` : slow ? wait : !i.streams ? buffered : void 0;
       return {
         state: arriving ? "S4" : "S3",
         status: arriving ? "" : "曲全体を読んでいます",
@@ -4231,7 +4231,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         return { state: "S1", status: "日本語訳には無料のAPIキーが必要です", actions: [{ id: "firstRun", label: "キーを設定", primary: true }], preface: false, lines: none };
       }
       if (i.otherSong) {
-        return { state: "S2b", status: `別の曲（${i.otherSong}）を訳しています · 終わると訳せます`, actions: [{ id: "stopOther", label: "あちらを止める" }, SETTINGS], preface: false, lines: none };
+        return { state: "S2b", status: `別の曲（${i.otherSong}）を訳しています。終わるとこの曲も訳せます`, actions: [{ id: "stopOther", label: "あちらを止める" }, SETTINGS], preface: false, lines: none };
       }
       if (quotaUntil != null) {
         return {
@@ -4965,44 +4965,35 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   };
 
   // src/ui/styles.css
-  var styles_default = `/* Lyric Lens (docs/DESIGN.md §6). Content first: the Japanese sits under each line like quiet
-   ruby; the few controls live in one soft card and recede until they are needed. Surfaces are
-   flat fills with continuous corners, not borders; motion is short and eased like a spring. */
+  var styles_default = `/* Lyric Lens (docs/DESIGN.md §6): the domestic-edition 対訳 booklet, printed into the Genius page.
+   The translation is set in 明朝 under Genius' sans, as a second voice; the translator writes in
+   red ink (金赤) and only the translator does; the one bold thing is the 対訳 edition mark.
+   No cards, no fills behind text, no pills, no shadows on the reading surface. */
 
 .ll-head, .ll-line, .ll-note {
-  --ll-ink: #515156;          /* the Japanese line */
-  --ll-ink-strong: #1D1D1F;   /* 誰が誰に */
-  --ll-ink-repeat: #78787D;
-  --ll-accent: #BA4A30;       /* 朱: the one tint */
-  --ll-label: #737378;        /* captions, status, ad-libs */
-  --ll-fill: #F5F5F7;         /* card surfaces */
-  --ll-fill-2: #E8E8ED;       /* placeholders */
-  --ll-fill-3: #F4F4F7;       /* placeholder shimmer */
-  --ll-sep: rgba(60, 60, 67, .13);
-  --ll-tint: rgba(186, 74, 48, .10);
-  --ll-tint-strong: rgba(186, 74, 48, .17);
-  --ll-font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", "Segoe UI", Meiryo, system-ui, sans-serif;
-  --ll-spring: cubic-bezier(.32, .72, 0, 1);
+  --ll-sumi: #333333;       /* the Japanese line, preface */
+  --ll-kuro: #000000;       /* the primary button, matching Genius' black */
+  --ll-nezumi: #767676;     /* status, labels, ad-libs, repeats */
+  --ll-aka: #E60012;        /* 金赤: the translator's red */
+  --ll-hai: #C8C8C8;        /* hairlines, idle placeholders */
+  --ll-paper: #FFFFFF;
+  --ll-mincho: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Noto Serif JP", "Yu Mincho", YuMincho, "Noto Serif CJK JP", "Source Han Serif JP", serif;
+  --ll-gothic: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", "Noto Sans CJK JP", Meiryo, sans-serif;
 }
 html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
-  --ll-ink: #C7C7CC;
-  --ll-ink-strong: #F5F5F7;
-  --ll-ink-repeat: #98989D;
-  --ll-accent: #F2795B;
-  --ll-label: #98989D;
-  --ll-fill: #1C1C1E;
-  --ll-fill-2: #2C2C2E;
-  --ll-fill-3: #3A3A3C;
-  --ll-sep: rgba(84, 84, 88, .6);
-  --ll-tint: rgba(242, 121, 91, .16);
-  --ll-tint-strong: rgba(242, 121, 91, .26);
+  --ll-sumi: #E6E6E6;
+  --ll-kuro: #FFFFFF;
+  --ll-nezumi: #A0A0A0;
+  --ll-aka: #FF4B55;
+  --ll-hai: #4A4A4A;
+  --ll-paper: #121212;
 }
-html { --ll-hl-bg: rgba(186, 74, 48, .09); }
-html.ll-dark { --ll-hl-bg: rgba(242, 121, 91, .16); }
+html { --ll-hl-bg: rgba(230, 0, 18, .07); }
+html.ll-dark { --ll-hl-bg: rgba(255, 75, 85, .16); }
 
 /* Japanese typesetting and link resets on every node we add. */
 .ll-head, .ll-line, .ll-note {
-  font-family: var(--ll-font);
+  font-family: var(--ll-gothic);
   font-style: normal;
   font-weight: 400;
   text-align: left;
@@ -5012,14 +5003,13 @@ html.ll-dark { --ll-hl-bg: rgba(242, 121, 91, .16); }
   word-break: auto-phrase;
   overflow-wrap: anywhere;
   font-feature-settings: "palt" 1;
-  letter-spacing: .01em;
+  letter-spacing: .02em;
   text-spacing-trim: trim-start;
   hanging-punctuation: none;
   background: transparent !important;
   text-decoration: none !important;
   cursor: auto;
   overflow-anchor: none;
-  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
 .ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
@@ -5027,117 +5017,144 @@ html.ll-dark { --ll-hl-bg: rgba(242, 121, 91, .16); }
    still copy the Japanese. */
 .ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
 
-/* ---------- the card: status, actions, preface ---------- */
+/* ---------- the control block: edition mark, status, actions, preface ---------- */
 .ll-head {
-  display: block;
-  margin: 6px 0 26px;
-  padding: 10px 16px;
-  border-radius: 14px;
-  background: var(--ll-fill) !important;
-  color: var(--ll-ink) !important;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 16px;
+  align-items: start;
+  margin: 10px 0 34px;
+  padding: 0;
+  color: var(--ll-sumi) !important;
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
 }
-/* Before there is a preface the card hugs its controls instead of stretching empty. */
-.ll-head:not(:has(.ll-preface)) { width: fit-content; max-width: 100%; }
-.ll-head-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-height: 36px; }
+.ll-head > * { grid-column: 2; min-width: 0; }
+/* The edition mark: the 帯 spine of a domestic edition, 「対訳」 set vertically in white on 金赤.
+   The one bold element; everything around it is plain type. */
+.ll-head::before {
+  content: "対訳";
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  align-self: start;
+  box-sizing: border-box;
+  width: 22px;
+  padding: 7px 0 5px;
+  border-radius: 1px;
+  background: var(--ll-aka);
+  color: #FFFFFF;
+  /* vertical text: the line height is the column's width, which centres the glyphs in it */
+  font: 600 12px/22px var(--ll-mincho);
+  letter-spacing: .3em;
+  text-align: center;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* As tall as the edition mark, so the first row of controls sits centred against it. */
+.ll-head-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; min-height: 44px; }
 /* The actions follow the sentence they answer instead of drifting to the far edge. */
-.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-label); font-size: 13px; }
-.ll-status[data-tone="muted"] { color: var(--ll-label); }
+.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-nezumi); font-size: 12px; letter-spacing: .04em; }
+.ll-status[data-tone="muted"] { color: var(--ll-nezumi); }
 /* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
 .ll-status:focus { outline: none; }
 /* An empty live region stays in the accessibility tree (never \`hidden\`) so that its next text is
    announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap. */
 .ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }
-.ll-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; }
+.ll-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; }
 
-/* Plain buttons: tint-coloured text. */
+/* Secondary actions read like Genius' own meta links: small, underlined, black. */
 .ll-btn {
   all: unset;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  color: var(--ll-accent) !important;
-  font: 500 14px/1.3 var(--ll-font);
-  letter-spacing: .01em;
+  min-height: 28px;
+  color: var(--ll-kuro) !important;
+  font: 400 12px/1.3 var(--ll-gothic);
+  letter-spacing: .04em;
   cursor: pointer;
   white-space: nowrap;
-  transition: transform .25s var(--ll-spring), background-color .2s ease, opacity .2s ease;
 }
-/* The one next step (日本語で読む, 続きを訳す, キーを設定): a tinted capsule. */
+.ll-head .ll-btn:not([data-primary]) {
+  text-decoration: underline !important;
+  text-decoration-thickness: 1px !important;
+  text-underline-offset: 4px;
+}
+/* The one next step (日本語で読む, 続きを訳す, キーを設定): a solid black block, Genius' own primary. */
 .ll-btn[data-primary] {
+  min-height: 34px;
   padding: 0 16px;
-  border-radius: 999px;
-  background: var(--ll-tint) !important;
-  font-weight: 600;
+  border-radius: 2px;
+  background: var(--ll-kuro) !important;
+  color: var(--ll-paper) !important;
+  font: 600 14px/1.3 var(--ll-gothic);
+  letter-spacing: .06em;
 }
 /* Hover only where a pointer can hover: on touch it would stick to the last tapped button. */
 @media (hover: hover) {
-  .ll-btn:hover { opacity: .78; }
-  .ll-btn[data-primary]:not(:disabled):hover { opacity: 1; background: var(--ll-tint-strong) !important; }
-  .ll-seam .ll-btn:not(:disabled):hover { opacity: 1; background: var(--ll-tint-strong) !important; }
+  .ll-btn:hover { color: var(--ll-aka) !important; }
+  .ll-btn[data-primary]:not(:disabled):hover { color: var(--ll-paper) !important; background: #333333 !important; }
+  .ll-seam .ll-btn:not(:disabled):hover { color: var(--ll-paper) !important; background: #333333 !important; }
 }
-.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; opacity: 1; }
-.ll-btn[data-primary]:disabled, .ll-seam .ll-btn:disabled { background: var(--ll-fill-2) !important; }
+.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-nezumi) !important; cursor: default; }
+.ll-btn[data-primary]:disabled, .ll-seam .ll-btn:disabled { background: #E6E6E6 !important; color: var(--ll-nezumi) !important; }
 /* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
 .ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }
-.ll-btn[data-primary]:active:not(:disabled), .ll-seam .ll-btn:active:not(:disabled) { transform: scale(.96); }
 .ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {
-  outline: 2px solid var(--ll-accent);
-  outline-offset: 2px;
-  border-radius: 8px;
+  outline: 2px solid var(--ll-aka);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
-.ll-btn[data-primary]:focus-visible { border-radius: 999px; }
 /* Keep keyboard-focused controls clear of Genius' sticky nav. Not on .ll-mark: app.ts focuses it
    without preventScroll and a margin would make the page jump after anchoring. */
 .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
-.ll-head-note { display: block; margin: 0 0 6px; color: var(--ll-label); font-size: 12px; }
-.ll-head-note[data-tone="reason"] { font-size: 13px; color: var(--ll-ink); }
+.ll-head-note { display: block; margin: 0 0 4px; color: var(--ll-nezumi); font-size: 12px; letter-spacing: .04em; }
+.ll-head-note[data-tone="reason"] { color: var(--ll-sumi); }
 
+/* The preface: what the translator understood before the first line, set like the opening of
+   a liner note. */
 .ll-preface {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin: 8px 0 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--ll-sep);
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ll-ink);
+  gap: 12px;
+  margin: 14px 0 0;
+  color: var(--ll-sumi);
   -webkit-user-select: text;
   user-select: text;
 }
-.ll-preface-rows { display: block; flex: 1; min-width: 0; max-width: 40em; }
-.ll-preface-row { display: flex; gap: 12px; align-items: baseline; }
-.ll-preface-row + .ll-preface-row { margin-top: 4px; }
+.ll-preface-rows { display: block; flex: 0 1 34em; min-width: 0; }
+.ll-preface-row { display: flex; gap: 16px; align-items: baseline; }
+.ll-preface-row + .ll-preface-row { margin-top: 6px; }
 .ll-preface-row[hidden] { display: none; }
-.ll-preface-label { flex: none; min-width: 4.6em; color: var(--ll-label); font-size: 11px; font-weight: 500; letter-spacing: .06em; }
-.ll-preface-who { color: var(--ll-ink-strong); font-size: 15px; font-weight: 600; letter-spacing: 0; }
-/* A chevron, not a glyph: points right when closed and turns down when open. */
+.ll-preface-label { flex: none; width: 4.6em; color: var(--ll-nezumi); font: 400 11px/1.6 var(--ll-gothic); letter-spacing: .1em; }
+.ll-preface-who { font: 600 16px/1.6 var(--ll-mincho); color: var(--ll-kuro); letter-spacing: .03em; }
+.ll-preface-what { font: 500 14px/1.9 var(--ll-mincho); }
+/* A thin chevron: points right when closed, down when open. */
 .ll-preface-toggle {
   all: unset;
   box-sizing: border-box;
   position: relative;
   flex: none;
-  width: 20px;
-  height: 24px;
-  color: var(--ll-label) !important;
+  width: 18px;
+  height: 26px;
+  color: var(--ll-nezumi) !important;
   font-size: 0;
   cursor: pointer;
 }
 .ll-preface-toggle::before {
   content: "";
   position: absolute;
-  left: 6px;
-  top: 8px;
+  left: 5px;
+  top: 9px;
   width: 6px;
   height: 6px;
-  border-right: 1.75px solid currentColor;
-  border-bottom: 1.75px solid currentColor;
+  border-right: 1.25px solid currentColor;
+  border-bottom: 1.25px solid currentColor;
   transform: rotate(-45deg);
-  transition: transform .3s var(--ll-spring);
+  transition: transform .2s ease-out;
 }
 .ll-preface-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
 .ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
@@ -5147,148 +5164,159 @@ html.ll-dark { --ll-hl-bg: rgba(242, 121, 91, .16); }
   display: block;
   position: relative;
   margin: 0;
-  padding: 3px 0 14px;
-  min-height: 1.65em;
-  color: var(--ll-ink) !important;
-  font-size: .84em;
-  line-height: 1.65;
+  padding: 1px 0 16px;
+  min-height: 1.8em;
+  color: var(--ll-sumi) !important;
+  font-family: var(--ll-mincho);
+  font-size: .889em;
+  font-weight: 500;
+  line-height: 1.8;
+  letter-spacing: .03em;
 }
 html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
-.ll-line[data-repeat] { color: var(--ll-ink-repeat) !important; }
+.ll-line[data-repeat] { color: var(--ll-nezumi) !important; }
 .ll-ja { color: inherit !important; }
-.ll-repeat { color: var(--ll-label); margin-left: .35em; font-size: .85em; }
+.ll-repeat { color: var(--ll-nezumi); margin-left: .4em; font: 400 .8em var(--ll-gothic); }
 
-/* Not yet written: a soft placeholder bar about as long as the translation will be
-   (lines.ts sets --ll-n from the English line). The one being written shimmers. */
-.ll-line[data-state="empty"] .ll-ja,
-.ll-line[data-state="next"] .ll-ja,
+/* Not yet written: a 明朝 「――」 holds the line's place. The one being written is in red ink. */
+.ll-line[data-state="empty"] .ll-ja::before,
+.ll-line[data-state="next"] .ll-ja::before,
 .ll-line[data-state="seam"]::before {
+  content: "――";
   display: block;
-  width: clamp(5em, calc(var(--ll-n, 36) * .42em), 92%);
-  height: .8em;
-  margin: .42em 0;
-  border-radius: 6px;
-  background: var(--ll-fill-2) !important;
+  color: var(--ll-hai);
+  letter-spacing: 0;
 }
-.ll-line[data-state="next"] .ll-ja {
-  background: linear-gradient(90deg, var(--ll-fill-2) 25%, var(--ll-fill-3) 50%, var(--ll-fill-2) 75%) 0 0 / 300% 100% !important;
-  animation: ll-shimmer 1.6s ease-in-out infinite;
-}
-.ll-line[data-state="gap"] .ll-ja { color: var(--ll-label) !important; }
-.ll-line[data-ink] { animation: ll-ink .32s var(--ll-spring); }
-@keyframes ll-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-@keyframes ll-ink { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.ll-line[data-state="next"] .ll-ja::before { color: var(--ll-aka); animation: ll-breathe 1.8s ease-in-out infinite; }
+.ll-line[data-state="gap"] .ll-ja { color: var(--ll-hai) !important; }
+.ll-line[data-ink] .ll-ja { animation: ll-ink .24s ease-out; }
+@keyframes ll-breathe { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }
 
+/* ※: the translator's mark. Open, it turns into a small red seal. */
 .ll-mark {
   all: unset;
   box-sizing: content-box;
   position: relative;
   display: inline-block;
   margin-left: .3em;
-  padding: 0 .2em;
-  border-radius: 6px;
-  color: var(--ll-accent) !important;
-  font: 600 1em/1.25 var(--ll-font);
+  padding: 0 .12em;
+  border-radius: 1px;
+  color: var(--ll-aka) !important;
+  font: 600 1em/1.15 var(--ll-mincho);
   vertical-align: baseline;
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
-  transition: background-color .2s ease;
 }
 /* 44×44 hit area without moving the text. */
 .ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
-.ll-line[data-repeat] .ll-mark { color: var(--ll-label) !important; }
-.ll-mark[aria-expanded="true"] { background: var(--ll-tint) !important; }
+.ll-line[data-repeat] .ll-mark { color: var(--ll-nezumi) !important; }
+.ll-mark[aria-expanded="true"] { background: var(--ll-aka) !important; color: #FFFFFF !important; }
 
-/* The seam: where writing stopped, a small callout says why and offers the next step. */
-.ll-line[data-state="seam"] { padding-bottom: 18px; }
-.ll-line[data-state="seam"]::before { content: ""; }
-.ll-seam {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  margin-top: 8px;
-  padding: 10px 12px 10px 16px;
-  border-radius: 12px;
-  background: var(--ll-fill) !important;
+/* The seam: where writing stopped, a line of 赤字 says why and offers the next step. */
+.ll-line[data-state="seam"] { padding-bottom: 20px; }
+.ll-seam { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 2px; }
+.ll-seam-text { color: var(--ll-sumi); font: 400 13px/1.7 var(--ll-gothic); letter-spacing: .03em; }
+.ll-seam-text::before { content: "※"; margin-right: .45em; color: var(--ll-aka); font-family: var(--ll-mincho); font-weight: 600; }
+.ll-seam .ll-btn {
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 2px;
+  background: var(--ll-kuro) !important;
+  color: var(--ll-paper) !important;
+  font: 600 13px/1.3 var(--ll-gothic);
+  letter-spacing: .06em;
 }
-.ll-seam-text { flex: 1 1 16em; color: var(--ll-ink); font-size: 13px; line-height: 1.6; }
-.ll-seam .ll-btn { padding: 0 14px; min-height: 30px; border-radius: 999px; background: var(--ll-tint) !important; font-size: 13px; font-weight: 600; }
-/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */
-.ll-adlib { color: var(--ll-label) !important; }
+/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: quieter ink, same face */
+.ll-adlib { color: var(--ll-nezumi) !important; }
 
-/* ---------- notes ---------- */
+/* ---------- notes (訳注) ---------- */
 .ll-note {
   display: grid;
   grid-template-rows: 1fr;
-  margin: 2px 0 18px;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: var(--ll-fill) !important;
-  color: var(--ll-ink) !important;
-  font-size: .8em;
-  line-height: 1.7;
+  margin: 0 0 20px 1em;
+  padding: 2px 0 2px 1.1em;
+  border-left: 1px solid var(--ll-aka);
+  color: var(--ll-sumi) !important;
+  font-family: var(--ll-mincho);
+  font-size: .778em;
+  font-weight: 500;
+  line-height: 1.85;
 }
-/* an open note hangs from its own line, closer to it than to the next lyric */
-.ll-line:has(+ .ll-note) { padding-bottom: 6px; }
+/* an open note hangs from its own line */
+.ll-line:has(+ .ll-note) { padding-bottom: 8px; }
 /* user-initiated open only (notes.ts sets data-enter briefly) */
-.ll-note[data-enter] { animation: ll-note-open .34s var(--ll-spring); }
-@keyframes ll-note-open { from { grid-template-rows: 0fr; padding-block: 0; opacity: 0; transform: translateY(-4px); } to { grid-template-rows: 1fr; opacity: 1; transform: none; } }
+.ll-note[data-enter] { animation: ll-note-open .22s ease-out; }
+@keyframes ll-note-open { from { grid-template-rows: 0fr; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
 .ll-note-body { overflow: hidden; min-height: 0; }
-.ll-note-item + .ll-note-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ll-sep); }
-.ll-note-head { display: flex; align-items: center; gap: 8px; }
-.ll-note-kind { color: var(--ll-accent); font-size: 11px; font-weight: 600; letter-spacing: .06em; }
-.ll-note-conj { color: var(--ll-label); font-size: 10.5px; font-weight: 500; border-radius: 999px; padding: 0 7px; line-height: 1.7; background: var(--ll-fill-2) !important; }
-.ll-note-phrase { display: block; margin-top: 3px; font-style: italic; color: var(--ll-ink-strong); font-size: .95em; }
+.ll-note-item + .ll-note-item { margin-top: 14px; }
+.ll-note-head { display: flex; align-items: baseline; gap: 10px; }
+.ll-note-kind { color: var(--ll-aka); font: 600 11px/1.6 var(--ll-gothic); letter-spacing: .08em; }
+.ll-note-kind::before { content: "※"; margin-right: .35em; font-family: var(--ll-mincho); }
+.ll-note-conj { color: var(--ll-nezumi); font: 400 10.5px/1.5 var(--ll-gothic); letter-spacing: .06em; padding: 0 5px; border: 1px solid currentColor; border-radius: 1px; }
+.ll-note-phrase { display: block; margin-top: 2px; color: var(--ll-kuro); font-style: italic; font-weight: 400; font-size: .93em; letter-spacing: 0; }
 .ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
-.ll-note-text { display: block; margin-top: 3px; }
-.ll-note-src { display: block; margin-top: 6px; color: var(--ll-label); font-size: 11px; }
-.ll-gn { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ll-sep); }
-.ll-gn-toggle { all: unset; display: inline-flex; align-items: center; min-height: 28px; cursor: pointer; color: var(--ll-label); font-size: 12px; font-weight: 500; }
-.ll-gn-text { margin-top: 4px; font-family: Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
-.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-accent); font-size: 12px; font-weight: 500; margin-left: 2px; padding: 10px 4px; }
-@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { opacity: .78; } }
+.ll-note-text { display: block; margin-top: 2px; }
+.ll-note-src { display: block; margin-top: 6px; color: var(--ll-nezumi); font: 400 11px/1.6 var(--ll-gothic); letter-spacing: .04em; }
+.ll-gn { margin-top: 10px; }
+.ll-gn-toggle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  cursor: pointer;
+  color: var(--ll-nezumi);
+  font: 400 11.5px/1.4 var(--ll-gothic);
+  letter-spacing: .04em;
+  text-decoration: underline !important;
+  text-decoration-thickness: 1px !important;
+  text-underline-offset: 4px;
+}
+.ll-gn-text { margin-top: 4px; color: var(--ll-sumi); font: 400 13px/1.65 Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
+.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-kuro); font: 400 12px var(--ll-gothic); margin-left: 4px; padding: 10px 4px; text-decoration: underline !important; text-underline-offset: 3px; }
+@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { color: var(--ll-aka); } }
 
+/* The English phrase a note is about: the translator's red side line. */
 ::highlight(ll-phrase) {
   text-decoration: underline 1.5px;
-  text-decoration-color: #BA4A30;
-  text-underline-offset: 3px;
+  text-decoration-color: #E60012;
+  text-underline-offset: 4px;
   background-color: var(--ll-hl-bg);
 }
 ::highlight(ll-phrase-peek) {
   text-decoration: underline 1.5px;
-  text-decoration-color: #BA4A30;
-  text-underline-offset: 3px;
+  text-decoration-color: #E60012;
+  text-underline-offset: 4px;
 }
-html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #F2795B; }
+html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #FF4B55; }
 
 @media (max-width: 599px) {
-  .ll-head { padding: 8px 14px; margin-bottom: 22px; }
-  .ll-line { font-size: .875em; padding-bottom: 12px; }
-  /* 13px on Genius' 16px phone lyrics */
-  .ll-note { font-size: .8125em; padding: 12px 14px; }
-  .ll-head-row { flex-direction: column; align-items: stretch; gap: 2px; padding: 4px 0; }
+  .ll-head { grid-template-columns: 20px minmax(0, 1fr); column-gap: 12px; margin-bottom: 28px; }
+  .ll-head::before { width: 20px; font-size: 11px; line-height: 20px; }
+  .ll-head-row { flex-direction: column; align-items: stretch; gap: 0; }
   /* In a column the flex-basis would become a height. */
   .ll-status { flex: none; }
   /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */
-  .ll-actions { justify-content: flex-start; }
+  .ll-actions { justify-content: flex-start; column-gap: 24px; }
   .ll-btn, .ll-gn-toggle { min-height: 44px; }
-  .ll-btn[data-primary] { min-height: 40px; padding: 0 20px; margin-block: 2px; }
+  .ll-btn { font-size: 13px; }
+  .ll-btn[data-primary] { min-height: 42px; padding: 0 22px; margin-block: 2px; font-size: 15px; }
   /* Genius' phone header (nav + ad slot) is sticky and about 125px tall. */
   .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 140px; }
-  .ll-seam { padding: 12px 14px; }
-  /* labels above, so the preface gets the card's full width */
+  /* labels above, so the preface gets the full width */
   .ll-preface-row { flex-direction: column; gap: 0; }
-  .ll-preface-row + .ll-preface-row { margin-top: 8px; }
-  .ll-seam .ll-btn { width: 100%; min-height: 40px; font-size: 14px; }
+  .ll-preface-row + .ll-preface-row { margin-top: 10px; }
+  .ll-line { padding-bottom: 14px; }
+  .ll-note { font-size: .8125em; margin-left: .5em; padding-left: .9em; }
+  .ll-seam .ll-btn { width: 100%; min-height: 44px; font-size: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ll-line[data-state="next"] .ll-ja { animation: none; background: var(--ll-fill-2) !important; }
+  .ll-line[data-state="next"] .ll-ja::before { animation: none; opacity: .7; }
   .ll-note[data-enter] { animation: none; }
-  .ll-line[data-ink] { animation: none; }
-  .ll-btn, .ll-mark, .ll-preface-toggle::before { transition: none; }
+  .ll-line[data-ink] .ll-ja { animation: none; }
+  .ll-preface-toggle::before { transition: none; }
 }
 `;
 

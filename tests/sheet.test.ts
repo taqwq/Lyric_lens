@@ -522,7 +522,7 @@ describe('settings sheet', () => {
     expect(details).not.toBeNull();
     expect(details!.open).toBe(false);
     expect(details!.querySelector('summary')!.textContent).toBe('直近のエラー');
-    expect(details!.textContent).toContain('gemini-3.5-flash · 400 · bad-request');
+    expect(details!.textContent).toContain('gemini-3.5-flash／400／bad-request');
     expect(details!.textContent).toContain('invalid field');
   });
 
@@ -549,7 +549,7 @@ describe('settings sheet', () => {
     openSheet({ mode: 'settings', song: { title: 'HUMBLE.', model: 'gemini-3.5-flash', translatedAt }, onRetranslate, onClose });
     await settingsReady();
 
-    expect(text()).toContain('この曲の訳：gemini-3.5-flash · 2026年3月5日');
+    expect(text()).toContain('この曲の訳：gemini-3.5-flash（2026年3月5日）');
 
     buttonNamed('この曲を訳し直す').click();
     expect(text()).toContain('この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます');
@@ -609,7 +609,7 @@ describe('settings sheet', () => {
     const onClose = vi.fn();
     openSheet({ mode: 'settings', onClose });
     await settingsReady();
-    await vi.waitFor(() => expect(text()).toMatch(/保存した曲：2曲 · \d+ KB/));
+    await vi.waitFor(() => expect(text()).toMatch(/保存した曲：2曲（\d+ KB）/));
 
     buttonNamed('すべて消す').click();
     expect(text()).toContain('保存したすべての曲（2曲）を消しますか？途中まで訳した曲も消えます');
