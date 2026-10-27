@@ -214,8 +214,8 @@ describe('S2f the first request produced nothing', () => {
     { name: 'blocked', stop: stopOf('blocked'), status: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
     { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
-    { name: 'rejected', stop: stopOf('rejected'), status: 'AIがこの依頼を受け付けませんでした。もう一度試すと別のモデルで訳せることがあります' },
-    { name: 'no-model', stop: stopOf('no-model'), status: '使えるAIのモデルが見つかりませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'rejected', stop: stopOf('rejected'), status: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
+    { name: 'no-model', stop: stopOf('no-model'), status: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
     { name: 'empty', stop: stopOf('empty'), status: 'AIから空の返事が返ってきました。もう一度試せます' },
     { name: 'unusable', stop: stopOf('unusable'), status: 'AIの返事をうまく読み取れませんでした。もう一度試せます' },
     { name: 'length', stop: stopOf('length'), status: '長い曲なので、一度では訳し切れませんでした' },
@@ -554,8 +554,8 @@ describe('S6 interrupted', () => {
     { name: 'blocked', stop: stopOf('blocked'), seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'network, offline: waiting button', stop: stopOf('network'), over: { online: false }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
-    { name: 'rejected', stop: stopOf('rejected'), seam: { text: 'AIがこの依頼を受け付けず、ここで途切れました。もう一度試すと別のモデルで訳せることがあります', button: RESUME }, explainWhenHidden: false },
-    { name: 'no-model', stop: stopOf('no-model'), seam: { text: '使えるAIのモデルが見つかりませんでした。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
+    { name: 'rejected', stop: stopOf('rejected'), seam: { text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
+    { name: 'no-model', stop: stopOf('no-model'), seam: { text: 'AIをいま使えません。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'empty', stop: stopOf('empty'), seam: { text: 'AIの返事が空のまま、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
     { name: 'unusable', stop: stopOf('unusable'), seam: { text: 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
     { name: 'stopped', stop: stopOf('stopped'), seam: { text: 'ここで止めました', button: RESUME }, explainWhenHidden: false },
@@ -801,8 +801,8 @@ describe('seamText', () => {
     ['rate', 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます'],
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['network', '接続が切れました。つながったら続きを訳せます'],
-    ['rejected', 'AIがこの依頼を受け付けず、ここで途切れました。もう一度試すと別のモデルで訳せることがあります'],
-    ['no-model', '使えるAIのモデルが見つかりませんでした。少しおいてから続きを訳せます'],
+    ['rejected', 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります'],
+    ['no-model', 'AIをいま使えません。少しおいてから続きを訳せます'],
     ['empty', 'AIの返事が空のまま、ここで途切れました。もう一度試せます'],
     ['unusable', 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます'],
     ['stopped', 'ここで止めました'],
@@ -846,8 +846,8 @@ describe('startFailText', () => {
     ['rate', 'AIの回数制限にかかりました。1分ほどおいてから訳せます'],
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['network', '接続が切れて、訳し始められませんでした。つながったら訳せます'],
-    ['rejected', 'AIがこの依頼を受け付けませんでした。もう一度試すと別のモデルで訳せることがあります'],
-    ['no-model', '使えるAIのモデルが見つかりませんでした。少しおいてからもう一度どうぞ'],
+    ['rejected', 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります'],
+    ['no-model', 'AIをいま使えません。少しおいてからもう一度どうぞ'],
     ['empty', 'AIから空の返事が返ってきました。もう一度試せます'],
     ['unusable', 'AIの返事をうまく読み取れませんでした。もう一度試せます'],
     ['length', '長い曲なので、一度では訳し切れませんでした'],
@@ -886,8 +886,8 @@ describe('failureText', () => {
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['blocked', 'AIの安全フィルタで止められました'],
     ['network', '接続が切れました'],
-    ['rejected', 'AIが依頼を受け付けませんでした'],
-    ['no-model', '使えるモデルが見つかりませんでした'],
+    ['rejected', 'AIが訳しませんでした'],
+    ['no-model', 'AIをいま使えませんでした'],
     ['empty', 'AIの返事が空でした'],
     ['unusable', 'AIの返事をうまく読み取れませんでした'],
     ['stopped', '止めました'],
@@ -908,6 +908,33 @@ describe('failureText', () => {
   it('never promises a 続き (S8f offers none)', () => {
     const reasons: StopReason[] = ['busy', 'rate', 'quota', 'auth', 'blocked', 'network', 'rejected', 'no-model', 'empty', 'unusable', 'stopped', 'length', 'closed', 'gaps'];
     for (const reason of reasons) expect(failureText(stopOf(reason, { until: SOON }), NOW)).not.toContain('続き');
+  });
+});
+
+describe('copy on the reading surface does not talk about models', () => {
+  const ALL: StopReason[] = ['busy', 'rate', 'quota', 'auth', 'blocked', 'network', 'rejected', 'no-model', 'empty', 'unusable', 'stopped', 'length', 'closed', 'gaps'];
+  const i = view({ done: 6, total: 20 });
+
+  it('no seam, start-failure or reason sentence mentions モデル', () => {
+    for (const reason of ALL) {
+      const stop = stopOf(reason, { until: SOON });
+      expect(seamText(stop, i)).not.toMatch(/モデル/);
+      expect(startFailText(stop, i)).not.toMatch(/モデル/);
+      expect(failureText(stop, NOW)).not.toMatch(/モデル/);
+    }
+  });
+
+  it('rejected at the seam (after 6 of 20 lines of "Smoke in the whip, windows up, nobody talk") offers an enabled 続きを訳す', () => {
+    expect(seamFor(stopOf('rejected'), i, null)).toEqual({
+      text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります',
+      button: { id: 'resume', label: '続きを訳す', disabled: false },
+    });
+  });
+
+  it('no-model before any line is S2f with a plain sentence', () => {
+    const d = decide(view({ done: 0, total: 20, stop: stopOf('no-model') }));
+    expect(d.state).toBe('S2f');
+    expect(d.status).toBe('AIをいま使えません。少しおいてからもう一度どうぞ');
   });
 });
 
