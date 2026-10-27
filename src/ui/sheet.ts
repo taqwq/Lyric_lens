@@ -4,7 +4,8 @@
  * §4 copy, §6 tokens, §7 settings). Desktop: a 400px panel under the 設定 button. Phone: a bottom sheet.
  *
  * API keys never go into the DOM except as the value of the input while the reader types, and
- * as the masked tail of a saved key (••••abcd). Errors from the providers are never logged.
+ * as the masked tail of a saved key (••••abcd). The key is never logged, and error text is
+ * scrubbed (scrubKey) before it is logged or stored.
  */
 import { keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
 import { LLMError } from '../llm/errors';

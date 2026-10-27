@@ -119,8 +119,11 @@ function annotationsBlock(source: SongSource): string {
   return ['# Genius の注釈（コミュニティによる解説。誤りや憶測を含みうる）', ...lines].join('\n');
 }
 
-function noteSentence(left: number): string {
-  return left > 0 ? `注は今回の行全体で多くても${left}件。` : '注は今回は書かないでください。';
+/** Past the base ceiling the builder still takes up to `bonus` wordplay/ambiguous notes, so say so. */
+function noteSentence(left: number, bonus: number): string {
+  if (left > 0) return `注は今回の行全体で多くても${left}件。`;
+  if (bonus > 0) return `注は、掛詞か二通りに読めるものに限り、今回の行全体で多くても${bonus}件。`;
+  return '注は今回は書かないでください。';
 }
 
 /** A concrete ceiling works better than "about one per six lines" on Flash-class models. */
@@ -164,7 +167,8 @@ export function buildPrompt(source: SongSource, record: SongRecord | null, targe
   const all = targets.length === source.unique.length;
   const ask = haveSong ? 'song レコードは書かずに、' : 'まず song レコードを書き、';
   const what = all ? `L1〜L${source.unique.length} をすべて訳してください。` : `次の ID だけを訳してください：${formatIdList(targets)}。`;
-  blocks.push(`# 指示\n${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {"t":"end"} を書いてください。`);
+  const { notesLeft, bonusLeft } = noteAllowance(source, record);
+  blocks.push(`# 指示\n${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書いてください。`);
 
   // JSON keys and quoting roughly double the bytes of the Japanese itself.
   const expectedChars = targets.reduce((sum, t) => sum + Math.min(220, t.text.length * 1.4 + 60), haveSong ? 40 : 500);

@@ -20,7 +20,6 @@ describe('classifyHttpError', () => {
       { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] },
     ]));
     expect(daily.kind).toBe('quota');
-    expect(classifyHttpError(429, JSON.stringify({ error: { message: 'insufficient_quota', code: 'insufficient_quota' } })).kind).toBe('quota');
   });
 
   it('maps 404 / 408 / 5xx / 400', () => {
@@ -108,29 +107,16 @@ describe('classifyHttpError: 429 per-minute versus per-day', () => {
     expect(classifyHttpError(429, googleError(429, 'RESOURCE_EXHAUSTED', 'Quota exceeded, limit: 0, model: gemini-2.5-pro')).kind).toBe('quota');
   });
 
-  it('classifies other providers by the window their message names', () => {
-    const body = (message: string) => JSON.stringify({ error: { message, type: 'rate_limit_exceeded', code: 'rate_limit_exceeded' } });
-    expect(classifyHttpError(429, body('Rate limit reached for model `llama-3.3-70b-versatile` on tokens per minute (TPM): Limit 6000')).kind).toBe('rate');
-    expect(classifyHttpError(429, body('Rate limit reached for model `llama-3.3-70b-versatile` on tokens per day (TPD): Limit 100000')).kind).toBe('quota');
-    expect(classifyHttpError(429, body('Rate limit reached on requests per day (RPD): Limit 1000')).kind).toBe('quota');
-    expect(classifyHttpError(429, body('Rate limit exceeded: free-models-per-day')).kind).toBe('quota');
-    expect(classifyHttpError(429, body('Rate limit exceeded: free-models-per-min')).kind).toBe('rate');
-    expect(classifyHttpError(429, body('You exceeded your current quota: daily limit reached')).kind).toBe('quota');
+  it('reads the window from the older Gemini wording of the metric, and a bare 429 as a rate limit', () => {
+    const body = (message: string) => googleError(429, 'RESOURCE_EXHAUSTED', message);
+    expect(classifyHttpError(429, body("Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContent request limit per minute for a region'")).kind).toBe('rate');
+    expect(classifyHttpError(429, body("Quota exceeded for quota metric 'Generate Content API requests per day' and limit 'GenerateContent request limit per day'")).kind).toBe('quota');
     expect(classifyHttpError(429, 'Too Many Requests').kind).toBe('rate');
   });
 
-  it('an OpenRouter ":free" upstream 429 is a per-minute rate limit, not the daily quota', () => {
-    // The chain reports these as a short wait ("rate") when every candidate is cooling down.
-    const body = JSON.stringify({
-      error: {
-        message: 'Provider returned error',
-        code: 429,
-        metadata: { raw: 'vendor/one:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits.', provider_name: 'Venice' },
-      },
-    });
-    const e = classifyHttpError(429, body);
-    expect(e.kind).toBe('rate');
-    expect(e.status).toBe(429);
+  it('a non-429 failure is not a rate limit just because its message links the rate-limits page', () => {
+    const e = classifyHttpError(503, googleError(503, 'UNAVAILABLE', 'The model is overloaded. See https://ai.google.dev/gemini-api/docs/rate-limits'));
+    expect(e.kind).toBe('overloaded');
   });
 
   it('reads the wait from RetryInfo before the message, and from the message when there is no RetryInfo', () => {

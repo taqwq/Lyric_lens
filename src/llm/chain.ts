@@ -202,7 +202,7 @@ export async function markKey(apiKey: string, bad: boolean): Promise<void> {
 }
 
 export interface Availability {
-  /** Some model may answer now (busy/rate-limited models count: they recover in minutes). */
+  /** Some model may answer now (anything but exhausted quota counts: busy, rate-limited or benched models recover in minutes). */
   ok: boolean;
   /** When !ok: the earliest moment a model is expected back (0 if unknown). */
   until: number;
@@ -219,7 +219,10 @@ export async function availability(apiKey: string): Promise<Availability> {
   let earliest = Infinity;
   for (const id of ids) {
     const cd = cooldowns[cooldownId(apiKey, id)];
-    if (!cd || cd.reason === 'overloaded' || cd.reason === 'timeout' || cd.reason === 'rate') return { ok: true, until: 0 };
+    // Only an exhausted quota (or a model that is not there) says "out for the day". A model benched
+    // for a rejected prompt (bad-request), an unreadable answer (unusable), or a short wait (busy,
+    // silent, per-minute) is still worth a tap: the chain answers that tap with the right sentence.
+    if (!cd || (cd.reason !== 'quota' && cd.reason !== 'not-found')) return { ok: true, until: 0 };
     earliest = Math.min(earliest, cd.until);
   }
   return { ok: false, until: Number.isFinite(earliest) ? earliest : 0 };
@@ -336,7 +339,8 @@ export async function generateWithFallback(
   const cooldowns = await loadCooldowns();
   const errors: LLMError[] = [];
   let models: string[] | undefined;
-  let skippedForCooldown = 0;
+  /** Models passed over for a cooldown, with why: if that is all that happened, the reader is told that reason. */
+  const skipped: Array<{ model: string; cooldown: Cooldown }> = [];
   const busyNow = new Set<string>();
   const provider = new GeminiProvider(apiKey);
 
@@ -370,6 +374,25 @@ export async function generateWithFallback(
       detail: base?.detail,
     });
     if (base) error.model = base.model;
+    return error;
+  };
+
+  /** Every candidate was passed over for a cooldown and none was tried. Quota (or missing models)
+   *  all round: the reset time. Otherwise the soonest-ending skip says what the reader is told. */
+  const fromSkipped = (): LLMError => {
+    let soonest: { model: string; cooldown: Cooldown } | null = null;
+    for (const skip of skipped) {
+      const { reason, until } = skip.cooldown;
+      if (reason === 'quota' || reason === 'not-found') continue;
+      if (!soonest || until < soonest.cooldown.until) soonest = skip;
+    }
+    if (!soonest) return fromCooldown(null);
+    const { reason, until } = soonest.cooldown;
+    let error: LLMError;
+    if (reason === 'bad-request') error = new LLMError('bad-request', 'Gemini がこの依頼を受け付けませんでした。', { status: 400 });
+    else if (reason === 'unusable') error = new LLMError('unusable', 'Gemini の返事から訳を読み取れませんでした。', { status: 200 });
+    else error = new LLMError('rate', '使えるモデルがすべて上限に達しています。', { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
+    error.model = soonest.model;
     return error;
   };
 
@@ -409,7 +432,7 @@ export async function generateWithFallback(
       const cd = cooldowns[cooldownId(apiKey, model)];
       if (cd && cd.until > Date.now() && !onlyModels?.length) {
         if (cd.reason === 'overloaded') busyLast.push(model);
-        else skippedForCooldown += 1;
+        else skipped.push({ model, cooldown: cd });
         continue;
       }
       order.push(model);
@@ -496,8 +519,8 @@ export async function generateWithFallback(
     if (!busy) break;
   }
 
-  // Every candidate was skipped: say when the first one is back (a minute or a day), not always "today".
-  if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+  // Every candidate was skipped: say why and when the first one is back (a minute or a day), not always "today".
+  if (!errors.length && skipped.length) throw fromSkipped();
   if (!errors.length) throw new LLMError('not-found', '使えるモデルが見つかりませんでした。');
   const reported = pickReportedError(errors);
   // A real quota error often carries no usable reset time; the cooldown table knows when the
