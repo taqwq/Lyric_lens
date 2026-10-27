@@ -774,9 +774,9 @@ describe('RecordBuilder', () => {
 });
 
 describe('notes', () => {
-  const source = makeSource();
-  // Wider than the source on purpose: a long target list makes the song-wide ceiling
-  // (noteBudget) roomy, so these tests exercise the per-line cap and the dedupe only.
+  // Wider than LYRICS on purpose: 30 unique lines make the song-wide ceiling (noteBudget)
+  // roomy, so these tests exercise the per-line cap and the dedupe only.
+  const source = makeSource([...LYRICS, ...Array.from({ length: 26 }, (_, i) => `Filler line ${i + 1}`)]);
   const targets = Array.from({ length: 30 }, (_, i) => i + 1);
   const noteOn = (raw: Array<{ phrase: string; kind: 'slang' | 'wordplay' | 'reference' | 'idiom' | 'ambiguous'; text: string; conjecture?: boolean; genius?: string }>) =>
     raw.map((n) => ({ conjecture: false, ...n }));
@@ -945,18 +945,24 @@ describe('the song-wide note ceiling', () => {
     expect(notesOf(record, 3)).toBeUndefined();
   });
 
-  it('counts only this run\'s targets: notes already stored are not part of the ceiling', () => {
+  it('subtracts the notes already stored from the ceiling of the song', () => {
+    const record = newRecord();
+    record.lines[source.unique[0]!.key] = { ja: '前1', notes: [{ kind: 'reference', phrase: 'x', text: 'earlier' }] };
+    // 12 unique lines: ceiling 2, one stored, so one slot is left
+    new RecordBuilder(source, record, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).apply([
+      line(2, [note('Cold Brew', 'reference', 'a')]),
+      line(3, [note('Uncle Ray', 'reference', 'b')]),
+    ]);
+    expect(notesOf(record, 2)).toHaveLength(1);
+    expect(notesOf(record, 3)).toBeUndefined();
+  });
+
+  it('spends the two bonus slots once per song: earlier overflow notes use them up', () => {
     const record = newRecord();
     for (const uid of [1, 2, 3, 4]) record.lines[source.unique[uid - 1]!.key] = { ja: `前${uid}`, notes: [{ kind: 'reference', phrase: 'x', text: 'earlier' }] };
-    // 8 lines left to translate: the ceiling for this run is 2 regardless of the stored notes
-    new RecordBuilder(source, record, [5, 6, 7, 8, 9, 10, 11, 12]).apply([
-      line(5, [note('bread', 'reference', 'a')]),
-      line(6, [note('night', 'reference', 'b')]),
-      line(7, [note('bricks', 'reference', 'c')]),
-    ]);
-    expect(notesOf(record, 5)).toHaveLength(1);
-    expect(notesOf(record, 6)).toHaveLength(1);
-    expect(notesOf(record, 7)).toBeUndefined();
+    // 4 stored vs ceiling 2: both bonus slots are gone
+    new RecordBuilder(source, record, [5, 6]).apply([line(5, [note('bread', 'wordplay', 'a')])]);
+    expect(notesOf(record, 5)).toBeUndefined();
   });
 });
 
@@ -1122,7 +1128,7 @@ describe('trimDefinition', () => {
   });
 
   it('runs inside the RecordBuilder: a dropped definition does not use up a slot of the cap', () => {
-    const source = makeSource();
+    const source = makeSource([...LYRICS, ...Array.from({ length: 26 }, (_, i) => `Filler line ${i + 1}`)]);
     const record = newRecord();
     // a long target list keeps the song-wide note ceiling out of this per-line test
     new RecordBuilder(source, record, Array.from({ length: 30 }, (_, i) => i + 1)).apply([{

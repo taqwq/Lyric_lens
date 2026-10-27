@@ -1,7 +1,7 @@
 import './setup';
 
 import { describe, expect, it } from 'vitest';
-import { SYSTEM_PROMPT, buildPrompt } from '../src/core/prompt';
+import { SYSTEM_PROMPT, buildPrompt, noteAllowance, noteBudget } from '../src/core/prompt';
 import { buildSong, emptyRecord, type RawLyricRow } from '../src/core/song';
 import type { GeniusAnnotation, SongContext, SongMeta, SongRecord, UniqueLine } from '../src/core/types';
 
@@ -265,6 +265,38 @@ describe('buildPrompt: resuming', () => {
     const longText = 'x'.repeat(1000);
     const long = buildSong(meta, [{ kind: 'line', text: longText }]);
     expect(buildPrompt(long, emptyRecord('1', '/x', meta), long.unique).expectedChars).toBeCloseTo(500 + 220, 6);
+  });
+});
+
+describe('note ceiling per song', () => {
+  const source = tenLineSong();
+  const withNotes = (n: number) => {
+    const r = recordWith(source, [1, 2, 3], SONG);
+    for (let i = 0; i < n; i += 1) r.lines[source.unique[i]!.key] = { ja: `訳${i}`, notes: [{ kind: 'slang', phrase: 'x', text: 'y' }] };
+    return r;
+  };
+
+  it('noteBudget grows with the song', () => {
+    expect(noteBudget(10)).toBe(2);
+    expect(noteBudget(60)).toBe(10);
+  });
+
+  it('takes the ceiling from the whole song, not from the lines asked for', () => {
+    expect(noteAllowance(source, null)).toEqual({ notesLeft: 2, bonusLeft: 2 });
+    expect(buildPrompt(source, null, pick(source, [1])).user).toContain('多くても2件');
+  });
+
+  it('subtracts notes already in the record, and the bonus only once the ceiling is passed', () => {
+    expect(noteAllowance(source, withNotes(1))).toEqual({ notesLeft: 1, bonusLeft: 2 });
+    expect(noteAllowance(source, withNotes(3))).toEqual({ notesLeft: 0, bonusLeft: 1 });
+    expect(noteAllowance(source, withNotes(5))).toEqual({ notesLeft: 0, bonusLeft: 0 });
+  });
+
+  it('states the remaining budget in the prompt, and asks for none when it is spent', () => {
+    expect(buildPrompt(source, withNotes(1), pick(source, [6])).user).toContain('多くても1件');
+    const spent = buildPrompt(source, withNotes(2), pick(source, [6])).user;
+    expect(spent).not.toContain('多くても');
+    expect(spent).toContain('注は今回は書かないでください');
   });
 });
 

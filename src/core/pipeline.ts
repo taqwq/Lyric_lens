@@ -7,7 +7,7 @@
 import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
 import { LLMError, errorDetail } from '../llm/errors';
-import { buildPrompt, noteBudget } from './prompt';
+import { buildPrompt, noteAllowance } from './prompt';
 import { ProtocolParser, type ProtocolEvent } from './protocol';
 import { headMatches, looseText, missingLines } from './song';
 import type { LineResult, Note, SongRecord, SongSource, StopInfo } from './types';
@@ -168,8 +168,8 @@ export class RecordBuilder {
   private readonly targets: Set<number>;
   /** Notes this request may still add song-wide (the prompt states the same ceiling). */
   private notesLeft: number;
-  /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only. */
-  private bonusLeft = 2;
+  /** Extra notes allowed beyond the ceiling, for wordplay and ambiguous readings only (once per song). */
+  private bonusLeft: number;
   /** Distinct lines accepted in this request. */
   added = 0;
   /** Line records dropped because their echoed first words did not match the line. */
@@ -179,7 +179,7 @@ export class RecordBuilder {
 
   constructor(private readonly source: SongSource, readonly record: SongRecord, targets: number[]) {
     this.targets = new Set(targets);
-    this.notesLeft = noteBudget(targets.length);
+    ({ notesLeft: this.notesLeft, bonusLeft: this.bonusLeft } = noteAllowance(source, record));
   }
 
   apply(events: ProtocolEvent[]): boolean {
