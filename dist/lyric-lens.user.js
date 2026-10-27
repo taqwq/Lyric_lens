@@ -960,7 +960,7 @@ ${req.user}` : req.user }] }],
       for (const [index, model] of order.entries()) {
         let error = null;
         let budgetCut = false;
-        const handOver = order.slice(index + 1).some((m) => modelTier(m) !== 0);
+        const handOver = order.slice(index + 1).some((m) => modelTier(m) === 1);
         const flash = modelTier(model) === 0 && !onlyModels?.length;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           const firstTextTimeoutMs = firstTextTimeout(model, handOver);
