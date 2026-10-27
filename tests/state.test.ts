@@ -285,6 +285,40 @@ describe('S3 reading the whole song first', () => {
       lines: WRITING,
     });
   });
+
+  const WAIT = '返事を待っています。混んでいると1分ほどかかることもあります';
+  const slowBase = { running: 'here' as const, hasPreface: false, done: 0, total: 24, streams: true };
+
+  it('stays quiet before 15 s', () => {
+    const d = decide(view({ ...slowBase, waitedMs: 5_000 }));
+    expect(d.state).toBe('S3');
+    expect(d.status).toBe('曲全体を読んでいます');
+    expect(d.note).toBeUndefined();
+  });
+
+  it('says the wait is expected once the first line is 15 s late', () => {
+    const d = decide(view({ ...slowBase, waitedMs: 16_000 }));
+    expect(d.state).toBe('S3');
+    expect(d.status).toBe('曲全体を読んでいます');
+    expect(d.note).toBe(WAIT);
+    expect(d.actions).toEqual([STOP]);
+  });
+
+  it('drops the wait sentence once a line (I been on the road since the sun went down) has arrived', () => {
+    const d = decide(view({ ...slowBase, done: 1, waitedMs: 16_000 }));
+    expect(d.state).toBe('S4');
+    expect(d.note).toBeUndefined();
+  });
+
+  it('joins the wait and buffered sentences when the transport does not stream', () => {
+    const d = decide(view({ ...slowBase, streams: false, waitedMs: 16_000 }));
+    expect(d.note).toBe(`${WAIT} · この環境では訳がまとめて届きます`);
+  });
+
+  it('keeps only the buffered sentence when not yet slow', () => {
+    const d = decide(view({ ...slowBase, streams: false, waitedMs: 1_000 }));
+    expect(d.note).toBe('この環境では訳がまとめて届きます');
+  });
 });
 
 describe('S4 lines arriving', () => {

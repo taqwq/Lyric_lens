@@ -3948,11 +3948,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     if (i.running === "here") {
       const arriving = i.hasPreface || i.done > 0;
+      const slow = !arriving && (i.waitedMs ?? 0) >= 15e3;
+      const wait = "返事を待っています。混んでいると1分ほどかかることもあります";
+      const buffered = "この環境では訳がまとめて届きます";
+      const note = slow && !i.streams ? `${wait} · ${buffered}` : slow ? wait : !i.streams ? buffered : void 0;
       return {
         state: arriving ? "S4" : "S3",
         status: arriving ? "" : "曲全体を読んでいます",
         actions: arriving ? [STOP, hide, SETTINGS] : [STOP],
-        ...i.streams ? {} : { note: "この環境では訳がまとめて届きます" },
+        ...note ? { note } : {},
         preface: i.hasPreface,
         lines: writing
       };
@@ -4360,6 +4364,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         now: Date.now(),
         online: navigator.onLine,
         streams: transportStreams(),
+        waitedMs: here ? Date.now() - here.startedAt : void 0,
         hidden: settings.hideTranslation,
         hasKey: hasKey(settings),
         keyBad: this.keyBad,
@@ -4491,6 +4496,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.starting = true;
       let lock = null;
       let run = null;
+      let wakeSlow;
       const id = this.identity;
       const cannotRetranslate = (detail) => {
         if (kind === "retranslate" && this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのままです", detail };
@@ -4528,8 +4534,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         record.title = source.meta.title || record.title;
         record.artist = source.meta.artist || record.artist;
         record.stop = { reason: "closed", at: Date.now() };
-        run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock };
+        run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock, startedAt: Date.now() };
         this.run = run;
+        wakeSlow = setTimeout(() => this.scheduleRender(), 15100);
         this.starting = false;
         this.fromCache = false;
         this.notice = null;
@@ -4609,6 +4616,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           document.removeEventListener("visibilitychange", hiddenNow);
         }
       } finally {
+        clearTimeout(wakeSlow);
         this.starting = false;
         try {
           if (lock) await lock.release();
