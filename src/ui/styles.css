@@ -61,7 +61,8 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 /* a quiet ruled-paper edge between the front matter and the lyrics */
 .ll-head:has(.ll-preface) { padding-bottom: 14px; border-bottom: 1px solid var(--ll-rule); }
 .ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
-.ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
+/* The actions follow the sentence they answer instead of drifting to the far edge. */
+.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-ink); }
 .ll-status[data-tone="muted"] { color: var(--ll-label); }
 /* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
 .ll-status:focus { outline: none; }
@@ -69,7 +70,7 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
    announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap
    and its 14em basis would push the actions to the right edge. */
 .ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }
-.ll-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-left: auto; }
+.ll-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 .ll-btn {
   all: unset;
   box-sizing: border-box;
@@ -84,7 +85,16 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 }
 /* Hover only where a pointer can hover: on touch the underline would stick to the last tapped button. */
 @media (hover: hover) { .ll-btn:hover { text-decoration: underline !important; text-underline-offset: 3px; } }
-.ll-btn[data-primary] { font-size: 15px; }
+/* The one next step (日本語で読む, 続きを訳す, キーを設定): a quiet hairline pill, so it reads as
+   something to press without shouting over the lyrics. Everything else stays plain text. */
+.ll-btn[data-primary] {
+  padding: 0 14px;
+  min-height: 30px;
+  border: 1px solid var(--ll-accent);
+  border-radius: 999px;
+}
+@media (hover: hover) { .ll-btn[data-primary]:not(:disabled):hover { text-decoration: none !important; background: var(--ll-hl-bg) !important; } }
+.ll-btn[data-primary]:disabled, .ll-btn[data-primary][aria-disabled="true"] { border-color: var(--ll-rule); }
 .ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-label) !important; cursor: default; text-decoration: none !important; }
 /* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
 .ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }
@@ -96,12 +106,11 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 /* Keep keyboard-focused controls clear of Genius' sticky nav. Not on .ll-mark: app.ts focuses it
    without preventScroll and a margin would make the page jump after anchoring. */
 .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
-.ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }
 .ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
 .ll-head-note[data-tone="reason"] { font-size: 13px; color: var(--ll-ink); }
 .ll-preface-rows { display: block; flex: 1; min-width: 0; }
 
-.ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
+.ll-preface { display: flex; align-items: flex-start; gap: 8px; max-width: 38em; margin-top: 8px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
 .ll-preface-toggle {
   all: unset;
   box-sizing: border-box;
@@ -178,6 +187,10 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
 }
 .ll-seam { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 4px; }
 .ll-seam-text { color: var(--ll-label); font-size: 13px; line-height: 1.6; }
+/* The seam's button is the same next step as the head's primary one: the same hairline pill. */
+.ll-seam .ll-btn { padding: 0 12px; min-height: 26px; border: 1px solid var(--ll-accent); border-radius: 999px; font-size: 13px; }
+.ll-seam .ll-btn:disabled { border-color: var(--ll-rule); }
+@media (hover: hover) { .ll-seam .ll-btn:not(:disabled):hover { text-decoration: none !important; background: var(--ll-hl-bg) !important; } }
 /* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: label colour, same size */
 .ll-adlib { color: var(--ll-label) !important; }
 
@@ -234,9 +247,12 @@ html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { 
   /* In a column the flex-basis would become a height. */
   .ll-status { flex: none; }
   /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */
-  .ll-actions { justify-content: flex-start; margin-left: 0; }
+  .ll-actions { justify-content: flex-start; }
   .ll-btn, .ll-gn-toggle { min-height: 44px; }
-  .ll-seam .ll-btn { width: 100%; justify-content: center; border: 1px solid var(--ll-rule); border-radius: 8px; }
+  .ll-btn[data-primary] { min-height: 40px; padding: 0 18px; margin-block: 2px; }
+  /* Genius' phone header (nav + ad slot) is sticky and about 125px tall. */
+  .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 140px; }
+  .ll-seam .ll-btn { width: 100%; justify-content: center; min-height: 44px; font-size: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

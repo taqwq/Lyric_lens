@@ -210,7 +210,9 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - Japanese line: `0.84em` of Genius' 18 px (≈15 px). On phones, where Genius uses 16 px, `0.875em` (14 px). Line-height 1.6, weight 400.
 - Preface: 0.78em; the `誰が誰に` line uses weight 600 and the labels use the label colour.
 - Note body: 0.78em, line-height 1.7. Kind label: 11 px, letter-spacing .04em.
-- Head row: 14 px; buttons in the accent colour, weight 600.
+- Head row: 14 px; buttons in the accent colour, weight 600. The actions follow the status sentence directly (they never drift to the far edge). The one next step (`日本語で読む`, `続きを訳す`, `キーを設定`) is a hairline accent pill (radius 999 px, 30 px tall; 40 px on phones, hover tint `hl-bg`); every other action is plain text. The seam's button is the same pill (full width on phones).
+- Desktop settings popover hangs from the left edge of the button that opened it when there is room (設定 sits at the start of the lyrics column), from its right edge otherwise.
+- Phones: focused controls keep 140 px clear of Genius' sticky header (nav + ad slot, about 125 px).
 
 **Japanese typesetting** (on every `ll-` node)
 - `line-break: strict;`
@@ -403,5 +405,7 @@ Amendments made during implementation:
 39. **Silence is not a lost connection.** Two silent models end the call with stop reason `silent` (「AIから返事がなく…」, button enabled); a wait longer than 90 s (rate or an unusable bench) is shown as `{when}ごろから`, and the button stays disabled until then. A key check that fails on Google's side says 「Google が混み合っていて確かめられませんでした…」, not "check your connection". An inline per-minute wait the Flash budget cannot use is skipped, and the reported reason follows each model's latest error.
 40. **A line record that is not valid JSON is repaired or salvaged** (stray quotes escaped; else id/head/ja kept without notes); records that still cannot be read are counted (`dropped`) into the stop's detail and the log. Measured: a 59-line song that ended with gaps now completes in one request.
 41. **Insults and address terms keep their strength** (no softening to neutral words, no age added for lil'), distinct English words keep distinct renderings, and the motif rendering is reused in every repeat.
+
+42. **Design pass with real screenshots** (headless Chrome at 1280 px and 390 px, real Gemini translations): the next step became a hairline pill instead of bare red text, the head's actions sit right after the status, the seam button matches it, and the settings popover opens under 設定 instead of over the lyrics at the page edge.
 
 Each of these came out of many rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.

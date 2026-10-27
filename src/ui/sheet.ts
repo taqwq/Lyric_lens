@@ -339,7 +339,10 @@ function mount(options: OpenSheetOptions): Active {
       side = spaceBelow >= Math.min(natural, cap) || spaceBelow >= spaceAbove ? 'below' : 'above';
     }
     const room = side === 'below' ? spaceBelow : spaceAbove;
-    s.left = `${clamp(rect.right - width, MARGIN, vw - width - MARGIN)}px`;
+    // Hang from the button's left edge when there is room (設定 sits at the start of the lyrics
+    // column), from its right edge otherwise (the userscript menu, a button near the right).
+    const left = rect.left + width <= vw - MARGIN ? rect.left : rect.right - width;
+    s.left = `${clamp(left, MARGIN, vw - width - MARGIN)}px`;
     s.maxHeight = `${Math.max(MIN_HEIGHT, Math.min(cap, room))}px`;
     if (side === 'below') {
       s.top = `${clamp(rect.bottom + GAP, MARGIN, vh - MIN_HEIGHT - MARGIN)}px`;
