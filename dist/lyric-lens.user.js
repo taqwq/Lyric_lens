@@ -617,6 +617,9 @@ ${req.user}` : req.user }] }],
         return now + 10 * 6e4;
       case "not-found":
         return now + 3 * 24 * 60 * 6e4;
+      // The Gemini provider already retried without `thinking`; the same request would be rejected again.
+      case "bad-request":
+        return now + 6 * 60 * 6e4;
       default:
         return 0;
     }
@@ -822,7 +825,7 @@ ${req.user}` : req.user }] }],
       let best = null;
       for (const m of models ?? []) {
         const cd = cooldowns[cooldownId(apiKey, m)];
-        if (cd && cd.reason !== "not-found" && cd.until > now && (!best || cd.until < best.until)) best = cd;
+        if (cd && cd.reason !== "not-found" && cd.reason !== "bad-request" && cd.until > now && (!best || cd.until < best.until)) best = cd;
       }
       const message = base?.message ?? "使えるモデルがすべて上限に達しています。";
       if (!best) return base ?? new LLMError("quota", message, { status: 429 });
@@ -948,6 +951,7 @@ ${req.user}` : req.user }] }],
       if (!busy) break;
     }
     if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+    if (!errors.length) throw new LLMError("not-found", "使えるモデルが見つかりませんでした。");
     const reported = pickReportedError(errors);
     throw reported.kind === "quota" ? fromCooldown(reported) : reported;
   }
@@ -1309,6 +1313,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
         return { reason: "network", at: now };
       case "aborted":
         return { reason: "stopped", at: now };
+      case "bad-request":
+        return { reason: "rejected", at: now };
+      case "not-found":
+        return { reason: "no-model", at: now };
+      case "empty":
+        return { reason: "empty", at: now };
       default:
         return { reason: "unusable", at: now };
     }
@@ -1908,7 +1918,7 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     const notes = (Array.isArray(raw.notes) ? raw.notes : []).map(cleanNote).filter((n) => n !== null);
     return notes.length ? { ja: raw.ja, notes } : { ja: raw.ja };
   }
-  var STOP_REASONS = ["busy", "rate", "quota", "auth", "blocked", "network", "unusable", "stopped", "length", "closed", "gaps"];
+  var STOP_REASONS = ["busy", "rate", "quota", "auth", "blocked", "network", "rejected", "no-model", "empty", "unusable", "stopped", "length", "closed", "gaps"];
   function cleanStop(raw, fallbackAt) {
     if (!isObject(raw) || !STOP_REASONS.includes(raw.reason)) return void 0;
     const until = typeof raw.until === "number" && Number.isFinite(raw.until) ? raw.until : void 0;
@@ -3786,6 +3796,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れました。つながったら続きを訳せます",
+      rejected: "AIがこの依頼を受け付けず、ここで途切れました。もう一度試すと別のモデルで訳せることがあります",
+      "no-model": "使えるAIのモデルが見つかりませんでした。少しおいてから続きを訳せます",
+      empty: "AIの返事が空のまま、ここで途切れました。もう一度試せます",
       unusable: "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
       stopped: "ここで止めました",
       length: "長い曲なので、ここで一度区切りました",
@@ -3803,6 +3816,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れて、訳し始められませんでした。つながったら訳せます",
+      rejected: "AIがこの依頼を受け付けませんでした。もう一度試すと別のモデルで訳せることがあります",
+      "no-model": "使えるAIのモデルが見つかりませんでした。少しおいてからもう一度どうぞ",
+      empty: "AIから空の返事が返ってきました。もう一度試せます",
       unusable: "AIの返事をうまく読み取れませんでした。もう一度試せます",
       length: "長い曲なので、一度では訳し切れませんでした"
     };
@@ -3817,6 +3833,9 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "AIの安全フィルタで止められました",
       network: "接続が切れました",
+      rejected: "AIが依頼を受け付けませんでした",
+      "no-model": "使えるモデルが見つかりませんでした",
+      empty: "AIの返事が空でした",
       unusable: "AIの返事をうまく読み取れませんでした",
       stopped: "止めました",
       length: "長い曲なので、一度では訳し切れませんでした",

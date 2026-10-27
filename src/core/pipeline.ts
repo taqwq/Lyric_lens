@@ -44,6 +44,9 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
     case 'network':
     case 'timeout': return { reason: 'network', at: now };
     case 'aborted': return { reason: 'stopped', at: now };
+    case 'bad-request': return { reason: 'rejected', at: now };
+    case 'not-found': return { reason: 'no-model', at: now };
+    case 'empty': return { reason: 'empty', at: now };
     default: return { reason: 'unusable', at: now };
   }
 }

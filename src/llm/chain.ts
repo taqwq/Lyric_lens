@@ -58,6 +58,8 @@ function cooldownFor(error: LLMError): number {
     // It answered, but nothing usable: the same prompt is likely to break it again soon.
     case 'unusable': return now + 10 * 60_000;
     case 'not-found': return now + 3 * 24 * 60 * 60_000;
+    // The Gemini provider already retried without `thinking`; the same request would be rejected again.
+    case 'bad-request': return now + 6 * 60 * 60_000;
     default: return 0;
   }
 }
@@ -353,7 +355,7 @@ export async function generateWithFallback(
     let best: Cooldown | null = null;
     for (const m of models ?? []) {
       const cd = cooldowns[cooldownId(apiKey, m)];
-      if (cd && cd.reason !== 'not-found' && cd.until > now && (!best || cd.until < best.until)) best = cd;
+      if (cd && cd.reason !== 'not-found' && cd.reason !== 'bad-request' && cd.until > now && (!best || cd.until < best.until)) best = cd;
     }
     const message = base?.message ?? '使えるモデルがすべて上限に達しています。';
     if (!best) return base ?? new LLMError('quota', message, { status: 429 });
@@ -494,6 +496,7 @@ export async function generateWithFallback(
 
   // Every candidate was skipped: say when the first one is back (a minute or a day), not always "today".
   if (!errors.length && skippedForCooldown) throw fromCooldown(null);
+  if (!errors.length) throw new LLMError('not-found', '使えるモデルが見つかりませんでした。');
   const reported = pickReportedError(errors);
   // A real quota error often carries no usable reset time; the cooldown table knows when the
   // soonest model returns.

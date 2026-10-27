@@ -438,13 +438,22 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     expect(error?.retryAfterMs).toBe(0);
     expect(error?.status).toBe(400);
   });
+
+  it('benches a model that rejected the request for six hours', async () => {
+    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    await settle(start(gemini({ model: B })));
+    const cd = (await readCooldowns())[cooldownKey(B)];
+    expect(cd?.reason).toBe('bad-request');
+    expect(cd!.until - Date.now()).toBeGreaterThan(5.9 * 3600_000);
+    expect(cd!.until - Date.now()).toBeLessThanOrEqual(6 * 3600_000);
+  });
 });
 
 describe('generateWithFallback: the cooldown table follows what happened', () => {
   it('forgets a benched model once it answers, in storage as well as in memory', async () => {
     await seedCooldowns({ [cooldownKey(A)]: { until: Date.now() + 120_000, reason: 'overloaded' } });
-    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
-    reply(C, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    reply(B, googleError(418, 'UNKNOWN', 'odd failure'));
+    reply(C, googleError(418, 'UNKNOWN', 'odd failure'));
     reply(A, ok('L1: あ\n'));
     const first = await start(gemini()).promise;
     expect(generated).toEqual([B, C, A]); // the benched model goes last
@@ -462,7 +471,7 @@ describe('generateWithFallback: the cooldown table follows what happened', () =>
       [cooldownKey(A)]: { until: Date.now() + 120_000, reason: 'overloaded' },
       [cooldownKey(C)]: { until: Date.now() + 3600_000, reason: 'quota' },
     });
-    reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
+    reply(B, googleError(418, 'UNKNOWN', 'odd failure'));
     reply(A, ok('L1: あ\n'));
     await start(gemini()).promise;
     expect(Object.keys(await readCooldowns())).toEqual([cooldownKey(C)]);
@@ -951,6 +960,8 @@ const seedHealth = (entries: StoredHealth) => setJSON(HEALTH, entries);
 /** The endpoint stays silent for `ms` before it answers (fake timers must be on). */
 const slowly = (ms: number, scripted: Reply): Reply => ({ ...scripted, hangMs: ms });
 const badField = () => googleError(400, 'INVALID_ARGUMENT', 'bad field');
+/** A failure that benches nothing (a rejected request is benched for hours). */
+const oddFailure = () => googleError(418, 'UNKNOWN', 'odd failure');
 
 describe('orderByHealth', () => {
   const NOW = Date.UTC(2026, 2, 10, 12, 0, 0);
@@ -1165,18 +1176,18 @@ describe('generateWithFallback: model health (fake timers)', () => {
 
     it('does not ask a benched model while its five minutes last, however the others fare', async () => {
       reply(A, { throws: silent(), hangMs: 30_000 });
-      reply(B, badField());
-      reply(C, badField());
+      reply(B, oddFailure());
+      reply(C, oddFailure());
       await call(30_000);
       expect(generated).toEqual([A, B, C]);
 
       generated = [];
       await vi.advanceTimersByTimeAsync(5 * MIN - 1);
-      reply(B, badField());
-      reply(C, badField());
+      reply(B, oddFailure());
+      reply(C, oddFailure());
       const { error } = await call();
       expect(generated).toEqual([B, C]); // A stays out until the last millisecond of its bench
-      expect(error?.kind).toBe('bad-request');
+      expect(error?.kind).toBe('unknown');
     });
 
     it('is benched too when it goes silent after it had started to answer', async () => {
@@ -1259,13 +1270,13 @@ describe('generateWithFallback: model health (fake timers)', () => {
 
     it('puts a model that failed within half an hour behind the unknown ones, and tries it again later', async () => {
       await seedHealth({ [cooldownKey(A)]: { bad: NOW - 10 * MIN } });
-      for (const model of [A, B, C]) reply(model, badField());
+      for (const model of [A, B, C]) reply(model, oddFailure());
       await call();
       expect(generated).toEqual([B, A, C]);
 
       generated = [];
       await vi.advanceTimersByTimeAsync(21 * MIN); // 31 minutes since the failure
-      for (const model of [A, B, C]) reply(model, badField());
+      for (const model of [A, B, C]) reply(model, oddFailure());
       await call();
       expect(generated).toEqual([A, B, C]);
     });
