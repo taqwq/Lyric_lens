@@ -1296,7 +1296,12 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     if (!head) return true;
     const want = headWords(head).slice(0, 3);
     if (!want.length) return true;
-    const have = headWords(text2);
+    if (wordsMatch(want, headWords(text2))) return true;
+    const bare = text2.replace(LEADING_GROUPS, "");
+    return bare !== text2 && wordsMatch(want, headWords(bare));
+  }
+  var LEADING_GROUPS = /^\s*(?:[（(][^（）()]*[）)]\s*)+/;
+  function wordsMatch(want, have) {
     const hits = want.filter((w, i) => have[i] === w || have[i]?.replace(/in'?$/, "ing") === w.replace(/in'?$/, "ing")).length;
     return hits >= Math.min(2, want.length) || have.join(" ").startsWith(want.join(" "));
   }
