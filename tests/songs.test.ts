@@ -3,7 +3,7 @@ import './setup';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LineResult, SongRecord } from '../src/core/types';
 import { getJSON, memoryStorage, setJSON, setKV, type KV } from '../src/platform/storage';
-import { SaveQueue, deleteSong, exportSongs, importSongs, loadSong, saveSong, storageSummary, touchSong } from '../src/store/songs';
+import { SaveQueue, deleteSong, exportSongs, importSongs, loadSong, migrateRecord, saveSong, storageSummary, touchSong } from '../src/store/songs';
 
 const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -21,7 +21,7 @@ function countingStorage(): { kv: KV; sets: string[] } {
 function rec(id: string, over: Partial<SongRecord> = {}, lineCount = 3): SongRecord {
   const lines: Record<string, LineResult> = {};
   for (let i = 0; i < lineCount; i++) lines[`${id} line ${i}`] = { ja: `訳${i}` };
-  return { v: 2, id, path: `/${id}`, title: `Song ${id}`, artist: 'Artist', lines, createdAt: NOW - 1000, updatedAt: NOW - 1000, ...over };
+  return { v: 2, keyVersion: 1, id, path: `/${id}`, title: `Song ${id}`, artist: 'Artist', lines, createdAt: NOW - 1000, updatedAt: NOW - 1000, ...over };
 }
 
 const partial = (id: string, over: Partial<SongRecord> = {}): SongRecord => rec(id, { stop: { reason: 'closed', at: 1 }, ...over });
@@ -539,5 +539,41 @@ describe('importSongs: merging with what is saved', () => {
     expect(await loadSong('i5')).toBeNull();
     expect(await loadSong('i6')).not.toBeNull();
     expect(await loadSong('fresh')).not.toBeNull();
+  });
+});
+
+describe('keyVersion', () => {
+  beforeEach(() => setKV(memoryStorage()));
+
+  it('is written by saveSong', async () => {
+    const r = rec('kv');
+    delete r.keyVersion;
+    await saveSong(r);
+    expect((await getJSON<SongRecord>('ll3:s:kv', r))?.keyVersion).toBe(1);
+  });
+
+  it('reads as 1 when a saved record has none', async () => {
+    const r = rec('old');
+    delete r.keyVersion;
+    await put(r);
+    expect((await loadSong('old'))?.keyVersion).toBe(1);
+  });
+
+  it('migrateRecord is a no-op for version 1 and fills in a missing or bad value', () => {
+    const a = rec('a');
+    const before = JSON.stringify(a);
+    expect(migrateRecord(a)).toBe(a);
+    expect(JSON.stringify(a)).toBe(before);
+    const b = rec('b');
+    delete b.keyVersion;
+    expect(migrateRecord(b).keyVersion).toBe(1);
+    expect(migrateRecord(rec('c', { keyVersion: 0 })).keyVersion).toBe(1);
+  });
+
+  it('is set on imported records that lack it', async () => {
+    const r = rec('imp');
+    delete r.keyVersion;
+    expect(await importSongs(file([r]))).toBe(1);
+    expect((await loadSong('imp'))?.keyVersion).toBe(1);
   });
 });

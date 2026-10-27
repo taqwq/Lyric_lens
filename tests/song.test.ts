@@ -249,12 +249,12 @@ describe('missingLines / songStatus', () => {
 describe('emptyRecord', () => {
   it('carries id, path, title and artist from the meta, and starts with no lines, song or stop', () => {
     const r = emptyRecord('4242', '/Artist-title-lyrics', { title: 'Title', artist: 'Artist', album: 'Album', about: 'About' });
-    expect(r).toMatchObject({ v: 2, id: '4242', path: '/Artist-title-lyrics', title: 'Title', artist: 'Artist', lines: {} });
+    expect(r).toMatchObject({ v: 2, id: '4242', path: '/Artist-title-lyrics', title: 'Title', artist: 'Artist', lines: {}, keyVersion: 1 });
     expect(r.song).toBeUndefined();
     expect(r.stop).toBeUndefined();
     expect(r.model).toBeUndefined();
     // only persisted fields: no album / about / annotations from the meta
-    expect(Object.keys(r).sort()).toEqual(['artist', 'createdAt', 'id', 'lines', 'path', 'title', 'updatedAt', 'v']);
+    expect(Object.keys(r).sort()).toEqual(['artist', 'createdAt', 'id', 'keyVersion', 'lines', 'path', 'title', 'updatedAt', 'v']);
   });
 
   it('stamps createdAt and updatedAt with the same time', () => {

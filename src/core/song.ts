@@ -1,3 +1,4 @@
+import { KEY_VERSION } from './types';
 import type { LyricLine, Section, SongMeta, SongRecord, SongSource, UniqueLine } from './types';
 
 /** Key used to recognise the same lyric line across repeats and across Genius edits
@@ -104,7 +105,7 @@ export function songStatus(source: SongSource, record: SongRecord | null | undef
 
 export function emptyRecord(id: string, path: string, meta: SongMeta): SongRecord {
   const now = Date.now();
-  return { v: 2, id, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
+  return { v: 2, keyVersion: KEY_VERSION, id, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
 }
 
 /** Normalized words, for checking that a model's echo of a line's first words matches it. */

@@ -1115,6 +1115,7 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
     idiom: "慣用句",
     ambiguous: "二通りに読める"
   };
+  var KEY_VERSION = 1;
 
   // src/core/protocol.ts
   var KIND_ALIASES = {
@@ -1298,7 +1299,7 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
   }
   function emptyRecord(id, path, meta) {
     const now = Date.now();
-    return { v: 2, id, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
+    return { v: 2, keyVersion: KEY_VERSION, id, path, title: meta.title, artist: meta.artist, lines: {}, createdAt: now, updatedAt: now };
   }
   function headWords(text2) {
     return lineKey(text2).replace(/[^\p{L}\p{N}' ]+/gu, " ").split(/\s+/).map((w) => w.replace(/^'+|'+$/g, "")).filter(Boolean);
@@ -1870,12 +1871,17 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
     const r = value;
     return Boolean(r) && typeof r === "object" && r.v === 2 && typeof r.lines === "object" && r.lines !== null && !Array.isArray(r.lines);
   }
+  function migrateRecord(record) {
+    if (typeof record.keyVersion !== "number" || !(record.keyVersion >= 1)) record.keyVersion = 1;
+    return record;
+  }
   async function loadSong(id) {
     const record = await getJSON(songKey(id), null);
-    return isRecord(record) ? record : null;
+    return isRecord(record) ? migrateRecord(record) : null;
   }
   async function saveSong(record) {
     record.updatedAt = Date.now();
+    record.keyVersion = KEY_VERSION;
     await setJSON(songKey(record.id), record);
     const index = await getJSON(INDEX_KEY, {});
     index[record.id] = [record.updatedAt, record.stop ? 1 : 0];
@@ -1973,8 +1979,9 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
     const updatedAt = stamp(raw.updatedAt, now);
     const song = cleanContext(raw.song);
     const stop = cleanStop(raw.stop, updatedAt);
-    return {
+    return migrateRecord({
       v: 2,
+      ...typeof raw.keyVersion === "number" ? { keyVersion: raw.keyVersion } : {},
       id: raw.id,
       path: str2(raw.path),
       title: str2(raw.title),
@@ -1985,7 +1992,7 @@ ${ask}${what}${noteSentence(noteAllowance(source, record).notesLeft)}最後に {
       ...typeof raw.model === "string" && raw.model ? { model: raw.model } : {},
       createdAt: stamp(raw.createdAt, updatedAt),
       updatedAt
-    };
+    });
   }
   function rank(r) {
     return [Object.keys(r.lines).length, r.stop ? 0 : 1, r.updatedAt];
