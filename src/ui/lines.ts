@@ -101,6 +101,8 @@ export class LineRenderer {
         const wasWaiting = el.dataset.state === 'empty' || el.dataset.state === 'next';
         el.dataset.state = state;
         if (repeat) el.dataset.repeat = ''; else delete el.dataset.repeat;
+        // A placeholder bar about as long as the translation will be (styles.css: --ll-n).
+        el.style.setProperty('--ll-n', String(Math.min(120, line.text.length)));
         el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, repeat, input));
         if (state === 'filled' && wasWaiting && input.animate) {
           el.dataset.ink = '';
