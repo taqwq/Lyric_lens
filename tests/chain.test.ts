@@ -1059,6 +1059,38 @@ describe('generateWithFallback: waiting and retrying (fake timers)', () => {
     expect(generated).toEqual([A, B, C, A]);
   });
 
+  describe('the error reported after several passes', () => {
+    const longQuota = () => googleError(429, 'RESOURCE_EXHAUSTED', 'You exceeded your current quota, please check your plan and billing details.', [
+      {
+        '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+        violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }],
+      },
+      { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '40000s' },
+    ]);
+
+    it('goes by the latest error of each model: busy in pass 0 but out of quota in pass 1 is quota', async () => {
+      listModels(A, B);
+      reply(A, busy(), longQuota());
+      reply(B, longQuota());
+      const done = settle(start(gemini()));
+      await vi.advanceTimersByTimeAsync(12_000);
+      const { error } = await done;
+      expect(error?.kind).toBe('quota');
+      expect(generated).toEqual([A, B, A]); // B is out of quota and is not asked again
+    });
+
+    it('control: still busy in the last pass stays overloaded', async () => {
+      listModels(A, B);
+      reply(A, busy(), busy(), busy());
+      reply(B, longQuota());
+      const done = settle(start(gemini()));
+      await vi.advanceTimersByTimeAsync(40_000);
+      const { error } = await done;
+      expect(error?.kind).toBe('overloaded');
+      expect(generated).toEqual([A, B, A, A]);
+    });
+  });
+
   it('does not run extra passes when a failure is not "busy" (e.g. bad request)', async () => {
     reply(A, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
     reply(B, googleError(400, 'INVALID_ARGUMENT', 'bad field'));
