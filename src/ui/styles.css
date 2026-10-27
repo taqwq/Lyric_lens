@@ -150,7 +150,8 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   line-height: 26px;
   letter-spacing: .02em;
 }
-html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
+/* 訳を隠す gives back plain Genius: lines, notes and the preface all go. */
+html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { display: none !important; }
 .ll-ja { color: inherit !important; }
 .ll-line[data-repeat] { color: var(--ll-quiet) !important; }
 .ll-adlib { color: var(--ll-quiet) !important; }
@@ -172,7 +173,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-left: .3em;
+  margin-left: .15em;
   vertical-align: -3px;
   color: var(--ll-black) !important;
   font: 700 15px/1 var(--ll-font);
