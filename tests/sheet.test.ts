@@ -175,7 +175,7 @@ describe('host', () => {
     let panel = shadow().querySelector<HTMLElement>('.panel')!;
     expect(shadow().querySelector('.root')!.getAttribute('data-place')).toBe('anchor');
     expect(panel.style.top).toBe('138px'); // bottom 130 + 8
-    expect(panel.style.left).toBe('360px'); // right edge aligned: 760 - 400
+    expect(panel.style.left).toBe('400px'); // right edge aligned: 760 - 360
     closeSheet();
 
     anchor.getBoundingClientRect = () => rect(780);
@@ -202,13 +202,13 @@ describe('host', () => {
 
     // Room on both sides: the panel's right edge meets the button's (the left edge no longer decides).
     at(540, 600);
-    expect(leftOf()).toBe('200px'); // 600 - 400
+    expect(leftOf()).toBe('240px'); // 600 - 360
     // Near the right of the window: the same rule, still inside it.
     at(940, 1000);
-    expect(leftOf()).toBe('600px'); // 1000 - 400
-    // Past what the window can hold: clamped to the right margin (1024 - 400 - 8).
+    expect(leftOf()).toBe('640px'); // 1000 - 360
+    // Past what the window can hold: clamped to the right margin (1024 - 360 - 8).
     at(980, 1040);
-    expect(leftOf()).toBe('616px');
+    expect(leftOf()).toBe('656px');
     // A button near the left edge: clamped to the left margin.
     at(20, 80);
     expect(leftOf()).toBe('8px');

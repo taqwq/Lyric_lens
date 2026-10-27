@@ -3557,7 +3557,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       rootEl.dataset.place = "anchor";
       const vw = document.documentElement.clientWidth || window.innerWidth;
       const vh = window.innerHeight;
-      const width = Math.min(400, vw - 2 * MARGIN);
+      const width = Math.min(360, vw - 2 * MARGIN);
       const cap = vh * 0.7;
       const spaceBelow = vh - rect.bottom - GAP - MARGIN;
       const spaceAbove = rect.top - GAP - MARGIN;
