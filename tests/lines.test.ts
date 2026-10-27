@@ -75,12 +75,17 @@ describe('states', () => {
     r.render(input(page, { slots: true }));
     expect(states(r, page)).toEqual(['empty', 'empty', 'empty', 'empty', 'empty', 'empty']);
     for (const el of llLines()) expect(el.querySelector('.ll-ja')?.getAttribute('aria-hidden')).toBe('true');
+    expect(document.querySelector('.ll-pen')).toBeNull();
   });
 
   it('breathing: the first empty slot is `next`', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true, breathing: true }));
     expect(states(r, page)).toEqual(['next', 'empty', 'empty', 'empty', 'empty', 'empty']);
+    const ja = r.nodeFor(0)!.querySelector('.ll-ja')!;
+    expect(ja.getAttribute('aria-hidden')).toBe('true');
+    expect(ja.querySelector('.ll-pen')).not.toBeNull();
+    expect(document.querySelectorAll('.ll-pen')).toHaveLength(1);
   });
 
   it('filled lines show their translation; everything after the last filled line waits', () => {
@@ -106,13 +111,13 @@ describe('states', () => {
     expect(states(r, page)).toEqual(['empty', 'empty', 'empty', 'empty', 'empty', 'empty']);
   });
 
-  it('gaps: missing lines read as a quiet "—", filled lines stay', () => {
+  it('gaps: missing lines read as a quiet ――, filled lines stay', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く', 4: '夢を見て' }), gaps: true }));
     expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', 'gap']);
     const gap = r.nodeFor(1)!.querySelector('.ll-ja')!;
-    expect(gap.textContent).toBe('—');
-    expect(gap.getAttribute('aria-label')).toBe('まだ訳せていない行');
+    expect(gap.textContent).toBe('――');
+    expect(gap.getAttribute('aria-label')).toBe('この行は訳せていません');
     // aria-label on a generic span is ignored by VoiceOver/TalkBack: the span is an image.
     expect(gap.getAttribute('role')).toBe('img');
     // A translated line's text is plain text, not an image.
@@ -128,16 +133,19 @@ describe('states', () => {
   it('seam: replaces the first missing line only', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く', 1: '夜を抜けて' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['filled', 'filled', 'filled', 'seam', 'empty', 'empty']);
+    expect(states(r, page)).toEqual(['filled', 'filled', 'filled', 'seam', null, null]);
     const seam = r.nodeFor(3)!.querySelector('.ll-seam')!;
     expect(seam.querySelector('.ll-seam-text')!.textContent).toBe('ここで止めました');
     expect(seam.querySelector('button.ll-btn')!.textContent).toBe('続きを訳す');
+    // reason first, then the button
+    expect(seam.firstElementChild!.className).toBe('ll-seam-text');
+    expect(seam.lastElementChild!.tagName).toBe('BUTTON');
   });
 
   it('seam with nothing translated sits at line 1', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['seam', 'empty', 'empty', 'empty', 'empty', 'empty']);
+    expect(states(r, page)).toEqual(['seam', null, null, null, null, null]);
   });
 
   it('a seam is drawn even when slots are off', () => {
@@ -216,7 +224,7 @@ describe('the frontier rule', () => {
   it('the fallback frontier takes the seam too', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 5: '起きて' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['seam', 'empty', 'empty', 'empty', 'empty', 'filled']);
+    expect(states(r, page)).toEqual(['seam', null, null, null, null, 'filled']);
   });
 
   it('with slots off, holes before the last filled line are not drawn at all', () => {
@@ -247,32 +255,40 @@ describe('the frontier rule', () => {
   it('a repeat filled ahead of the stop does not move the seam', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, seam: seamOf() }));
-    expect(states(r, page)).toEqual(['filled', 'seam', 'filled', 'empty', 'empty', 'empty']);
+    expect(states(r, page)).toEqual(['filled', 'seam', 'filled', null, null, null]);
+  });
+
+  it('after a seam no empty nodes are rendered; filled repeats below it still are', () => {
+    const r = new LineRenderer();
+    r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, breathing: true, seam: seamOf() }));
+    // Line 2 repeats line 0 and is filled below the seam; 3..5 are missing and draw nothing.
+    expect(states(r, page)).toEqual(['filled', 'seam', 'filled', null, null, null]);
+    expect(llLines()).toHaveLength(3);
+    expect(document.querySelectorAll('[data-state="empty"], [data-state="next"], [data-state="gap"]')).toHaveLength(0);
+    // Lifting the seam brings the slots back.
+    r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true, breathing: true }));
+    expect(states(r, page)).toEqual(['filled', 'next', 'filled', 'empty', 'empty', 'empty']);
   });
 });
 
 describe('repeats', () => {
-  it('a repeated line carries data-repeat and ↺ once filled', () => {
+  it('a repeated line carries data-repeat and no ↺', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'ひとり歩く' }), slots: true }));
     const first = r.nodeFor(0)!;
     const repeat = r.nodeFor(2)!;
     expect(first.hasAttribute('data-repeat')).toBe(false);
-    expect(first.querySelector('.ll-repeat')).toBeNull();
     expect(repeat.hasAttribute('data-repeat')).toBe(true);
-    const mark = repeat.querySelector('.ll-repeat')!;
-    expect(mark.textContent).toBe('↺');
-    expect(mark.getAttribute('aria-label')).toBe('くり返し');
-    expect(mark.getAttribute('role')).toBe('img');
+    expect(document.querySelector('.ll-repeat')).toBeNull();
+    expect(repeat.textContent).not.toContain('↺');
     expect(repeat.querySelector('.ll-ja')!.textContent).toBe('ひとり歩く');
     expect(repeat.querySelector('.ll-ja')!.hasAttribute('role')).toBe(false);
   });
 
-  it('an empty slot for a repeat has data-repeat but no ↺', () => {
+  it('an empty slot for a repeat has data-repeat', () => {
     const r = new LineRenderer();
     r.render(input(page, { slots: true }));
     expect(r.nodeFor(2)!.hasAttribute('data-repeat')).toBe(true);
-    expect(r.nodeFor(2)!.querySelector('.ll-repeat')).toBeNull();
     expect(r.nodeFor(0)!.hasAttribute('data-repeat')).toBe(false);
   });
 
@@ -280,7 +296,48 @@ describe('repeats', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 0: 'a', 1: 'b', 3: 'c', 4: 'd', 5: 'e' }) }));
     expect(page.source.lines.map((_, i) => r.nodeFor(i)!.hasAttribute('data-repeat'))).toEqual([false, false, true, false, false, false]);
-    expect(llLines().filter((el) => el.querySelector('.ll-repeat'))).toHaveLength(1);
+  });
+});
+
+describe('opening', () => {
+  it('marks new empty/next slots near the viewport with data-enter, then removes it', () => {
+    vi.useFakeTimers();
+    const r = new LineRenderer();
+    r.render(input(page, { slots: true, breathing: true, opening: true }));
+    expect(llLines().every((el) => el.hasAttribute('data-enter'))).toBe(true);
+    vi.advanceTimersByTime(401);
+    expect(llLines().some((el) => el.hasAttribute('data-enter'))).toBe(false);
+  });
+
+  it('removes data-enter on animationend', () => {
+    const r = new LineRenderer();
+    r.render(input(page, { slots: true, opening: true }));
+    r.nodeFor(0)!.dispatchEvent(new Event('animationend'));
+    expect(r.nodeFor(0)!.hasAttribute('data-enter')).toBe(false);
+    expect(r.nodeFor(1)!.hasAttribute('data-enter')).toBe(true);
+  });
+
+  it('skips slots whose anchor is far from the viewport', () => {
+    const rect = (top: number) => ({ top, bottom: top + 20, left: 0, right: 0, width: 0, height: 20, x: 0, y: top, toJSON() {} }) as DOMRect;
+    // Lines 0..4 end in <br>; the last line's anchor may be a text node, so it is left out.
+    page.anchors.slice(0, 5).forEach((a, i) => {
+      expect(a instanceof Element).toBe(true);
+      (a as Element).getBoundingClientRect = () => rect(i < 3 ? 100 * i : 5000 + i);
+    });
+    const r = new LineRenderer();
+    r.render(input(page, { slots: true, opening: true }));
+    expect([0, 1, 2, 3, 4].map((i) => r.nodeFor(i)!.hasAttribute('data-enter'))).toEqual([true, true, true, false, false]);
+  });
+
+  it('never on a cached render, an ordinary render, or an existing node', () => {
+    const r = new LineRenderer();
+    r.render(input(page, { slots: true }));
+    expect(llLines().some((el) => el.hasAttribute('data-enter'))).toBe(false);
+    r.render(input(page, { slots: true, opening: true }));
+    expect(llLines().some((el) => el.hasAttribute('data-enter'))).toBe(false);
+    r.clear();
+    r.render(input(page, { record: record(page, { 0: 'a' }), opening: true }));
+    expect(llLines().some((el) => el.hasAttribute('data-enter'))).toBe(false);
   });
 });
 
@@ -293,7 +350,7 @@ describe('※ notes', () => {
     const mark = r.nodeFor(4)!.querySelector('.ll-mark')!;
     expect(mark.tagName).toBe('BUTTON');
     expect(mark.textContent).toBe('※');
-    expect(mark.getAttribute('aria-label')).toBe('注：スラング「Dream on」');
+    expect(mark.getAttribute('aria-label')).toBe('注を開く：スラング');
     expect(mark.getAttribute('aria-expanded')).toBe('false');
   });
 
@@ -303,10 +360,10 @@ describe('※ notes', () => {
     expect(document.querySelector('.ll-mark')).toBeNull();
   });
 
-  it('several notes read 注 N件', () => {
+  it('several notes list their kinds joined with ・', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 4: { ja: 'd', notes: [slangNote, idiomNote] } }) }));
-    expect(r.nodeFor(4)!.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注 2件');
+    expect(r.nodeFor(4)!.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注を開く：スラング・慣用句');
   });
 
   it('aria-expanded follows openIndex without rebuilding the node or the button', () => {
@@ -351,7 +408,7 @@ describe('※ notes', () => {
     const el = r.nodeFor(4)!;
     r.render(input(page, { record: record(page, { 4: { ja: 'd', notes: [slangNote, idiomNote] } }) }));
     expect(r.nodeFor(4)).toBe(el);
-    expect(el.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注 2件');
+    expect(el.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注を開く：スラング・慣用句');
   });
 
   it('clicking ※ reports the line index', () => {

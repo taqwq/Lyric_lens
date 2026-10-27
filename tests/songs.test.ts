@@ -3,7 +3,7 @@ import './setup';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LineResult, SongRecord } from '../src/core/types';
 import { getJSON, memoryStorage, setJSON, setKV, type KV } from '../src/platform/storage';
-import { SaveQueue, deleteSong, exportSongs, importSongs, loadSong, migrateRecord, saveSong, storageSummary, touchSong } from '../src/store/songs';
+import { SaveQueue, deleteSong, exportSongs, importSongs, loadSong, migrateRecord, saveSong, setSongHidden, storageSummary, touchSong } from '../src/store/songs';
 
 const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -581,5 +581,46 @@ describe('keyVersion', () => {
     delete r.keyVersion;
     expect(await importSongs(file([r]))).toBe(1);
     expect((await loadSong('imp'))?.keyVersion).toBe(1);
+  });
+});
+
+/* ---------- 訳を隠す is per song ---------- */
+
+describe('hidden', () => {
+  it('setSongHidden flips the flag without touching the date or the index', async () => {
+    await put(rec('a'), NOW - 5 * HOUR);
+    await setSongHidden('a', true);
+    const saved = await loadSong('a');
+    expect(saved!.hidden).toBe(true);
+    expect(saved!.updatedAt).toBe(NOW - 1000);
+    expect((await readIndex()).a).toEqual([NOW - 5 * HOUR, 0]);
+    await setSongHidden('a', false);
+    expect(await loadSong('a')).not.toHaveProperty('hidden');
+    expect((await loadSong('a'))!.updatedAt).toBe(NOW - 1000);
+  });
+
+  it('setSongHidden on an unknown song writes nothing', async () => {
+    await setSongHidden('nothing', true);
+    expect(await loadSong('nothing')).toBeNull();
+    expect(await readIndex()).toEqual({});
+  });
+
+  it('survives an export and an import; anything but true is dropped', async () => {
+    await put(rec('keep', { hidden: true }));
+    await put(rec('plain'));
+    const text = await exportSongs();
+    await deleteSong('keep');
+    await deleteSong('plain');
+    expect(await importSongs(text)).toBe(2);
+    expect((await loadSong('keep'))!.hidden).toBe(true);
+    expect(await loadSong('plain')).not.toHaveProperty('hidden');
+    expect(await importSongs(file([{ ...rec('odd'), hidden: 'yes' }, { ...rec('zero'), hidden: false }]))).toBe(2);
+    expect(await loadSong('odd')).not.toHaveProperty('hidden');
+    expect(await loadSong('zero')).not.toHaveProperty('hidden');
+  });
+
+  it('saveSong keeps the flag on the record', async () => {
+    await saveSong(rec('s', { hidden: true }));
+    expect((await loadSong('s'))!.hidden).toBe(true);
   });
 });

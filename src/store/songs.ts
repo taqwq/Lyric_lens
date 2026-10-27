@@ -64,6 +64,16 @@ export async function touchSong(id: string): Promise<void> {
   await setJSON(INDEX_KEY, index);
 }
 
+/** 訳を隠す is per song: flips the flag on the stored record only, leaving its date and its
+ *  place in the index alone. */
+export async function setSongHidden(id: string, hidden: boolean): Promise<void> {
+  const record = await loadSong(id);
+  if (!record || Boolean(record.hidden) === hidden) return;
+  if (hidden) record.hidden = true;
+  else delete record.hidden;
+  await setJSON(songKey(id), record);
+}
+
 export async function deleteSong(id: string): Promise<void> {
   await remove(songKey(id));
   const index = await getJSON<Index>(INDEX_KEY, {});
@@ -175,6 +185,7 @@ function cleanRecord(raw: unknown): SongRecord | null {
     lines,
     ...(stop ? { stop } : {}),
     ...(typeof raw.model === 'string' && raw.model ? { model: raw.model } : {}),
+    ...(raw.hidden === true ? { hidden: true } : {}),
     ...(typeof raw.carried === 'number' && raw.carried > 0 ? { carried: Math.floor(raw.carried) } : {}),
     createdAt: stamp(raw.createdAt, updatedAt),
     updatedAt,

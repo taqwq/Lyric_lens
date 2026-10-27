@@ -10,6 +10,7 @@ import { phraseRange } from '../genius/ranges';
 import { h, isolateClicks } from './dom';
 
 const GENIUS_CLIP = 400;
+const GN_LABEL = 'Geniusの注釈を英語で読む ▾';
 
 interface HighlightRegistry { set(name: string, value: unknown): void; delete(name: string): void }
 declare const Highlight: { new (...ranges: Range[]): unknown } | undefined;
@@ -81,8 +82,11 @@ export class NoteView {
     this.close();
     this.current = note;
     const notes = note.result.notes ?? [];
+    // 注を閉じる appears only while a Genius annotation is unfolded (a long read worth leaving).
+    const sync = () => { closeButton.hidden = !el.querySelector('.ll-gn-toggle[aria-expanded="true"]'); };
+    const closeButton: HTMLButtonElement = h('button', { class: 'll-note-close', type: 'button', hidden: true, onclick: () => onClose() }, '注を閉じる');
     const el = h('div', { class: 'll-note', lang: 'ja', role: 'note', 'data-exclude-from-selection': 'true' },
-      h('div', { class: 'll-note-body' }, notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? ''))));
+      ...notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? '', sync)), closeButton);
     isolateClicks(el);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
@@ -123,23 +127,23 @@ export class NoteView {
     paint('ll-phrase-peek', notes ? phraseRanges(lineText, notes) : []);
   }
 
-  private item(note: Note, annotations: GeniusAnnotation[] | null, lineText: string): HTMLElement {
+  private item(note: Note, annotations: GeniusAnnotation[] | null, lineText: string, onToggle: () => void): HTMLElement {
     const match = geniusFor(note, annotations, lineText);
     const genius = match?.annotation ?? null;
     const cited = Boolean(match?.cited);
     return h('div', { class: 'll-note-item' },
-      h('div', { class: 'll-note-head' },
-        h('span', { class: 'll-note-kind' }, NOTE_LABELS[note.kind]),
-        note.conjecture ? h('span', { class: 'll-note-conj' }, '推測') : null,
+      h('p', { class: 'll-note-head' },
+        h('span', { class: 'll-note-phrase', lang: 'en' }, `“${note.phrase}”`),
+        h('span', { class: 'll-note-kind' }, `〔${NOTE_LABELS[note.kind]}〕`),
+        note.conjecture ? h('span', { class: 'll-note-conj' }, '〔推測〕') : null,
       ),
-      h('span', { class: 'll-note-phrase', lang: 'en' }, `“${note.phrase}”`),
-      h('span', { class: 'll-note-text' }, note.text),
-      cited ? h('span', { class: 'll-note-src' }, 'Genius注釈より') : null,
-      genius ? this.geniusBlock(genius) : null,
+      h('p', { class: 'll-note-text' }, note.text),
+      cited ? h('p', { class: 'll-note-src' }, 'Genius注釈より') : null,
+      genius ? this.geniusBlock(genius, onToggle) : null,
     );
   }
 
-  private geniusBlock(a: GeniusAnnotation): HTMLElement {
+  private geniusBlock(a: GeniusAnnotation, onToggle: () => void): HTMLElement {
     const body = h('div', { class: 'll-gn-text', lang: 'en', hidden: true });
     const full = a.text.replace(/\s+/g, ' ').trim();
     const setText = (all: boolean) => {
@@ -157,9 +161,10 @@ export class NoteView {
         const show = body.hidden;
         body.hidden = !show;
         toggle.setAttribute('aria-expanded', String(show));
-        toggle.textContent = show ? 'たたむ' : `Geniusの注釈（英語）▲${a.votes}`;
+        toggle.textContent = show ? 'たたむ ▴' : GN_LABEL;
+        onToggle();
       },
-    }, `Geniusの注釈（英語）▲${a.votes}`);
-    return h('div', { class: 'll-gn' }, toggle, body);
+    }, GN_LABEL);
+    return h('div', { class: 'll-gn' }, toggle, h('span', { class: 'll-gn-votes' }, `▲${a.votes}`), body);
   }
 }

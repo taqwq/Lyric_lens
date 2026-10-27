@@ -1092,7 +1092,7 @@ ${req.user}` : req.user }] }],
 ## 出力形式（厳守）
 1行に1つの JSON オブジェクトだけを出力する。前置き・Markdown・コードブロック・配列は書かない。
 
-{"t":"song","who":"「誰が誰に」の1文（40字以内。括弧書きやMV・経歴の情報は書かない）","what":"歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）","tone":"語調","motifs":[{"en":"繰り返しの語句","ja":"決めた訳語"}]}
+{"t":"song","who":"「AからBへ」の形の自然な1文（例：語り手から別れた恋人へ／兄から弟へ。40字以内。矢印・括弧書き・MVや経歴の情報は書かない）","what":"歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）","tone":"語調","motifs":[{"en":"繰り返しの語句","ja":"決めた訳語"}]}
 {"t":"line","id":"L1","head":"原文の最初の3語","ja":"訳","notes":[]}
 {"t":"line","id":"L2","head":"原文の最初の3語","ja":"訳","notes":[{"q":"原文の語句","k":"slang","x":"説明","c":false,"g":"Genius注釈のid"}]}
 {"t":"end"}
@@ -2064,6 +2064,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     entry[0] = Date.now();
     await setJSON(INDEX_KEY, index);
   }
+  async function setSongHidden(id, hidden) {
+    const record = await loadSong(id);
+    if (!record || Boolean(record.hidden) === hidden) return;
+    if (hidden) record.hidden = true;
+    else delete record.hidden;
+    await setJSON(songKey(id), record);
+  }
   async function deleteSong(id) {
     await remove(songKey(id));
     const index = await getJSON(INDEX_KEY, {});
@@ -2152,6 +2159,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       lines,
       ...stop ? { stop } : {},
       ...typeof raw.model === "string" && raw.model ? { model: raw.model } : {},
+      ...raw.hidden === true ? { hidden: true } : {},
       ...typeof raw.carried === "number" && raw.carried > 0 ? { carried: Math.floor(raw.carried) } : {},
       createdAt: stamp(raw.createdAt, updatedAt),
       updatedAt
@@ -2262,6 +2270,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var prefaceSeq = 0;
   var isStop = (id) => id === "stop" || id === "stopMirror";
   var STOP_GRACE_MS = 600;
+  var SETTLE_MS = 600;
   var HeadRow = class {
     constructor() {
       __publicField(this, "el", null);
@@ -2273,6 +2282,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       /** The live region outlives every rebuild of the row: a region inserted already holding its
        *  text is not announced, one whose text changes in place is. */
       __publicField(this, "statusEl", null);
+      __publicField(this, "settleTimer", null);
       __publicField(this, "whatId", `ll-preface-what-${prefaceSeq += 1}`);
     }
     get element() {
@@ -2282,10 +2292,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const first = page.containers[0];
       if (!first?.isConnected) return;
       if (!this.el) {
-        this.el = h("div", { class: "ll-head", lang: "ja", "data-exclude-from-selection": "true" });
+        this.el = h("div", { class: "ll-head", lang: "ja", role: "region", "aria-label": "Lyric Lens 日本語訳", "data-exclude-from-selection": "true" });
         isolateClicks(this.el);
       }
-      const sig = JSON.stringify([view.status, view.tone, view.note, view.noteTone, view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
+      const p = view.progress;
+      const progressKind = p === "indeterminate" ? "i" : p ? `v${p.max}` : "";
+      const sig = JSON.stringify([view.status, view.tone, Boolean(view.count), progressKind, view.captions.map((c) => [c.text, c.tone]), view.actions.map((a) => [a.id, a.label, a.disabled, a.primary]), view.preface && [view.preface.who, view.preface.what, view.preface.collapsed]]);
       if (view.state) this.el.dataset.llState = view.state;
       const ids = view.actions.map((a) => a.id ?? "");
       const prevIds = this.prevIds;
@@ -2302,17 +2314,19 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           else this.restoreFocus(focus);
         }
       } else {
-        this.el.querySelectorAll(".ll-actions .ll-btn").forEach((b, i) => {
+        this.el.querySelectorAll(".ll-head-row .ll-btn").forEach((b, i) => {
           b.disabled = Boolean(view.actions[i]?.disabled);
         });
       }
+      this.updateMeter(view);
+      if (view.settle && this.settleTimer === null) this.startSettle();
       const header = Array.from(first.children).find((c) => c !== this.el && !isOwnNode(c) && c.hasAttribute("data-exclude-from-selection")) ?? null;
       const placed = this.el.parentNode === first && (header ? this.el.previousElementSibling === header : first.firstChild === this.el);
       if (!placed) first.insertBefore(this.el, header ? header.nextSibling : first.firstChild);
     }
     /** Puts keyboard focus on the first control (used when a line control vanished). */
     focusFirst() {
-      this.el?.querySelector(".ll-actions .ll-btn:not(:disabled), .ll-preface-toggle")?.focus({ preventScroll: true });
+      this.el?.querySelector(".ll-head-row .ll-btn:not(:disabled), .ll-preface-more")?.focus({ preventScroll: true });
     }
     clear() {
       this.el?.remove();
@@ -2321,77 +2335,102 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.prevIds = [];
       this.stopSince = null;
       this.statusEl = null;
+      if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
+    /** The row settles for 600 ms (a rebuild inside that window keeps the attribute). */
+    startSettle() {
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = null;
+        this.el?.querySelector(".ll-head-row")?.removeAttribute("data-settle");
+      }, SETTLE_MS);
+      this.el?.querySelector(".ll-head-row")?.setAttribute("data-settle", "");
+    }
+    /** Count text and the bar's value, written in place (see render). */
+    updateMeter(view) {
+      const row = this.el?.querySelector(".ll-head-row");
+      if (!row) return;
+      const count = row.querySelector(".ll-count");
+      if (count && view.count && count.textContent !== view.count) count.textContent = view.count;
+      const bar = row.querySelector(".ll-progress");
+      const p = view.progress;
+      if (bar && p && p !== "indeterminate") {
+        bar.setAttribute("aria-valuenow", String(p.value));
+        bar.style.setProperty("--p", String(p.max > 0 ? Math.round(p.value / p.max * 1e3) / 1e3 : 0));
+      }
     }
     focusedSlot() {
       const active2 = document.activeElement;
       if (!this.el || !active2 || !this.el.contains(active2)) return null;
-      if (active2.classList.contains("ll-preface-toggle")) return { kind: "preface" };
-      const buttons = Array.from(this.el.querySelectorAll(".ll-actions .ll-btn"));
+      if (active2.classList.contains("ll-preface-more")) return { kind: "preface" };
+      const buttons = Array.from(this.el.querySelectorAll(".ll-head-row .ll-btn"));
       const index = buttons.indexOf(active2);
       return index >= 0 ? { kind: "action", index } : null;
     }
     restoreFocus(slot) {
       const el = this.el;
       if (!el) return;
-      const target = slot.kind === "preface" ? el.querySelector(".ll-preface-toggle") : el.querySelectorAll(".ll-actions .ll-btn")[slot.index] ?? null;
-      (target ?? el.querySelector(".ll-actions .ll-btn"))?.focus({ preventScroll: true });
+      const target = slot.kind === "preface" ? el.querySelector(".ll-preface-more") : el.querySelectorAll(".ll-head-row .ll-btn")[slot.index] ?? null;
+      (target ?? el.querySelector(".ll-head-row .ll-btn"))?.focus({ preventScroll: true });
     }
     /** The one status node, created once and re-appended into each rebuilt row. Never `hidden`
      *  (display: none drops it from the accessibility tree); an empty one is collapsed by CSS. */
     statusNode(view) {
       const el = this.statusEl ?? (this.statusEl = h("span", { class: "ll-status", role: "status", "aria-live": "polite", tabindex: "-1" }));
-      el.dataset.tone = view.tone ?? "normal";
       if (el.textContent !== view.status) el.textContent = view.status;
       if (view.status) delete el.dataset.empty;
       else el.dataset.empty = "1";
       return el;
     }
     content(view) {
+      const button = (a) => {
+        const b = h("button", {
+          class: "ll-btn",
+          type: "button",
+          disabled: Boolean(a.disabled),
+          "data-primary": a.primary ? "" : null,
+          onclick: (e) => {
+            e.preventDefault();
+            if (b.disabled) return;
+            if (isStop(a.id) && this.stopSince !== null && performance.now() - this.stopSince < STOP_GRACE_MS) return;
+            if (a.primary) b.disabled = true;
+            a.onClick(b);
+          }
+        }, a.label);
+        return b;
+      };
+      const primary = view.actions.filter((a) => a.primary).map(button);
+      const links = view.actions.filter((a) => !a.primary).map(button);
+      const p = view.progress;
       const row = h(
         "div",
-        { class: "ll-head-row", dataset: { bare: view.status ? "" : "1" } },
+        { class: "ll-head-row", dataset: { tone: view.tone } },
+        h("span", { class: "ll-icon", "aria-hidden": "true" }),
+        primary,
         this.statusNode(view),
-        h("span", { class: "ll-actions" }, view.actions.map((a) => {
-          const button = h("button", {
-            class: "ll-btn",
-            type: "button",
-            disabled: Boolean(a.disabled),
-            "data-primary": a.primary ? "" : null,
-            onclick: (e) => {
-              e.preventDefault();
-              if (button.disabled) return;
-              if (isStop(a.id) && this.stopSince !== null && performance.now() - this.stopSince < STOP_GRACE_MS) return;
-              if (a.primary) button.disabled = true;
-              a.onClick(button);
-            }
-          }, a.label);
-          return button;
-        }))
+        view.count ? h("span", { class: "ll-count", "aria-hidden": "true" }, view.count) : null,
+        links.length ? h("span", { class: "ll-links" }, links) : null,
+        p === "indeterminate" ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進み具合", "data-indeterminate": "" }) : p ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進み具合", "aria-valuemin": "0", "aria-valuemax": String(p.max), "aria-valuenow": String(p.value) }) : null
       );
+      if (this.settleTimer !== null) row.setAttribute("data-settle", "");
       const out = [row];
-      if (view.note) out.push(h("span", { class: "ll-head-note", ...view.noteTone ? { "data-tone": view.noteTone } : {} }, view.note));
-      const p = view.preface;
-      if (p && (p.who || p.what)) {
+      for (const c of view.captions) out.push(h("span", { class: "ll-caption", ...c.tone ? { "data-tone": c.tone } : {} }, c.text));
+      const pf = view.preface;
+      if (pf && (pf.who || pf.what)) {
         out.push(h(
           "div",
-          { class: "ll-preface", dataset: { collapsed: p.collapsed ? "1" : "" } },
-          h(
-            "div",
-            { class: "ll-preface-rows" },
-            h("div", { class: "ll-preface-row ll-preface-who" }, h("span", { class: "ll-preface-label" }, "誰が誰に"), h("span", null, p.who)),
-            h("div", { class: "ll-preface-row ll-preface-what", id: this.whatId, hidden: p.collapsed }, h("span", { class: "ll-preface-label" }, "この曲は"), h("span", null, p.what))
-          ),
-          h("button", {
-            class: "ll-preface-toggle",
+          { class: "ll-preface" },
+          h("p", { class: "ll-preface-who" }, pf.who, pf.collapsed && pf.what ? h("button", {
+            class: "ll-preface-more",
             type: "button",
-            "aria-expanded": String(!p.collapsed),
+            "aria-expanded": "false",
             "aria-controls": this.whatId,
-            "aria-label": p.collapsed ? "この曲についてを開く" : "この曲についてを閉じる",
             onclick: (e) => {
               e.preventDefault();
-              p.onToggle();
+              pf.onToggle();
             }
-          }, p.collapsed ? "▸" : "▾")
+          }, "続きを読む ▾") : null),
+          pf.what ? h("p", { class: "ll-preface-what", id: this.whatId, hidden: pf.collapsed }, pf.what) : null
         ));
       }
       return out;
@@ -2410,6 +2449,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
 
   // src/ui/lines.ts
+  function nearViewport(anchor) {
+    const target = anchor instanceof Element ? anchor : anchor.parentElement;
+    if (!target) return true;
+    const rect = target.getBoundingClientRect();
+    return rect.bottom > -600 && rect.top < window.innerHeight + 600;
+  }
   function insertAfter(anchor, el) {
     if (!anchor.parentNode || !anchor.isConnected) return false;
     anchor.parentNode.insertBefore(el, anchor.nextSibling);
@@ -2447,6 +2492,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         let state = null;
         if (result?.ja) state = "filled";
         else if (input.seam && i === frontier) state = "seam";
+        else if (input.seam && frontier >= 0 && i > frontier) state = null;
         else if (input.gaps) state = "gap";
         else if (input.slots) state = i < frontier && lastFilled > i ? "gap" : input.breathing && i === frontier ? "next" : "empty";
         const current = this.nodes.get(i);
@@ -2466,6 +2512,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           repeat,
           notes.length,
           notes[0]?.phrase ?? "",
+          notes.map((n) => n.kind).join(","),
           state === "seam" ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ""
         ].join("");
         let el = current;
@@ -2474,16 +2521,27 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           isolateClicks(el);
         }
         if (this.sigs.get(i) !== sig) {
+          const isNew = !current;
           const wasWaiting = el.dataset.state === "empty" || el.dataset.state === "next";
           el.dataset.state = state;
           if (repeat) el.dataset.repeat = "";
           else delete el.dataset.repeat;
-          el.replaceChildren(...this.content(state, i, result?.ja ?? "", notes.length, repeat, input));
+          el.style.setProperty("--ll-n", String(Math.min(120, line.text.length)));
+          el.replaceChildren(...this.content(state, i, result?.ja ?? "", notes.length, input));
           if (state === "filled" && wasWaiting && input.animate) {
             el.dataset.ink = "";
             setTimeout(() => {
               if (el) delete el.dataset.ink;
             }, 260);
+          }
+          if (input.opening && isNew && (state === "empty" || state === "next") && nearViewport(anchor)) {
+            const node = el;
+            node.dataset.enter = "";
+            const done = () => {
+              delete node.dataset.enter;
+            };
+            node.addEventListener("animationend", done, { once: true });
+            setTimeout(done, 400);
           }
           this.sigs.set(i, sig);
         }
@@ -2502,9 +2560,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         });
       }
     }
-    content(state, index, ja, noteCount, repeat, input) {
-      if (state === "empty" || state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
-      if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "まだ訳せていない行" }, "—")];
+    content(state, index, ja, noteCount, input) {
+      if (state === "empty") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
+      if (state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" }, h("span", { class: "ll-pen" }))];
+      if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "この行は訳せていません" }, "――")];
       if (state === "seam" && input.seam) {
         const { seam } = input;
         const button = h("button", {
@@ -2522,13 +2581,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
       const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
       const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
-      if (repeat) out.push(h("span", { class: "ll-repeat", role: "img", "aria-label": "くり返し" }, "↺"));
       if (noteCount) {
         const record = input.record;
         const line = input.page.source.lines[index];
         const notes = line && record?.lines[line.key]?.notes || [];
         const first = notes[0];
-        const label = notes.length > 1 ? `注 ${notes.length}件` : first ? `注：${NOTE_LABELS[first.kind]}「${first.phrase}」` : "注";
+        const kinds = [...new Set(notes.map((n) => NOTE_LABELS[n.kind]))].join("・");
+        const label = first ? `注を開く：${kinds}` : "注を開く";
         const mark = h("button", {
           class: "ll-mark",
           type: "button",
@@ -2573,6 +2632,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
   // src/ui/notes.ts
   var GENIUS_CLIP = 400;
+  var GN_LABEL = "Geniusの注釈を英語で読む ▾";
   function registry() {
     const css = globalThis.CSS;
     return css?.highlights && typeof Highlight !== "undefined" ? css.highlights : null;
@@ -2617,10 +2677,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.close();
       this.current = note;
       const notes = note.result.notes ?? [];
+      const sync = () => {
+        closeButton.hidden = !el.querySelector('.ll-gn-toggle[aria-expanded="true"]');
+      };
+      const closeButton = h("button", { class: "ll-note-close", type: "button", hidden: true, onclick: () => onClose() }, "注を閉じる");
       const el = h(
         "div",
         { class: "ll-note", lang: "ja", role: "note", "data-exclude-from-selection": "true" },
-        h("div", { class: "ll-note-body" }, notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? "")))
+        ...notes.map((n) => this.item(n, note.annotations, note.lineText?.raw ?? "", sync)),
+        closeButton
       );
       isolateClicks(el);
       el.addEventListener("keydown", (e) => {
@@ -2658,7 +2723,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     peek(lineText, notes) {
       paint("ll-phrase-peek", notes ? phraseRanges(lineText, notes) : []);
     }
-    item(note, annotations, lineText) {
+    item(note, annotations, lineText, onToggle) {
       const match = geniusFor(note, annotations, lineText);
       const genius = match?.annotation ?? null;
       const cited = Boolean(match?.cited);
@@ -2666,18 +2731,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         "div",
         { class: "ll-note-item" },
         h(
-          "div",
+          "p",
           { class: "ll-note-head" },
-          h("span", { class: "ll-note-kind" }, NOTE_LABELS[note.kind]),
-          note.conjecture ? h("span", { class: "ll-note-conj" }, "推測") : null
+          h("span", { class: "ll-note-phrase", lang: "en" }, `“${note.phrase}”`),
+          h("span", { class: "ll-note-kind" }, `〔${NOTE_LABELS[note.kind]}〕`),
+          note.conjecture ? h("span", { class: "ll-note-conj" }, "〔推測〕") : null
         ),
-        h("span", { class: "ll-note-phrase", lang: "en" }, `“${note.phrase}”`),
-        h("span", { class: "ll-note-text" }, note.text),
-        cited ? h("span", { class: "ll-note-src" }, "Genius注釈より") : null,
-        genius ? this.geniusBlock(genius) : null
+        h("p", { class: "ll-note-text" }, note.text),
+        cited ? h("p", { class: "ll-note-src" }, "Genius注釈より") : null,
+        genius ? this.geniusBlock(genius, onToggle) : null
       );
     }
-    geniusBlock(a) {
+    geniusBlock(a, onToggle) {
       const body = h("div", { class: "ll-gn-text", lang: "en", hidden: true });
       const full = a.text.replace(/\s+/g, " ").trim();
       const setText = (all) => {
@@ -2695,10 +2760,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           const show = body.hidden;
           body.hidden = !show;
           toggle.setAttribute("aria-expanded", String(show));
-          toggle.textContent = show ? "たたむ" : `Geniusの注釈（英語）▲${a.votes}`;
+          toggle.textContent = show ? "たたむ ▴" : GN_LABEL;
+          onToggle();
         }
-      }, `Geniusの注釈（英語）▲${a.votes}`);
-      return h("div", { class: "ll-gn" }, toggle, body);
+      }, GN_LABEL);
+      return h("div", { class: "ll-gn" }, toggle, h("span", { class: "ll-gn-votes" }, `▲${a.votes}`), body);
     }
   };
 
@@ -2706,8 +2772,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var sheet_default = `/*
  * Lyric Lens sheet (first run / settings). Lives inside a shadow root, so none of this can
  * leak into Genius and none of Genius' CSS reaches in. Tokens follow docs/DESIGN.md section 6:
- * a printed insert — white paper, black type, 明朝 titles, hairline rules between sections,
- * Genius' black for the one primary action and 金赤 only for what is destructive or wrong.
+ * paper, ink and Genius' square grammar — a title rule, sections, underlined links, one black
+ * button for the one thing the sheet is for. No colour carries meaning; words do.
  */
 
 :host { all: initial; }
@@ -2716,17 +2782,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 .root {
   --paper: #FFFFFF;
-  --ink: #000000;
-  --sumi: #333333;
-  --nezumi: #767676;
-  --aka: #E60012;
-  --hai: #DDDDDD;
-  --field-line: #BDBDBD;
-  --ok: #1E8E3E;
-  --rest: #B26A00;
-  --shadow: 0 14px 40px rgba(0, 0, 0, .16);
-  --mincho: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Noto Serif JP", "Yu Mincho", YuMincho, "Noto Serif CJK JP", serif;
-  --gothic: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", "Noto Sans CJK JP", Meiryo, sans-serif;
+  --ink: #262626;
+  --black: #000000;
+  --quiet: #6B6B6B;
+  --rule: #E5E5E5;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .16);
 
   position: absolute;
   top: 0;
@@ -2734,8 +2794,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   right: 0;
   bottom: 0;
   color-scheme: light;
-  color: var(--sumi);
-  font-family: var(--gothic);
+  color: var(--ink);
+  font-family: var(--ll-latin, Programme, "Helvetica Neue", Arial), "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
   font-size: 14px;
   font-weight: 400;
   line-height: 1.6;
@@ -2747,8 +2807,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   line-break: strict;
   word-break: normal;
   overflow-wrap: anywhere;
-  font-feature-settings: "palt" 1;
-  letter-spacing: .03em;
+  letter-spacing: .02em;
   text-spacing-trim: trim-start;
   hanging-punctuation: none;
 }
@@ -2758,16 +2817,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 .root[data-theme="dark"] {
-  --paper: #1E1E1E;
-  --ink: #FFFFFF;
-  --sumi: #E6E6E6;
-  --nezumi: #A0A0A0;
-  --aka: #FF4B55;
-  --hai: #3A3A3A;
-  --field-line: #5A5A5A;
-  --ok: #5BC77A;
-  --rest: #E8A33A;
-  --shadow: 0 14px 40px rgba(0, 0, 0, .55);
+  --paper: #1C1C1C;
+  --ink: #F2F2F2;
+  --black: #FFFFFF;
+  --quiet: #A3A3A3;
+  --rule: #333333;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
 
@@ -2788,19 +2843,17 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   flex-direction: column;
   overflow: hidden;
   background: var(--paper);
-  color: var(--sumi);
-  border: 1px solid rgba(0, 0, 0, .14);
-  border-radius: 4px;
+  color: var(--ink);
+  border: 1px solid var(--black);
+  border-radius: 0;
   box-shadow: var(--shadow);
   outline: none;
-  animation: ll-sheet-in 180ms ease-out both;
+  animation: ll-sheet-in 160ms cubic-bezier(.2, 0, 0, 1) both;
 }
 
-.root[data-theme="dark"] .panel { border-color: rgba(255, 255, 255, .12); }
-
-/* Desktop: 400px panel. JS sets left/top (or bottom) and max-height when anchored. */
+/* Desktop: 360px panel. JS sets left/top (or bottom) and max-height when anchored. */
 .root[data-layout="desktop"] .panel {
-  width: 400px;
+  width: 360px;
   max-width: calc(100vw - 16px);
   max-height: 70vh;
   top: 8px;
@@ -2816,7 +2869,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 /* Phone: a bottom sheet over a dimmed backdrop. */
 .root[data-layout="phone"] .backdrop {
-  background: rgba(0, 0, 0, .36);
+  background: rgba(0, 0, 0, .4);
   animation: ll-sheet-fade 200ms ease-out both;
 }
 
@@ -2826,25 +2879,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   bottom: 0;
   width: min(100%, 560px);
   margin: 0 auto;
-  max-height: 88vh;
-  max-height: 88dvh;
-  padding-top: 10px;
+  max-height: 85vh;
+  max-height: 85dvh;
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-width: 1px 0 0;
-  border-radius: 10px 10px 0 0;
-  animation: ll-sheet-rise 260ms cubic-bezier(.2, .8, .2, 1) both;
-}
-
-.root[data-layout="phone"] .panel::before {
-  content: "";
-  position: absolute;
-  top: 7px;
-  left: 50%;
-  width: 36px;
-  height: 4px;
-  margin-left: -18px;
-  border-radius: 2px;
-  background: var(--hai);
+  border: 0;
+  box-shadow: none;
+  animation: ll-sheet-rise 280ms cubic-bezier(.2, 0, 0, 1) both;
 }
 
 @keyframes ll-sheet-fade {
@@ -2858,46 +2898,33 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 @keyframes ll-sheet-rise {
-  from { transform: translateY(24px); opacity: 0; }
-  to { transform: none; opacity: 1; }
+  from { transform: translateY(100%); }
+  to { transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .panel, .backdrop { animation: none !important; }
+  .panel, .backdrop { animation: ll-sheet-fade 100ms linear both !important; }
 }
 
+/* Title row: the same rule Genius draws under its own headings. */
 .head {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 12px 12px 20px;
-  border-bottom: 1px solid var(--hai);
+  min-height: 48px;
+  padding: 0 6px 0 16px;
+  border-bottom: 1px solid var(--black);
 }
 
-/* The title carries the same edition mark as the page: a small 金赤 seal with 訳. */
 .title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   margin: 0;
-  color: var(--ink);
-  font: 600 17px/1.4 var(--mincho);
-  letter-spacing: .04em;
-}
-
-.title::before {
-  content: "訳";
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 1px;
-  background: var(--aka);
-  color: #FFFFFF;
-  font: 600 13px/22px var(--mincho);
-  letter-spacing: 0;
-  text-align: center;
+  color: var(--black);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: .02em;
 }
 
 .body {
@@ -2906,64 +2933,46 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 20px 20px;
+  padding: 16px 16px 20px;
 }
 
 .root[data-layout="phone"] .body { padding-bottom: 24px; }
 
-/* ---------- sections ---------- */
+/* ---------- text ---------- */
 
 .section + .section {
-  margin-top: 20px;
-  padding-top: 18px;
-  border-top: 1px solid var(--hai);
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
 }
 
 .section-title {
-  margin: 0 0 8px;
-  color: var(--nezumi);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: .08em;
-}
-
-.section-lead {
-  margin: 0 0 8px;
-  color: var(--nezumi);
-  font-size: 12.5px;
-  line-height: 1.7;
-}
-
-.line {
   margin: 0 0 10px;
-  color: var(--sumi);
+  color: var(--black);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.section-lead,
+.line,
+.note,
+.msg {
+  margin: 0 0 8px;
+  color: var(--quiet);
+  font-size: 13px;
+  line-height: 21px;
 }
 
 .line:last-child { margin-bottom: 0; }
-
-.note {
-  margin: 10px 0 18px;
-  color: var(--nezumi);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.msg {
-  margin: 0;
-  color: var(--nezumi);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
+.msg:empty { display: none; }
 .msg:not(:empty) { margin-top: 8px; }
-.msg[data-kind="error"] { color: var(--aka); }
+.msg[data-kind="error"] { color: var(--black); font-weight: 700; }
 
 /* ---------- first run ---------- */
 
-/* A real sequence, so it is numbered: 明朝 numerals in 金赤, hanging. */
 .steps {
   list-style: none;
-  margin: 2px 0 16px;
+  margin: 0 0 16px;
   padding: 0;
   counter-reset: step;
 }
@@ -2971,153 +2980,125 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 .steps li {
   position: relative;
   margin: 0 0 14px;
-  padding-left: 30px;
-  color: var(--sumi);
-  line-height: 1.75;
+  padding-left: 36px;
   counter-increment: step;
+  color: var(--ink);
 }
 
+/* A real sequence, so it is numbered: small black squares in Genius' grammar. */
 .steps li::before {
   content: counter(step);
   position: absolute;
-  left: 2px;
-  top: -2px;
-  color: var(--aka);
-  font: 600 20px/1.3 var(--mincho);
+  left: 0;
+  top: 0;
+  width: 24px;
+  height: 24px;
+  background: var(--black);
+  color: var(--paper);
+  font: 700 13px/24px var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif;
+  text-align: center;
 }
 
-.steps .link { display: block; margin-top: 2px; }
+.steps .link { display: inline-block; margin-top: 4px; }
 
 /* ---------- controls ---------- */
 
+/* Text actions are underlined links, as everywhere on Genius. */
 .btn {
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  margin: 0;
-  min-height: 36px;
-  padding: 6px 4px;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--ink);
+  margin: 0 18px 0 0;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--black);
   font: inherit;
   font-size: 13px;
-  font-weight: 400;
   letter-spacing: inherit;
-  font-feature-settings: inherit;
   line-height: 1.3;
-  text-align: center;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 4px;
+  text-align: left;
+  text-decoration: underline 1px;
+  text-underline-offset: 3px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* outline: the secondary action of a section */
-.btn[data-v="outline"] {
-  padding: 6px 14px;
-  border-color: var(--ink);
-  font-weight: 600;
-  text-decoration: none;
-}
+.btn:last-child { margin-right: 0; }
 
-/* solid: the one thing this sheet is for */
+.btn[data-v="close"] { flex: none; margin: 0; padding: 0 10px; min-height: 44px; }
+
+/* The one black button: the thing this sheet is for (保存してこの曲を訳す, 保存, the confirm). */
 .btn[data-v="solid"] {
+  justify-content: center;
   min-height: 44px;
-  padding: 10px 18px;
-  border-color: var(--ink);
-  background: var(--ink);
+  padding: 0 20px;
+  background: var(--black);
   color: var(--paper);
   font-size: 15px;
-  font-weight: 600;
-  letter-spacing: .06em;
+  font-weight: 700;
   text-decoration: none;
 }
 
-.btn[data-v="close"] {
-  flex: none;
-  padding: 6px 8px;
-  font-size: 13px;
-  text-decoration: none;
-  color: var(--nezumi);
-}
+.btn[data-v="outline"] { font-weight: 700; }
 
-/* destructive: delete this song, delete all, and their confirmations */
-.btn[data-danger] { color: var(--aka); }
-.btn[data-v="outline"][data-danger] { border-color: var(--aka); }
+.btn:disabled { color: var(--quiet); cursor: default; text-decoration: none; }
+.btn[data-v="solid"]:disabled { background: #333333; color: #FFFFFF; }
 
-.btn:disabled {
-  opacity: .4;
-  cursor: default;
-}
-
-.btn:active:not(:disabled) { opacity: .7; }
+.btn:active:not(:disabled) { opacity: .55; }
 
 @media (hover: hover) {
-  .btn[data-v="text"]:hover:not(:disabled) { color: var(--aka); }
-  .btn[data-v="close"]:hover:not(:disabled) { color: var(--ink); }
-  .btn[data-v="outline"]:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
-  .btn[data-v="outline"][data-danger]:hover:not(:disabled) { background: var(--aka); color: #FFFFFF; }
-  .btn[data-v="solid"]:hover:not(:disabled) { background: #333333; border-color: #333333; }
+  .btn:hover:not(:disabled) { text-decoration-thickness: 2px; }
+  .btn[data-v="solid"]:hover:not(:disabled) { background: #262626; }
 }
 
 .link {
   display: inline-block;
-  padding: 6px 0;
-  color: var(--ink);
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 4px;
+  color: var(--black);
+  font-size: 13px;
+  text-decoration: underline 1px;
+  text-underline-offset: 3px;
   cursor: pointer;
-}
-
-@media (hover: hover) {
-  .link:hover { color: var(--aka); }
 }
 
 .input {
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
-  min-height: 40px;
+  min-height: 48px;
   margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--field-line);
-  border-radius: 2px;
+  padding: 0 12px;
+  border: 1px solid var(--black);
+  border-radius: 0;
   background: var(--paper);
-  color: var(--ink);
+  color: var(--black);
   font: inherit;
+  font-size: 15px;
   letter-spacing: normal;
-  font-feature-settings: normal;
 }
 
-.input::placeholder { color: var(--nezumi); opacity: 1; }
-.input:focus { outline: none; border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-.input[aria-invalid="true"] { border-color: var(--aka); box-shadow: inset 0 0 0 1px var(--aka); }
+.input::placeholder { color: var(--quiet); opacity: 1; }
+.input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--black); }
+.input[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--black); }
 .input:disabled { opacity: .6; }
 
 .btn:focus-visible,
 .link:focus-visible,
 .input:focus-visible {
-  outline: 2px solid var(--aka);
+  outline: 2px solid var(--black);
   outline-offset: 2px;
 }
-
-.input:focus-visible { outline: none; }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 20px;
 }
 
-.actions[data-stack="true"] { margin-top: 4px; gap: 10px; }
+.actions[data-stack="true"] { margin-top: 4px; }
 
 .inline {
   display: flex;
@@ -3126,100 +3107,85 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 }
 
 /* The key field and mask absorb the remaining width; a button is never squeezed or broken inside a word. */
-.inline > .btn { flex: none; white-space: nowrap; }
+.inline > .btn { flex: none; margin: 0; white-space: nowrap; }
 
 /* ---------- the key row ---------- */
 
-.service { padding: 2px 0; }
-.service + .service { border-top: 1px solid var(--hai); }
+.service { padding: 0; }
+.service + .service { border-top: 1px solid var(--rule); }
 
 .service-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: baseline;
+  gap: 12px;
 }
 
-.dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--hai);
-}
-
-.dot[data-s="ok"] { background: var(--ok); }
-.dot[data-s="missing"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--nezumi); }
-.dot[data-s="resting"] { background: var(--rest); }
-.dot[data-s="bad"] { background: var(--aka); }
+/* Status is said in words; no coloured dots. */
+.dot { display: none; }
 
 .service-name {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--ink);
-  font-weight: 600;
+  color: var(--black);
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .status {
   flex: 0 1 auto;
-  color: var(--nezumi);
-  font-size: 12.5px;
+  color: var(--black);
+  font-size: 13px;
   text-align: right;
 }
 
-.controls { margin-top: 8px; }
+.status[data-s="missing"],
+.status[data-s="resting"],
+.status[data-s="checking"] { color: var(--quiet); }
+.status[data-s="bad"] { font-weight: 700; }
+
+.controls { margin-top: 6px; }
 
 .mask {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--nezumi);
-  letter-spacing: .14em;
-  font-feature-settings: normal;
+  color: var(--ink);
+  font-family: var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .08em;
 }
-
-.service .link { font-size: 12.5px; }
 
 /* ---------- inline confirm ---------- */
 
-.confirm {
-  margin-top: 10px;
-  padding: 10px 0 2px 14px;
-  border-left: 1px solid var(--aka);
-}
-
-.confirm-text { margin: 0 0 8px; color: var(--ink); }
+.confirm { margin-top: 8px; }
+.confirm-text { margin: 0 0 6px; color: var(--black); }
 
 /* ---------- phone ---------- */
 
 .root[data-layout="phone"] .btn,
 .root[data-layout="phone"] .input { min-height: 44px; }
 
-.root[data-layout="phone"] .btn { min-width: 44px; }
-
-.root[data-layout="phone"] .btn[data-v="solid"] { min-height: 50px; font-size: 16px; }
+.root[data-layout="phone"] .btn[data-v="solid"] { width: 100%; min-height: 48px; }
 
 .root[data-layout="phone"] .input { font-size: 16px; }
-
-.root[data-layout="phone"] .link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-}
-
-.root[data-layout="phone"] .steps .link { display: flex; }
 
 .root[data-layout="phone"] .actions[data-stack="true"] {
   flex-direction: column;
   align-items: stretch;
 }
 
+.root[data-layout="phone"] .actions[data-stack="true"] .btn:not([data-v="solid"]) {
+  justify-content: center;
+  margin: 8px 0 0;
+}
+
 .error-detail {
-  margin: 0 0 12px;
-  color: var(--nezumi);
-  font-size: 12.5px;
+  margin: 4px 0 8px;
+  color: var(--quiet);
+  font-size: 13px;
   line-height: 1.6;
 }
 
-.error-detail summary { cursor: pointer; color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.error-detail summary { cursor: pointer; color: var(--black); text-decoration: underline 1px; text-underline-offset: 3px; }
 
 .error-detail p {
   margin: 4px 0 0;
@@ -3227,7 +3193,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   user-select: text;
 }
 
-.error-text { font-size: 11.5px; }
+.error-text { font-family: var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif; font-size: 12px; }
 `;
 
   // src/ui/time.ts
@@ -3248,7 +3214,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     step1: "Google AI Studio を開き、Googleアカウントでログインして無料のAPIキーを作ります",
     step1Link: "Google AI Studio を開く",
     step2: "キーをコピーして、下に貼り付けます",
-    placeholder: "APIキーを貼り付け",
+    placeholder: "ここに貼り付け",
+    pasteKey: "キーを貼り付けてください",
     keyNote: "キーはこのブラウザのユーザースクリプト保存領域にだけ置かれ、Google 以外には送られません",
     primary: "保存してこの曲を訳す",
     secondary: "保存だけする",
@@ -3260,7 +3227,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     close: "閉じる",
     services: "翻訳に使うAI",
     save: "保存",
-    makeKey: "キーを作る",
+    makeKey: "キーを作る（Google AI Studio）",
     removeKey: "キーを消す",
     reenterKey: "キーを入れ直す",
     statusMissing: "未設定",
@@ -3269,10 +3236,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     song: "この曲",
     lastError: "直近のエラー",
     retranslate: "この曲を訳し直す",
-    retranslateConfirm: "この曲を訳し直しますか？無料枠を1回使います。終わるまで今の訳はそのまま表示されます",
+    retranslateConfirm: "今の訳を残したまま訳し直します。終わると入れ替わります",
     retranslateOk: "訳し直す",
-    deleteSong: "この曲の保存データを消す",
-    deleteSongConfirm: "この曲の保存した訳を消しますか？",
+    deleteSong: "この曲の訳を消す",
+    deleteSongConfirm: "この曲の保存した訳を消します。元に戻せません",
+    deleteAllOk: "すべて消す",
     data: "保存データ",
     dataLead: "書き出したファイルは、別の端末でも読み込めます",
     exportData: "書き出す",
@@ -3380,7 +3348,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       case "resting": {
         if (row.until <= 0) return COPY.statusOk;
         const when2 = formatWhen(row.until);
-        return when2.startsWith("明日") ? `${when2}まで休み` : `今日は${when2}まで休み`;
+        return `今日の枠を使い切りました（${when2}から使えます）`;
       }
       default:
         return "";
@@ -3576,10 +3544,6 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     const handle = { close: finish };
     const button = (text2, variant, onClick) => h("button", { class: "btn", type: "button", "data-v": variant, onClick }, text2);
-    const danger = (b) => {
-      b.dataset.danger = "";
-      return b;
-    };
     const externalLink = (text2, href) => h("a", { class: "link", href, target: "_blank", rel: "noopener noreferrer" }, text2);
     function keyInput(label, onSubmit, onEdit) {
       const input = h("input", {
@@ -3623,7 +3587,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         restore();
         focusEl(trigger);
       });
-      const ok = button(spec.ok, "outline", () => {
+      const ok = button(spec.ok, "solid", () => {
         ok.disabled = true;
         cancel.disabled = true;
         spec.onOk(() => {
@@ -3631,7 +3595,6 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           cancel.disabled = false;
         });
       });
-      if (trigger.dataset.danger !== void 0) ok.dataset.danger = "";
       zone.replaceChildren(h(
         "div",
         { class: "confirm" },
@@ -3673,6 +3636,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         if (busy || closed) return;
         const key = input.value.trim();
         if (!key) {
+          say(COPY.pasteKey, "error");
           focusEl(input);
           return;
         }
@@ -3728,6 +3692,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const rows = [];
       function paintRow(row) {
         row.dot.dataset.s = row.kind;
+        row.statusEl.dataset.s = row.kind;
         row.statusEl.textContent = statusText(row);
         row.msgEl.textContent = row.message;
         if (row.message) row.msgEl.dataset.kind = "error";
@@ -3884,8 +3849,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       if (options.song) {
         const song = options.song;
         const parts = [];
-        if (song.model) parts.push(song.model);
-        if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(formatDate(song.translatedAt));
+        if (song.translatedAt && Number.isFinite(song.translatedAt)) parts.push(`${formatDate(song.translatedAt)}に`);
+        if (song.model) parts.push(`${song.model}で`);
         const zone2 = h("div", { class: "zone" });
         const retranslate = button(COPY.retranslate, "outline", () => {
           askInline(zone2, retranslate, {
@@ -3898,7 +3863,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             }
           });
         });
-        const deleteSong2 = danger(button(COPY.deleteSong, "text", () => {
+        const deleteSong2 = button(COPY.deleteSong, "text", () => {
           askInline(zone2, deleteSong2, {
             message: COPY.deleteSongConfirm,
             ok: COPY.ok,
@@ -3918,19 +3883,19 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
               })();
             }
           });
-        }));
+        });
         zone2.append(h("div", { class: "actions" }, retranslate, deleteSong2));
         const edition = song.edition !== false;
         body.append(h(
           "section",
           { class: "section" },
           h("h3", { class: "section-title" }, COPY.song),
-          edition && parts.length ? h("p", { class: "line" }, `この曲の訳：${parts.length > 1 ? `${parts[0]}（${parts[1]}）` : parts[0]}`) : null,
+          edition && parts.length ? h("p", { class: "line" }, `${parts.join("")}訳しました`) : null,
           song.lastError ? h(
             "details",
             { class: "error-detail" },
             h("summary", {}, COPY.lastError),
-            h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join("／")),
+            h("p", { class: "error-head" }, [song.lastError.model || "不明", song.lastError.status || "—", song.lastError.kind].join(" · ")),
             song.lastError.text ? h("p", { class: "error-text" }, song.lastError.text) : null
           ) : null,
           edition ? zone2 : null
@@ -4010,12 +3975,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         else sayData(written === 0 ? COPY.importNothing : `${written}曲を読み込みました`);
         focusEl(importButton);
       }
-      const deleteAll = danger(button(COPY.deleteAll, "text", () => {
+      const deleteAll = button(COPY.deleteAll, "text", () => {
         if (!summary) return;
         const count = summary.count;
         askInline(zone, deleteAll, {
-          message: `保存したすべての曲（${count}曲）を消しますか？途中まで訳した曲も消えます`,
-          ok: COPY.ok,
+          message: `保存した${count}曲をすべて消します。元に戻せません`,
+          ok: COPY.deleteAllOk,
           focusCancel: true,
           onOk: (done) => {
             deleting = true;
@@ -4037,11 +4002,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             })();
           }
         });
-      }));
+      });
       const dataActions = h("div", { class: "actions" }, exportButton, importButton, deleteAll);
       zone.append(dataActions);
       function paintSummary() {
-        summaryEl.textContent = summary ? `保存した曲：${summary.count}曲（${formatSize(summary.bytes)}）` : "保存した曲：…";
+        summaryEl.textContent = summary ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : "保存した曲：…";
         const none = !summary || summary.count === 0;
         exportButton.disabled = none || dataBusy();
         importButton.disabled = dataBusy();
@@ -4200,44 +4165,62 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const none = { slots: false, gaps: false, breathing: false, seam: null };
     const writing = { slots: true, gaps: false, breathing: true, seam: null };
     const hide = hideAction(i);
+    const reason = (text2) => ({ text: text2, tone: "reason" });
+    const plain = { captions: [], progress: null };
     if (i.running === "here-retranslate") {
-      return { state: "S8", status: "訳し直しています。終わるまで今の訳を表示します", actions: [STOP], preface: i.hasPreface, lines: none };
+      return { state: "S8", tone: "speaking", status: "訳し直しています", captions: [{ text: "終わるまでは、今の訳をそのまま表示します" }], progress: "indeterminate", actions: [STOP], preface: i.hasPreface, lines: none };
     }
     if (i.running === "here") {
       const arriving = i.hasPreface || i.done > 0;
       const slow = !arriving && (i.waitedMs ?? 0) >= 15e3;
-      const wait = "返事を待っています。混んでいると1分ほどかかることもあります";
-      const buffered = "この環境では訳がまとめて届きます";
-      const note = slow && !i.streams ? `${wait}。${buffered}` : slow ? wait : !i.streams ? buffered : void 0;
+      const captions = [];
+      if (slow) captions.push({ text: "返事を待っています。混んでいると1分ほどかかることもあります" });
+      if (!i.streams) captions.push({ text: "この環境では訳がまとめて届きます" });
       return {
         state: arriving ? "S4" : "S3",
-        status: arriving ? "" : "曲全体を読んでいます",
+        tone: "speaking",
+        status: arriving ? "訳しています" : "曲全体を読んでいます",
+        captions,
+        ...arriving ? { count: { done: i.done, total: i.total } } : {},
+        progress: arriving ? { value: i.done, max: i.total } : "indeterminate",
         actions: arriving ? [STOP, hide, SETTINGS] : [STOP],
-        ...note ? { note } : {},
         preface: i.hasPreface,
         lines: writing
       };
     }
     if (i.mirrored) {
-      return { state: "S4m", status: "別のタブで訳しています", actions: [{ id: "stopMirror", label: "止める" }, hide], preface: i.hasPreface, lines: writing };
+      return { state: "S4m", tone: "speaking", status: "別のタブで訳しています", ...plain, actions: [{ id: "stopMirror", label: "止める" }, hide], preface: i.hasPreface, lines: writing };
     }
     if (i.notice && i.done) {
-      return { state: "S8f", status: i.notice.status, ...i.notice.detail ? { note: i.notice.detail } : {}, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+      const captions = [{ text: i.notice.status }];
+      if (i.notice.detail) captions.push(reason(i.notice.detail));
+      return { state: "S8f", tone: "settled", status: "AIによる日本語訳", captions, progress: null, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
     }
     const stop = liveStop(i.stop, i);
     if (!i.done) {
-      if (i.japanese) return { state: "SJ", status: "この曲は日本語の歌詞です", tone: "muted", actions: [], preface: false, lines: none };
+      if (i.japanese) return { state: "SJ", tone: "settled", status: "この曲は日本語の歌詞です", ...plain, actions: [], preface: false, lines: none };
       if (!i.hasKey) {
-        return { state: "S1", status: "日本語訳には無料のAPIキーが必要です", actions: [{ id: "firstRun", label: "キーを設定", primary: true }], preface: false, lines: none };
+        return { state: "S1", tone: "speaking", status: "", captions: [{ text: "はじめに無料のAPIキーを設定します" }], progress: null, actions: [{ id: "firstRun", label: "日本語で読む", primary: true }], preface: false, lines: none };
       }
       if (i.otherSong) {
-        return { state: "S2b", status: `別の曲（${i.otherSong}）を訳しています。終わるとこの曲も訳せます`, actions: [{ id: "stopOther", label: "あちらを止める" }, SETTINGS], preface: false, lines: none };
+        return {
+          state: "S2b",
+          tone: "speaking",
+          status: "別の曲を訳しています",
+          captions: [{ text: `「${i.otherSong}」が終わると、この曲も訳せます` }],
+          progress: null,
+          actions: [{ id: "stopOther", label: "あちらを止める" }],
+          preface: false,
+          lines: none
+        };
       }
       if (quotaUntil != null) {
         return {
           state: "S2q",
-          status: blocker ?? "",
-          tone: "muted",
+          tone: "speaking",
+          status: "今日の無料枠を使い切りました",
+          captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から、また訳せます` }] : [],
+          progress: null,
           actions: [SETTINGS],
           preface: false,
           lines: none
@@ -4245,19 +4228,32 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
       if (stop && stop.reason !== "closed" && stop.reason !== "stopped") {
         const seam2 = seamFor(stop, i, null);
-        const button = { ...seam2.button, label: seam2.button.label === "続きを訳す" ? "日本語で読む" : seam2.button.label, primary: true };
-        if (button.id === "resume") button.id = "start";
-        return { state: "S2f", status: startFailText(stop, i) || seam2.text, actions: stop.reason === "auth" ? [button] : [button, SETTINGS], preface: false, lines: none };
+        const auth = stop.reason === "auth";
+        const button = auth ? { id: "settings", label: "設定を開く", primary: true } : { ...seam2.button, id: seam2.button.id === "resume" ? "start" : seam2.button.id, label: "もう一度訳す", primary: true };
+        return {
+          state: "S2f",
+          tone: "speaking",
+          status: "",
+          captions: [{ text: startFailText(stop, i) || seam2.text }],
+          progress: null,
+          actions: auth ? [button] : [button, SETTINGS],
+          preface: false,
+          lines: none
+        };
       }
-      return { state: "S2", status: "", actions: [{ id: "start", label: "日本語で読む", primary: true }, SETTINGS], preface: false, lines: none };
+      return { state: "S2", tone: "speaking", status: "", ...plain, actions: [{ id: "start", label: "日本語で読む", primary: true }, SETTINGS], preface: false, lines: none };
     }
-    if (!missing) return { state: "S5", status: "", actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+    if (!missing) {
+      return { state: "S5", tone: "settled", status: i.hidden ? "訳を隠しています" : "AIによる日本語訳", ...plain, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+    }
     const resume = (label) => ({ id: "resume", label, primary: true, disabled: Boolean(blocker) });
     if (stop?.reason === "gaps") {
       return {
         state: "S5g",
-        status: `${missing}行が訳せていません`,
-        ...blocker ? { note: blocker, noteTone: "reason" } : {},
+        tone: "speaking",
+        status: "",
+        captions: [{ text: `${missing}行が訳せていません。下の「――」の行です` }, ...blocker ? [reason(blocker)] : []],
+        progress: null,
         actions: [resume("抜けた行を訳す"), hide, SETTINGS],
         preface: i.hasPreface,
         lines: { slots: false, gaps: true, breathing: false, seam: null }
@@ -4266,8 +4262,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (!stop) {
       return {
         state: "S7",
-        status: `歌詞が更新され、まだ訳していない行が${missing}行あります`,
-        ...blocker ? { note: blocker, noteTone: "reason" } : {},
+        tone: "speaking",
+        status: "",
+        captions: [{ text: `歌詞が更新されました。まだ訳していない行が${missing}行あります` }, ...blocker ? [reason(blocker)] : []],
+        progress: null,
         actions: [resume("新しい行を訳す"), hide, SETTINGS],
         preface: i.hasPreface,
         lines: { slots: true, gaps: false, breathing: false, seam: null }
@@ -4277,8 +4275,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === "auth");
     return {
       state: "S6",
-      status: `途中まで訳してあります（${i.done}/${i.total}行）`,
-      ...explain ? { note: seam.text, noteTone: "reason" } : {},
+      tone: "speaking",
+      status: "",
+      captions: [{ text: `${i.total}行のうち${i.done}行まで訳してあります` }, ...explain ? [reason(seam.text)] : []],
+      progress: { value: i.done, max: i.total },
       actions: [{ ...seam.button, primary: true }, hide, ...seam.button.id === "settings" ? [] : [SETTINGS]],
       preface: i.hasPreface,
       lines: { slots: true, gaps: false, breathing: false, seam }
@@ -4321,6 +4321,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       __publicField(this, "notice", null);
       /** The edition on screen could not be stored: storage must not replace it until it is. */
       __publicField(this, "unsaved", false);
+      /** A request ran here for this song since it was opened: reaching S5 then settles the head once. */
+      __publicField(this, "wrote", false);
+      /** The reader just tapped a button that creates the empty slots: the next render that
+       *  shows them unfolds the ones near the viewport (LinesInput.opening). */
+      __publicField(this, "opening", false);
       __publicField(this, "head", new HeadRow());
       __publicField(this, "lines", new LineRenderer());
       __publicField(this, "notes", new NoteView());
@@ -4370,6 +4375,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
             this.annotations = null;
             this.notice = null;
             this.unsaved = false;
+            this.wrote = false;
+            this.opening = false;
             this.record = this.acceptStored(identity, page, await loadSong(identity));
             this.fromCache = hasLines(this.record);
             this.prefaceCollapsed = this.fromCache && !this.record?.stop;
@@ -4381,6 +4388,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           this.foreignLock = await this.otherLock();
           await this.refreshKeys();
           this.detectTheme();
+          this.followLyricFont(page);
           this.renderNow();
           if (fresh && page.songId && (hasKey(currentSettings()) || this.fromCache)) this.prefetchAnnotations(page);
         } while (this.refreshAgain);
@@ -4492,10 +4500,19 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const [r = 255, g = 255, b = 255] = rgb ?? [];
       document.documentElement.classList.toggle("ll-dark", (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.4);
     }
+    /** 訳を隠す is per song: it follows the record of the song on screen. */
     applyDisplay() {
-      const hidden = currentSettings().hideTranslation;
+      const hidden = Boolean(this.shown()?.hidden);
       document.documentElement.classList.toggle("ll-hidden", hidden);
       if (hidden) this.notes.close();
+    }
+    /** Latin text in a translated line is set in the lyrics' own face (--ll-latin). */
+    followLyricFont(page) {
+      try {
+        const family = getComputedStyle(page.containers[0]).fontFamily;
+        if (family) document.documentElement.style.setProperty("--ll-latin", family);
+      } catch {
+      }
     }
     /* ---------- rendering ---------- */
     scheduleRender() {
@@ -4521,6 +4538,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.preferAnchor = null;
       const focusedHere = this.focusInsideOurUi();
       this.anchored(() => {
+        this.applyDisplay();
         this.syncNote(page);
         const { head, lines } = this.view(page);
         this.head.render(page, head);
@@ -4618,7 +4636,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         online: navigator.onLine,
         streams: transportStreams(),
         waitedMs: here ? Date.now() - here.startedAt : void 0,
-        hidden: settings.hideTranslation,
+        hidden: Boolean(shown?.hidden),
         hasKey: hasKey(settings),
         keyBad: this.keyBad,
         total: page.source.lines.length,
@@ -4649,8 +4667,23 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         }
       } : null;
       const seam = d.lines.seam ? { text: d.lines.seam.text, button: { ...d.lines.seam.button, onClick: () => this.act(d.lines.seam.button.id, null, input) } } : null;
+      if (input.running !== "none") this.wrote = true;
+      const settle = d.state === "S5" && this.wrote;
+      if (settle) this.wrote = false;
+      const opening = this.opening && input.running === "here";
+      if (opening) this.opening = false;
       return {
-        head: { status: d.status, ...d.tone ? { tone: d.tone } : {}, ...d.note ? { note: d.note } : {}, ...d.noteTone ? { noteTone: d.noteTone } : {}, actions: d.actions.map(bind), preface, state: d.state },
+        head: {
+          state: d.state,
+          tone: d.tone,
+          status: d.status,
+          ...d.count ? { count: `（${d.count.done}/${d.count.total}行）` } : {},
+          progress: d.progress,
+          ...settle ? { settle: true } : {},
+          captions: d.captions,
+          actions: d.actions.map(bind),
+          preface
+        },
         lines: {
           page,
           record: shown,
@@ -4659,6 +4692,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           breathing: d.lines.breathing,
           seam,
           animate: !this.fromCache,
+          ...opening ? { opening: true } : {},
           openIndex: this.notes.openIndex,
           onMark: (i) => void this.toggleNote(i),
           onMarkHover: (i, on) => this.peek(i, on)
@@ -4669,9 +4703,11 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     act(id, el, input) {
       switch (id) {
         case "start":
+          this.opening = true;
           void this.translate("start").catch((e) => console.error("[Lyric Lens]", e));
           break;
         case "resume":
+          this.opening = true;
           void this.translate("resume").catch((e) => console.error("[Lyric Lens]", e));
           break;
         case "stop":
@@ -4752,7 +4788,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       let wakeSlow;
       const id = this.identity;
       const cannotRetranslate = (detail) => {
-        if (kind === "retranslate" && this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのままです", detail };
+        if (kind === "retranslate" && this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのまま残っています", detail };
       };
       try {
         const settings = await loadSettings();
@@ -4794,7 +4830,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         this.fromCache = false;
         this.notice = null;
         this.prefaceCollapsed = false;
-        if (settings.hideTranslation) await updateSettings((s) => ({ ...s, hideTranslation: false }));
+        delete record.hidden;
+        if (this.record?.hidden) {
+          delete this.record.hidden;
+          await setSongHidden(id, false).catch(() => {
+          });
+        }
         const current = run;
         current.lock.start(() => current.controller.abort());
         let leaving = false;
@@ -4856,7 +4897,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
               }
             } else if (this.identity === id) {
               const stop = outcome.stop ?? { reason: "unusable", at: Date.now() };
-              this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: failureText(stop, Date.now()) };
+              this.notice = { status: "訳し直せませんでした。今の訳はそのまま残っています", detail: failureText(stop, Date.now()) };
             }
           } else {
             if (leaving && record.stop?.reason === "stopped") record.stop = { reason: "closed", at: Date.now() };
@@ -4865,7 +4906,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         } catch (error) {
           console.error("[Lyric Lens]", error);
           if (retranslate) {
-            if (this.identity === id) this.notice = { status: "訳し直しは途中で止まりました。今の訳はそのままです", detail: failureText({ reason: "unusable", at: Date.now() }, Date.now()) };
+            if (this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのまま残っています", detail: failureText({ reason: "unusable", at: Date.now() }, Date.now()) };
           } else {
             record.stop = { reason: "unusable", at: Date.now() };
             await this.persist(current, record);
@@ -4920,9 +4961,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       if (this.run && this.run.id !== this.identity) this.run.controller.abort();
       else void requestAbort();
     }
+    /** 訳を隠す belongs to the song: it is saved on the record (without touching its date). */
     async toggleHidden() {
-      await updateSettings((s) => ({ ...s, hideTranslation: !s.hideTranslation }));
+      const record = this.shown();
+      if (!record) return;
+      if (record.hidden) delete record.hidden;
+      else record.hidden = true;
       this.renderNow();
+      try {
+        await setSongHidden(record.id, Boolean(record.hidden));
+      } catch (e) {
+        console.error("[Lyric Lens]", e);
+      }
     }
     /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
      *  offer 続きを訳す / 日本語で読む again. */
@@ -4965,35 +5015,18 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   };
 
   // src/ui/styles.css
-  var styles_default = `/* Lyric Lens (docs/DESIGN.md §6): the domestic-edition 対訳 booklet, printed into the Genius page.
-   The translation is set in 明朝 under Genius' sans, as a second voice; the translator writes in
-   red ink (金赤) and only the translator does; the one bold thing is the 対訳 edition mark.
-   No cards, no fills behind text, no pills, no shadows on the reading surface. */
+  var styles_default = `/* Lyric Lens on the reading surface (docs/DESIGN.md §6). 聴きながら、わかる: the Japanese sits
+   under each line as the text it is, the controls speak Genius' own grammar in one row, and
+   yellow only ever marks the words the reader asked about. */
 
 .ll-head, .ll-line, .ll-note {
-  --ll-sumi: #333333;       /* the Japanese line, preface */
-  --ll-kuro: #000000;       /* the primary button, matching Genius' black */
-  --ll-nezumi: #767676;     /* status, labels, ad-libs, repeats */
-  --ll-aka: #E60012;        /* 金赤: the translator's red */
-  --ll-hai: #C8C8C8;        /* hairlines, idle placeholders */
-  --ll-paper: #FFFFFF;
-  --ll-mincho: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Noto Serif JP", "Yu Mincho", YuMincho, "Noto Serif CJK JP", "Source Han Serif JP", serif;
-  --ll-gothic: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", "Noto Sans CJK JP", Meiryo, sans-serif;
-}
-html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
-  --ll-sumi: #E6E6E6;
-  --ll-kuro: #FFFFFF;
-  --ll-nezumi: #A0A0A0;
-  --ll-aka: #FF4B55;
-  --ll-hai: #4A4A4A;
-  --ll-paper: #121212;
-}
-html { --ll-hl-bg: rgba(230, 0, 18, .07); }
-html.ll-dark { --ll-hl-bg: rgba(255, 75, 85, .16); }
-
-/* Japanese typesetting and link resets on every node we add. */
-.ll-head, .ll-line, .ll-note {
-  font-family: var(--ll-gothic);
+  --ll-black: #000;
+  --ll-ink: #262626;          /* the translation and every sentence we write */
+  --ll-quiet: #6B6B6B;        /* ad-libs, repeats, captions, counts */
+  --ll-rule: #E5E5E5;         /* the head's track */
+  --ll-yellow: #FFFF64;       /* the words you asked about */
+  --ll-font: var(--ll-latin, Programme, "Helvetica Neue", Arial), "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  font-family: var(--ll-font);
   font-style: normal;
   font-weight: 400;
   text-align: left;
@@ -5002,8 +5035,6 @@ html.ll-dark { --ll-hl-bg: rgba(255, 75, 85, .16); }
   word-break: normal;
   word-break: auto-phrase;
   overflow-wrap: anywhere;
-  font-feature-settings: "palt" 1;
-  letter-spacing: .02em;
   text-spacing-trim: trim-start;
   hanging-punctuation: none;
   background: transparent !important;
@@ -5012,311 +5043,218 @@ html.ll-dark { --ll-hl-bg: rgba(255, 75, 85, .16); }
   overflow-anchor: none;
   -webkit-tap-highlight-color: transparent;
 }
-.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
-/* Marked data-exclude-from-selection for Genius' own selection tools, but readers can
-   still copy the Japanese. */
-.ll-line, .ll-note { -webkit-user-select: text; user-select: text; }
-
-/* ---------- the control block: edition mark, status, actions, preface ---------- */
-.ll-head {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  column-gap: 16px;
-  align-items: start;
-  margin: 10px 0 34px;
-  padding: 0;
-  color: var(--ll-sumi) !important;
-  font-size: 14px;
-  line-height: 1.6;
+html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
+  --ll-black: #F2F2F2;
+  --ll-ink: #E6E6E6;
+  --ll-quiet: #A3A3A3;
+  --ll-rule: #3A3A3A;
 }
-.ll-head > * { grid-column: 2; min-width: 0; }
-/* The edition mark: the 帯 spine of a domestic edition, 「対訳」 set vertically in white on 金赤.
-   The one bold element; everything around it is plain type. */
-.ll-head::before {
-  content: "対訳";
-  grid-column: 1;
-  grid-row: 1 / span 3;
-  align-self: start;
-  box-sizing: border-box;
-  width: 22px;
-  padding: 7px 0 5px;
-  border-radius: 1px;
-  background: var(--ll-aka);
-  color: #FFFFFF;
-  /* vertical text: the line height is the column's width, which centres the glyphs in it */
-  font: 600 12px/22px var(--ll-mincho);
-  letter-spacing: .3em;
+.ll-head *, .ll-line *, .ll-note * { text-decoration: none !important; background-image: none !important; }
+/* Marked data-exclude-from-selection for Genius' own selection tools; readers can still copy. */
+.ll-line, .ll-note, .ll-preface { -webkit-user-select: text; user-select: text; }
+
+/* ---------- the head: one row in Genius' info-row grammar ---------- */
+.ll-head { display: block; margin: 16px 0 28px; color: var(--ll-ink) !important; font-size: 15px; line-height: 1.6; }
+.ll-head-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border-bottom: 2px solid var(--ll-rule);
+  color: var(--ll-black) !important;
+}
+.ll-head-row[data-tone="settled"] { border-bottom-color: transparent; }
+.ll-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  border: 1.25px solid var(--ll-black);
+  color: var(--ll-black);
+  font: 400 10px/13.5px var(--ll-font);
   text-align: center;
-  writing-mode: vertical-rl;
-  text-orientation: upright;
+  box-sizing: border-box;
   -webkit-user-select: none;
   user-select: none;
 }
-/* As tall as the edition mark, so the first row of controls sits centred against it. */
-.ll-head-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; min-height: 44px; }
-/* The actions follow the sentence they answer instead of drifting to the far edge. */
-.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-nezumi); font-size: 12px; letter-spacing: .04em; }
-.ll-status[data-tone="muted"] { color: var(--ll-nezumi); }
+.ll-icon::before { content: "あ"; }
+.ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-black) !important; font-size: 15px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ll-head-row[data-tone="settled"] .ll-status { font-size: 13px; letter-spacing: .02em; }
 /* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
 .ll-status:focus { outline: none; }
-/* An empty live region stays in the accessibility tree (never \`hidden\`) so that its next text is
-   announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap. */
-.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; margin: 0; padding: 0; overflow: hidden; }
-.ll-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; }
+/* An empty live region stays in the accessibility tree (never \`hidden\`) so its next text is
+   announced; it takes no room. */
+.ll-status[data-empty] { display: block; position: absolute; width: 0; height: 0; overflow: hidden; }
+.ll-count { flex: none; margin-left: 2px; color: var(--ll-quiet); font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ll-links { display: flex; align-items: center; margin-left: auto; padding-left: 8px; }
 
-/* Secondary actions read like Genius' own meta links: small, underlined, black. */
 .ll-btn {
   all: unset;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 28px;
-  color: var(--ll-kuro) !important;
-  font: 400 12px/1.3 var(--ll-gothic);
-  letter-spacing: .04em;
-  cursor: pointer;
+  min-height: 44px;
+  padding: 0 0 0 18px;
+  color: var(--ll-black) !important;
+  font: 400 13px/20px var(--ll-font);
+  letter-spacing: .02em;
   white-space: nowrap;
+  cursor: pointer;
+  text-decoration: underline 1px !important;
+  text-underline-offset: 3px;
 }
-.ll-head .ll-btn:not([data-primary]) {
-  text-decoration: underline !important;
-  text-decoration-thickness: 1px !important;
-  text-underline-offset: 4px;
-}
-/* The one next step (日本語で読む, 続きを訳す, キーを設定): a solid black block, Genius' own primary. */
+/* The one next step (日本語で読む, 続きを訳す…): bold, a heavier underline, first in the row. */
 .ll-btn[data-primary] {
-  min-height: 34px;
-  padding: 0 16px;
-  border-radius: 2px;
-  background: var(--ll-kuro) !important;
-  color: var(--ll-paper) !important;
-  font: 600 14px/1.3 var(--ll-gothic);
-  letter-spacing: .06em;
+  flex: 0 0 auto;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration-thickness: 2px !important;
+  text-underline-offset: 6px;
 }
-/* Hover only where a pointer can hover: on touch it would stick to the last tapped button. */
 @media (hover: hover) {
-  .ll-btn:hover { color: var(--ll-aka) !important; }
-  .ll-btn[data-primary]:not(:disabled):hover { color: var(--ll-paper) !important; background: #333333 !important; }
-  .ll-seam .ll-btn:not(:disabled):hover { color: var(--ll-paper) !important; background: #333333 !important; }
+  .ll-btn:hover { text-decoration-thickness: 2px !important; }
+  .ll-btn[data-primary]:hover { text-decoration-thickness: 3px !important; }
 }
-.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-nezumi) !important; cursor: default; }
-.ll-btn[data-primary]:disabled, .ll-seam .ll-btn:disabled { background: #E6E6E6 !important; color: var(--ll-nezumi) !important; }
+.ll-btn:disabled, .ll-btn[aria-disabled="true"] { color: var(--ll-quiet) !important; cursor: default; text-decoration: none !important; }
 /* Pressed feedback on touch (the tap highlight is off), instant: no transition. */
-.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-toggle:active { opacity: .55; }
-.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-toggle:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible {
-  outline: 2px solid var(--ll-aka);
-  outline-offset: 3px;
-  border-radius: 2px;
+.ll-btn:active:not(:disabled), .ll-gn-toggle:active, .ll-gn-more:active, .ll-preface-more:active { opacity: .55; }
+.ll-btn:focus-visible, .ll-mark:focus-visible, .ll-preface-more:focus-visible, .ll-gn-toggle:focus-visible, .ll-gn-more:focus-visible, .ll-note-close:focus-visible {
+  outline: 2px solid var(--ll-black);
+  outline-offset: 2px;
 }
 /* Keep keyboard-focused controls clear of Genius' sticky nav. Not on .ll-mark: app.ts focuses it
    without preventScroll and a margin would make the page jump after anchoring. */
-.ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
-.ll-head-note { display: block; margin: 0 0 4px; color: var(--ll-nezumi); font-size: 12px; letter-spacing: .04em; }
-.ll-head-note[data-tone="reason"] { color: var(--ll-sumi); }
+.ll-btn, .ll-preface-more, .ll-gn-toggle, .ll-gn-more, .ll-note-close { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
 
-/* The preface: what the translator understood before the first line, set like the opening of
-   a liner note. */
-.ll-preface {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 14px 0 0;
-  color: var(--ll-sumi);
-  -webkit-user-select: text;
-  user-select: text;
-}
-.ll-preface-rows { display: block; flex: 0 1 34em; min-width: 0; }
-.ll-preface-row { display: flex; gap: 16px; align-items: baseline; }
-.ll-preface-row + .ll-preface-row { margin-top: 6px; }
-.ll-preface-row[hidden] { display: none; }
-.ll-preface-label { flex: none; width: 4.6em; color: var(--ll-nezumi); font: 400 11px/1.6 var(--ll-gothic); letter-spacing: .1em; }
-.ll-preface-who { font: 600 16px/1.6 var(--ll-mincho); color: var(--ll-kuro); letter-spacing: .03em; }
-.ll-preface-what { font: 500 14px/1.9 var(--ll-mincho); }
-/* A thin chevron: points right when closed, down when open. */
-.ll-preface-toggle {
+/* progress: the row's track fills in black; while waiting, a short segment travels */
+.ll-progress { position: absolute; left: 0; bottom: -2px; height: 2px; width: calc(var(--p, 0) * 100%); background: var(--ll-black); transition: width .24s cubic-bezier(.2, 0, 0, 1); }
+.ll-progress[data-indeterminate] { width: 56px; animation: ll-travel 1.4s cubic-bezier(.4, 0, .6, 1) infinite; }
+@keyframes ll-travel { from { left: 0; } to { left: calc(100% - 56px); } }
+/* completion, once per translation: the track fills, then the row settles into a plain label */
+.ll-head-row[data-settle] .ll-status { animation: ll-settle .36s cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes ll-settle { from { opacity: 0; } to { opacity: 1; } }
+
+.ll-caption { display: block; margin: 8px 0 0; color: var(--ll-quiet) !important; font-size: 13px; line-height: 21px; font-variant-numeric: tabular-nums; }
+.ll-caption + .ll-caption { margin-top: 2px; }
+.ll-caption[data-tone="reason"] { color: var(--ll-ink) !important; }
+
+/* preface: no labels; who-to-whom as one sentence, then the about paragraph indented 1 字 */
+.ll-preface { display: block; margin: 16px 0 0; max-width: 36em; color: var(--ll-ink); }
+.ll-preface-who { margin: 0; color: var(--ll-black); font-size: 16px; line-height: 26px; font-weight: 700; letter-spacing: .02em; }
+.ll-preface-what { margin: 6px 0 0; color: var(--ll-ink); font-size: 15px; line-height: 26px; text-indent: 1em; letter-spacing: .02em; }
+.ll-preface-what[hidden] { display: none; }
+.ll-preface-more {
   all: unset;
-  box-sizing: border-box;
-  position: relative;
-  flex: none;
-  width: 18px;
-  height: 26px;
-  color: var(--ll-nezumi) !important;
-  font-size: 0;
+  margin-left: .6em;
+  color: var(--ll-black);
+  font: 400 13px/26px var(--ll-font);
+  white-space: nowrap;
   cursor: pointer;
+  text-decoration: underline 1px !important;
+  text-underline-offset: 3px;
 }
-.ll-preface-toggle::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 9px;
-  width: 6px;
-  height: 6px;
-  border-right: 1.25px solid currentColor;
-  border-bottom: 1.25px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform .2s ease-out;
-}
-.ll-preface-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
-.ll-preface-toggle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
 
 /* ---------- the lines ---------- */
 .ll-line {
   display: block;
   position: relative;
   margin: 0;
-  padding: 1px 0 16px;
-  min-height: 1.8em;
-  color: var(--ll-sumi) !important;
-  font-family: var(--ll-mincho);
-  font-size: .889em;
-  font-weight: 500;
-  line-height: 1.8;
-  letter-spacing: .03em;
+  padding: 2px 0 12px;
+  min-height: 26px;
+  color: var(--ll-ink) !important;
+  font-size: 16px;
+  line-height: 26px;
+  letter-spacing: .02em;
 }
 html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
-.ll-line[data-repeat] { color: var(--ll-nezumi) !important; }
 .ll-ja { color: inherit !important; }
-.ll-repeat { color: var(--ll-nezumi); margin-left: .4em; font: 400 .8em var(--ll-gothic); }
+.ll-line[data-repeat] { color: var(--ll-quiet) !important; }
+.ll-adlib { color: var(--ll-quiet) !important; }
+/* not yet written: reserved, blank (no dots, no bars); the line being written holds the pen */
+.ll-line[data-state="empty"] .ll-ja, .ll-line[data-state="next"] .ll-ja { display: block; height: 26px; }
+.ll-pen { display: block; width: 1.5px; height: 17px; margin-top: 5px; background: var(--ll-black); animation: ll-breathe 1.4s ease-in-out infinite; }
+@keyframes ll-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+/* the parting: on the tap, the space for the Japanese opens under the lines near the viewport */
+.ll-line[data-enter] { overflow: hidden; animation: ll-open .26s cubic-bezier(.2, 0, 0, 1) backwards; }
+@keyframes ll-open { from { max-height: 0; padding-top: 0; padding-bottom: 0; } to { max-height: 40px; } }
+.ll-line[data-state="gap"] .ll-ja { color: var(--ll-quiet) !important; letter-spacing: 0; }
 
-/* Not yet written: a 明朝 「――」 holds the line's place. The one being written is in red ink. */
-.ll-line[data-state="empty"] .ll-ja::before,
-.ll-line[data-state="next"] .ll-ja::before,
-.ll-line[data-state="seam"]::before {
-  content: "――";
-  display: block;
-  color: var(--ll-hai);
-  letter-spacing: 0;
-}
-.ll-line[data-state="next"] .ll-ja::before { color: var(--ll-aka); animation: ll-breathe 1.8s ease-in-out infinite; }
-.ll-line[data-state="gap"] .ll-ja { color: var(--ll-hai) !important; }
-.ll-line[data-ink] .ll-ja { animation: ll-ink .24s ease-out; }
-@keyframes ll-breathe { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
-@keyframes ll-ink { from { opacity: 0; } to { opacity: 1; } }
-
-/* ※: the translator's mark. Open, it turns into a small red seal. */
 .ll-mark {
   all: unset;
-  box-sizing: content-box;
+  box-sizing: border-box;
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   margin-left: .3em;
-  padding: 0 .12em;
-  border-radius: 1px;
-  color: var(--ll-aka) !important;
-  font: 600 1em/1.15 var(--ll-mincho);
-  vertical-align: baseline;
+  vertical-align: -3px;
+  color: var(--ll-black) !important;
+  font: 700 15px/1 var(--ll-font);
   cursor: pointer;
   -webkit-user-select: none;
   user-select: none;
 }
 /* 44×44 hit area without moving the text. */
 .ll-mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
-.ll-line[data-repeat] .ll-mark { color: var(--ll-nezumi) !important; }
-.ll-mark[aria-expanded="true"] { background: var(--ll-aka) !important; color: #FFFFFF !important; }
+.ll-line[data-repeat] .ll-mark { color: var(--ll-quiet) !important; }
+.ll-mark[aria-expanded="true"] { background: var(--ll-yellow) !important; color: #000 !important; }
 
-/* The seam: where writing stopped, a line of 赤字 says why and offers the next step. */
-.ll-line[data-state="seam"] { padding-bottom: 20px; }
-.ll-seam { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 2px; }
-.ll-seam-text { color: var(--ll-sumi); font: 400 13px/1.7 var(--ll-gothic); letter-spacing: .03em; }
-.ll-seam-text::before { content: "※"; margin-right: .45em; color: var(--ll-aka); font-family: var(--ll-mincho); font-weight: 600; }
-.ll-seam .ll-btn {
-  min-height: 30px;
-  padding: 0 14px;
-  border-radius: 2px;
-  background: var(--ll-kuro) !important;
-  color: var(--ll-paper) !important;
-  font: 600 13px/1.3 var(--ll-gothic);
-  letter-spacing: .06em;
-}
-/* trailing ad-lib groups inside a translation, e.g. 「（待てよ、ビッチ）」: quieter ink, same face */
-.ll-adlib { color: var(--ll-nezumi) !important; }
+/* the seam: a line across the column where writing stopped, the reason, the next step */
+.ll-line[data-state="seam"] { padding: 18px 0 22px; }
+.ll-seam { display: flex; flex-direction: column; align-items: flex-start; border-top: 2px solid var(--ll-black); padding-top: 12px; }
+.ll-seam-text { color: var(--ll-ink); font-size: 14px; line-height: 22px; }
+.ll-seam .ll-btn { min-height: 36px; padding: 0; font-size: 15px; font-weight: 700; text-decoration-thickness: 2px !important; text-underline-offset: 6px; }
 
-/* ---------- notes (訳注) ---------- */
-.ll-note {
-  display: grid;
-  grid-template-rows: 1fr;
-  margin: 0 0 20px 1em;
-  padding: 2px 0 2px 1.1em;
-  border-left: 1px solid var(--ll-aka);
-  color: var(--ll-sumi) !important;
-  font-family: var(--ll-mincho);
-  font-size: .778em;
-  font-weight: 500;
-  line-height: 1.85;
-}
-/* an open note hangs from its own line */
-.ll-line:has(+ .ll-note) { padding-bottom: 8px; }
-/* user-initiated open only (notes.ts sets data-enter briefly) */
-.ll-note[data-enter] { animation: ll-note-open .22s ease-out; }
-@keyframes ll-note-open { from { grid-template-rows: 0fr; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
-.ll-note-body { overflow: hidden; min-height: 0; }
-.ll-note-item + .ll-note-item { margin-top: 14px; }
-.ll-note-head { display: flex; align-items: baseline; gap: 10px; }
-.ll-note-kind { color: var(--ll-aka); font: 600 11px/1.6 var(--ll-gothic); letter-spacing: .08em; }
-.ll-note-kind::before { content: "※"; margin-right: .35em; font-family: var(--ll-mincho); }
-.ll-note-conj { color: var(--ll-nezumi); font: 400 10.5px/1.5 var(--ll-gothic); letter-spacing: .06em; padding: 0 5px; border: 1px solid currentColor; border-radius: 1px; }
-.ll-note-phrase { display: block; margin-top: 2px; color: var(--ll-kuro); font-style: italic; font-weight: 400; font-size: .93em; letter-spacing: 0; }
-.ll-note-phrase { font-family: Programme, "Helvetica Neue", Arial, sans-serif; }
-.ll-note-text { display: block; margin-top: 2px; }
-.ll-note-src { display: block; margin-top: 6px; color: var(--ll-nezumi); font: 400 11px/1.6 var(--ll-gothic); letter-spacing: .04em; }
-.ll-gn { margin-top: 10px; }
-.ll-gn-toggle {
+/* ---------- notes: unboxed, set two characters in ---------- */
+.ll-note { display: block; margin: 4px 0 16px; padding: 0 0 0 2em; color: var(--ll-ink) !important; font-size: 14px; line-height: 24px; letter-spacing: .02em; }
+.ll-note-item + .ll-note-item { margin-top: 12px; }
+.ll-note-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 0; }
+.ll-note-phrase { padding: 0 3px; background: var(--ll-yellow) !important; color: #000 !important; font: 600 15px/22px var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif; letter-spacing: 0; }
+.ll-note-kind, .ll-note-conj { color: var(--ll-quiet); font-size: 13px; }
+.ll-note-text { margin: 4px 0 0; }
+.ll-note-src { margin: 2px 0 0; color: var(--ll-quiet); font-size: 13px; }
+.ll-gn { margin-top: 4px; }
+.ll-gn-toggle, .ll-gn-more, .ll-note-close {
   all: unset;
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
+  color: var(--ll-black);
+  font: 400 13px/32px var(--ll-font);
   cursor: pointer;
-  color: var(--ll-nezumi);
-  font: 400 11.5px/1.4 var(--ll-gothic);
-  letter-spacing: .04em;
-  text-decoration: underline !important;
-  text-decoration-thickness: 1px !important;
-  text-underline-offset: 4px;
+  text-decoration: underline 1px !important;
+  text-underline-offset: 3px;
 }
-.ll-gn-text { margin-top: 4px; color: var(--ll-sumi); font: 400 13px/1.65 Programme, "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
-.ll-gn-more { all: unset; cursor: pointer; color: var(--ll-kuro); font: 400 12px var(--ll-gothic); margin-left: 4px; padding: 10px 4px; text-decoration: underline !important; text-underline-offset: 3px; }
-@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover { color: var(--ll-aka); } }
+.ll-gn-votes { margin-left: 8px; color: var(--ll-quiet); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ll-gn-text { margin: 2px 0 0; color: var(--ll-ink); font: 14px/22px var(--ll-latin, Programme, "Helvetica Neue", Arial), sans-serif; letter-spacing: 0; line-break: auto; word-break: normal; }
+.ll-gn-text[hidden], .ll-note-close[hidden] { display: none; }
+.ll-gn-more { margin-left: 6px; }
+.ll-note-close { display: inline-block; margin-top: 4px; }
+@media (hover: hover) { .ll-gn-toggle:hover, .ll-gn-more:hover, .ll-note-close:hover, .ll-preface-more:hover { text-decoration-thickness: 2px !important; } }
 
-/* The English phrase a note is about: the translator's red side line. */
-::highlight(ll-phrase) {
-  text-decoration: underline 1.5px;
-  text-decoration-color: #E60012;
-  text-underline-offset: 4px;
-  background-color: var(--ll-hl-bg);
-}
-::highlight(ll-phrase-peek) {
-  text-decoration: underline 1.5px;
-  text-decoration-color: #E60012;
-  text-underline-offset: 4px;
-}
-html.ll-dark ::highlight(ll-phrase), html.ll-dark ::highlight(ll-phrase-peek) { text-decoration-color: #FF4B55; }
+/* the words you asked about: the phrase in the lyric, the open ※ and the note's heading */
+::highlight(ll-phrase) { background-color: #FFFF64; color: #000; text-decoration: underline 2px #000; text-underline-offset: 3px; }
+::highlight(ll-phrase-peek) { text-decoration: underline 2px #000; text-underline-offset: 3px; }
 
 @media (max-width: 599px) {
-  .ll-head { grid-template-columns: 20px minmax(0, 1fr); column-gap: 12px; margin-bottom: 28px; }
-  .ll-head::before { width: 20px; font-size: 11px; line-height: 20px; }
-  .ll-head-row { flex-direction: column; align-items: stretch; gap: 0; }
-  /* In a column the flex-basis would become a height. */
-  .ll-status { flex: none; }
-  /* Own row on phones: always left-aligned so 止める does not jump when the status clears. */
-  .ll-actions { justify-content: flex-start; column-gap: 24px; }
+  .ll-head { margin: 16px 0 24px; }
   .ll-btn, .ll-gn-toggle { min-height: 44px; }
-  .ll-btn { font-size: 13px; }
-  .ll-btn[data-primary] { min-height: 42px; padding: 0 22px; margin-block: 2px; font-size: 15px; }
+  /* phones: the count would make the row wrap; the track carries it */
+  .ll-count { display: none; }
+  .ll-line { font-size: 15px; line-height: 24px; padding-bottom: 10px; min-height: 24px; }
+  .ll-line[data-state="empty"] .ll-ja, .ll-line[data-state="next"] .ll-ja { height: 24px; }
+  .ll-pen { height: 16px; margin-top: 4px; }
+  .ll-preface-who, .ll-preface-what { font-size: 15px; line-height: 24px; }
   /* Genius' phone header (nav + ad slot) is sticky and about 125px tall. */
-  .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 140px; }
-  /* labels above, so the preface gets the full width */
-  .ll-preface-row { flex-direction: column; gap: 0; }
-  .ll-preface-row + .ll-preface-row { margin-top: 10px; }
-  .ll-line { padding-bottom: 14px; }
-  .ll-note { font-size: .8125em; margin-left: .5em; padding-left: .9em; }
-  .ll-seam .ll-btn { width: 100%; min-height: 44px; font-size: 14px; }
+  .ll-btn, .ll-preface-more, .ll-gn-toggle, .ll-gn-more, .ll-note-close { scroll-margin-top: 140px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ll-line[data-state="next"] .ll-ja::before { animation: none; opacity: .7; }
-  .ll-note[data-enter] { animation: none; }
-  .ll-line[data-ink] .ll-ja { animation: none; }
-  .ll-preface-toggle::before { transition: none; }
+  .ll-pen { animation: none; }
+  .ll-line[data-enter] { animation: none; }
+  .ll-progress { transition: none; }
+  .ll-progress[data-indeterminate] { animation: none; left: 0; }
+  .ll-head-row[data-settle] .ll-status { animation: none; }
 }
 `;
 

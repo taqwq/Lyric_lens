@@ -137,6 +137,8 @@ export interface SongRecord {
   model?: string;
   /** Lines a retranslation took over from the previous edition (its holes); song.motifs is the new edition's. */
   carried?: number;
+  /** 訳を隠す: the reader hid this song's translation. */
+  hidden?: boolean;
   createdAt: number;
   updatedAt: number;
 }

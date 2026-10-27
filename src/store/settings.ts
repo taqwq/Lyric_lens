@@ -7,7 +7,7 @@ import { getJSON, getRaw, setJSON } from '../platform/storage';
 export interface Settings {
   /** The Gemini API key ('' = none yet). */
   apiKey: string;
-  /** 訳を隠す: remembered per viewer. */
+  /** Legacy (v3): 訳を隠す used to be one switch for every song. The reading surface now follows SongRecord.hidden; old data still reads. */
   hideTranslation: boolean;
 }
 

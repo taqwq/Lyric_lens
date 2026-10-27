@@ -53,13 +53,22 @@ export interface ViewInput {
   notice: { status: string; detail: string } | null;
 }
 
+export interface Caption {
+  text: string;
+  /** 'reason': says why a button cannot be pressed, so it reads as text, not as a label. */
+  tone?: 'reason';
+}
+
 export interface Decision {
   state: StateName;
+  /** 'speaking': the head is working or asking; 'settled': nothing to do but read. */
+  tone: 'speaking' | 'settled';
+  /** The left-hand sentence; '' when a primary action takes its place. */
   status: string;
-  tone?: 'normal' | 'muted';
-  note?: string;
-  /** 'reason': the note says why a button cannot be pressed, so it reads as text, not as a label. */
-  noteTone?: 'reason';
+  captions: Caption[];
+  count?: { done: number; total: number };
+  progress: { value: number; max: number } | 'indeterminate' | null;
+  /** Primary actions first, then the links in the fixed order 止める → 隠す/表示 → 設定. */
   actions: ActionSpec[];
   preface: boolean;
   lines: { slots: boolean; gaps: boolean; breathing: boolean; seam: SeamSpec | null };
@@ -185,77 +194,92 @@ export function decide(i: ViewInput): Decision {
   const none = { slots: false, gaps: false, breathing: false, seam: null };
   const writing = { slots: true, gaps: false, breathing: true, seam: null };
   const hide = hideAction(i);
+  const reason = (text: string): Caption => ({ text, tone: 'reason' });
+  const plain = { captions: [] as Caption[], progress: null };
 
   // S8: retranslating — the old edition stays readable until the new one is complete.
   if (i.running === 'here-retranslate') {
-    return { state: 'S8', status: '訳し直しています。終わるまで今の訳を表示します', actions: [STOP], preface: i.hasPreface, lines: none };
+    return { state: 'S8', tone: 'speaking', status: '訳し直しています', captions: [{ text: '終わるまでは、今の訳をそのまま表示します' }], progress: 'indeterminate', actions: [STOP], preface: i.hasPreface, lines: none };
   }
   // S3 / S4: this tab is writing this song. Arriving once the preface or any line is in.
   if (i.running === 'here') {
     const arriving = i.hasPreface || i.done > 0;
     // A slow first line reads the same as a hung one: say the wait is expected (no model, quota or switching).
     const slow = !arriving && (i.waitedMs ?? 0) >= 15_000;
-    const wait = '返事を待っています。混んでいると1分ほどかかることもあります';
-    const buffered = 'この環境では訳がまとめて届きます';
-    const note = slow && !i.streams ? `${wait}。${buffered}` : slow ? wait : !i.streams ? buffered : undefined;
+    const captions: Caption[] = [];
+    if (slow) captions.push({ text: '返事を待っています。混んでいると1分ほどかかることもあります' });
+    if (!i.streams) captions.push({ text: 'この環境では訳がまとめて届きます' });
     return {
       state: arriving ? 'S4' : 'S3',
-      status: arriving ? '' : '曲全体を読んでいます',
+      tone: 'speaking',
+      status: arriving ? '訳しています' : '曲全体を読んでいます',
+      captions,
+      ...(arriving ? { count: { done: i.done, total: i.total } } : {}),
+      progress: arriving ? { value: i.done, max: i.total } : 'indeterminate',
       actions: arriving ? [STOP, hide, SETTINGS] : [STOP],
-      ...(note ? { note } : {}),
       preface: i.hasPreface,
       lines: writing,
     };
   }
   // S4m: another tab is writing this song; follow it from storage.
   if (i.mirrored) {
-    return { state: 'S4m', status: '別のタブで訳しています', actions: [{ id: 'stopMirror', label: '止める' }, hide], preface: i.hasPreface, lines: writing };
+    return { state: 'S4m', tone: 'speaking', status: '別のタブで訳しています', ...plain, actions: [{ id: 'stopMirror', label: '止める' }, hide], preface: i.hasPreface, lines: writing };
   }
   // S8f: a retranslation failed or could not start; the old edition is untouched.
   if (i.notice && i.done) {
-    return { state: 'S8f', status: i.notice.status, ...(i.notice.detail ? { note: i.notice.detail } : {}), actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+    const captions: Caption[] = [{ text: i.notice.status }];
+    if (i.notice.detail) captions.push(reason(i.notice.detail));
+    return { state: 'S8f', tone: 'settled', status: 'AIによる日本語訳', captions, progress: null, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
   }
 
   const stop = liveStop(i.stop, i);
   if (!i.done) {
     // SJ: Japanese lyrics need no translation; say so quietly instead of offering the start button.
-    if (i.japanese) return { state: 'SJ', status: 'この曲は日本語の歌詞です', tone: 'muted', actions: [], preface: false, lines: none };
+    if (i.japanese) return { state: 'SJ', tone: 'settled', status: 'この曲は日本語の歌詞です', ...plain, actions: [], preface: false, lines: none };
     if (!i.hasKey) {
-      return { state: 'S1', status: '日本語訳には無料のAPIキーが必要です', actions: [{ id: 'firstRun', label: 'キーを設定', primary: true }], preface: false, lines: none };
+      return { state: 'S1', tone: 'speaking', status: '', captions: [{ text: 'はじめに無料のAPIキーを設定します' }], progress: null, actions: [{ id: 'firstRun', label: '日本語で読む', primary: true }], preface: false, lines: none };
     }
     if (i.otherSong) {
-      return { state: 'S2b', status: `別の曲（${i.otherSong}）を訳しています。終わるとこの曲も訳せます`, actions: [{ id: 'stopOther', label: 'あちらを止める' }, SETTINGS], preface: false, lines: none };
+      return {
+        state: 'S2b', tone: 'speaking', status: '別の曲を訳しています',
+        captions: [{ text: `「${i.otherSong}」が終わると、この曲も訳せます` }], progress: null,
+        actions: [{ id: 'stopOther', label: 'あちらを止める' }], preface: false, lines: none,
+      };
     }
     if (quotaUntil != null) {
       return {
-        state: 'S2q',
-        status: blocker ?? '',
-        tone: 'muted',
-        actions: [SETTINGS],
-        preface: false,
-        lines: none,
+        state: 'S2q', tone: 'speaking', status: '今日の無料枠を使い切りました',
+        captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から、また訳せます` }] : [], progress: null,
+        actions: [SETTINGS], preface: false, lines: none,
       };
     }
     if (stop && stop.reason !== 'closed' && stop.reason !== 'stopped') {
       // The first request produced nothing: say why, with the seam's button rule.
       const seam = seamFor(stop, i, null);
-      const button: ActionSpec = { ...seam.button, label: seam.button.label === '続きを訳す' ? '日本語で読む' : seam.button.label, primary: true };
-      if (button.id === 'resume') button.id = 'start';
-      return { state: 'S2f', status: startFailText(stop, i) || seam.text, actions: stop.reason === 'auth' ? [button] : [button, SETTINGS], preface: false, lines: none };
+      const auth = stop.reason === 'auth';
+      const button: ActionSpec = auth
+        ? { id: 'settings', label: '設定を開く', primary: true }
+        : { ...seam.button, id: seam.button.id === 'resume' ? 'start' : seam.button.id, label: 'もう一度訳す', primary: true };
+      return {
+        state: 'S2f', tone: 'speaking', status: '',
+        captions: [{ text: startFailText(stop, i) || seam.text }], progress: null,
+        actions: auth ? [button] : [button, SETTINGS], preface: false, lines: none,
+      };
     }
-    return { state: 'S2', status: '', actions: [{ id: 'start', label: '日本語で読む', primary: true }, SETTINGS], preface: false, lines: none };
+    return { state: 'S2', tone: 'speaking', status: '', ...plain, actions: [{ id: 'start', label: '日本語で読む', primary: true }, SETTINGS], preface: false, lines: none };
   }
 
   // S5: complete.
-  if (!missing) return { state: 'S5', status: '', actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+  if (!missing) {
+    return { state: 'S5', tone: 'settled', status: i.hidden ? '訳を隠しています' : 'AIによる日本語訳', ...plain, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
+  }
 
   const resume = (label: string): ActionSpec => ({ id: 'resume', label, primary: true, disabled: Boolean(blocker) });
   // S5g: the model skipped some lines.
   if (stop?.reason === 'gaps') {
     return {
-      state: 'S5g',
-      status: `${missing}行が訳せていません`,
-      ...(blocker ? { note: blocker, noteTone: 'reason' as const } : {}),
+      state: 'S5g', tone: 'speaking', status: '',
+      captions: [{ text: `${missing}行が訳せていません。下の「――」の行です` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
       actions: [resume('抜けた行を訳す'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: false, gaps: true, breathing: false, seam: null },
@@ -264,9 +288,8 @@ export function decide(i: ViewInput): Decision {
   // S7: Genius changed the lyrics since the edition was finished.
   if (!stop) {
     return {
-      state: 'S7',
-      status: `歌詞が更新され、まだ訳していない行が${missing}行あります`,
-      ...(blocker ? { note: blocker, noteTone: 'reason' as const } : {}),
+      state: 'S7', tone: 'speaking', status: '',
+      captions: [{ text: `歌詞が更新されました。まだ訳していない行が${missing}行あります` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
       actions: [resume('新しい行を訳す'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: true, gaps: false, breathing: false, seam: null },
@@ -278,9 +301,9 @@ export function decide(i: ViewInput): Decision {
   // cannot simply be pressed in the head instead (never both, never when it just works).
   const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === 'auth');
   return {
-    state: 'S6',
-    status: `途中まで訳してあります（${i.done}/${i.total}行）`,
-    ...(explain ? { note: seam.text, noteTone: 'reason' as const } : {}),
+    state: 'S6', tone: 'speaking', status: '',
+    captions: [{ text: `${i.total}行のうち${i.done}行まで訳してあります` }, ...(explain ? [reason(seam.text)] : [])],
+    progress: { value: i.done, max: i.total },
     actions: [{ ...seam.button, primary: true }, hide, ...(seam.button.id === 'settings' ? [] : [SETTINGS])],
     preface: i.hasPreface,
     lines: { slots: true, gaps: false, breathing: false, seam },

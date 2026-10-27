@@ -26,12 +26,23 @@ export interface LinesInput {
   seam: SeamView | null;
   /** Fade newly filled lines in (never on a cached render). */
   animate: boolean;
+  /** The first render right after the reader's tap that creates the empty slots: slots near
+   *  the viewport unfold (data-enter). Never set on a cached render. */
+  opening?: boolean;
   openIndex: number | null;
   onMark: (index: number) => void;
   onMarkHover?: (index: number, on: boolean) => void;
 }
 
 type State = 'empty' | 'next' | 'filled' | 'gap' | 'seam';
+
+/** Within the viewport ±600 px: only those slots are worth animating. */
+function nearViewport(anchor: Node): boolean {
+  const target = anchor instanceof Element ? anchor : anchor.parentElement;
+  if (!target) return true;
+  const rect = target.getBoundingClientRect();
+  return rect.bottom > -600 && rect.top < window.innerHeight + 600;
+}
 
 function insertAfter(anchor: Node, el: Node): boolean {
   if (!anchor.parentNode || !anchor.isConnected) return false;
@@ -74,6 +85,8 @@ export class LineRenderer {
       let state: State | null = null;
       if (result?.ja) state = 'filled';
       else if (input.seam && i === frontier) state = 'seam';
+      // Below the seam nothing is drawn: the page stays quiet until the reader resumes.
+      else if (input.seam && frontier >= 0 && i > frontier) state = null;
       else if (input.gaps) state = 'gap';
       else if (input.slots) state = i < frontier && lastFilled > i ? 'gap' : input.breathing && i === frontier ? 'next' : 'empty';
 
@@ -90,6 +103,7 @@ export class LineRenderer {
       // `open` is deliberately not part of the signature: rebuilding would destroy the
       // focused ※ button. aria-expanded is synced in place below.
       const sig = [state, line.key, result?.ja ?? '', repeat, notes.length, notes[0]?.phrase ?? '',
+        notes.map((n) => n.kind).join(','),
         state === 'seam' ? `${input.seam?.text}|${input.seam?.button.label}|${input.seam?.button.disabled}` : ''].join('\u0001');
 
       let el = current;
@@ -98,13 +112,23 @@ export class LineRenderer {
         isolateClicks(el);
       }
       if (this.sigs.get(i) !== sig) {
+        const isNew = !current;
         const wasWaiting = el.dataset.state === 'empty' || el.dataset.state === 'next';
         el.dataset.state = state;
         if (repeat) el.dataset.repeat = ''; else delete el.dataset.repeat;
-        el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, repeat, input));
+        // A placeholder bar about as long as the translation will be (styles.css: --ll-n).
+        el.style.setProperty('--ll-n', String(Math.min(120, line.text.length)));
+        el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, input));
         if (state === 'filled' && wasWaiting && input.animate) {
           el.dataset.ink = '';
           setTimeout(() => { if (el) delete el.dataset.ink; }, 260);
+        }
+        if (input.opening && isNew && (state === 'empty' || state === 'next') && nearViewport(anchor)) {
+          const node = el;
+          node.dataset.enter = '';
+          const done = () => { delete node.dataset.enter; };
+          node.addEventListener('animationend', done, { once: true });
+          setTimeout(done, 400);
         }
         this.sigs.set(i, sig);
       }
@@ -126,9 +150,10 @@ export class LineRenderer {
     }
   }
 
-  private content(state: State, index: number, ja: string, noteCount: number, repeat: boolean, input: LinesInput): Node[] {
-    if (state === 'empty' || state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
-    if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'まだ訳せていない行' }, '—')];
+  private content(state: State, index: number, ja: string, noteCount: number, input: LinesInput): Node[] {
+    if (state === 'empty') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
+    if (state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' }, h('span', { class: 'll-pen' }))];
+    if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'この行は訳せていません' }, '――')];
     if (state === 'seam' && input.seam) {
       const { seam } = input;
       const button: HTMLButtonElement = h('button', {
@@ -147,13 +172,13 @@ export class LineRenderer {
     // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
     const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');
     const out: Node[] = [h('span', { class: 'll-ja' }, main, tail ? h('span', { class: 'll-adlib' }, tail) : null)];
-    if (repeat) out.push(h('span', { class: 'll-repeat', role: 'img', 'aria-label': 'くり返し' }, '↺'));
     if (noteCount) {
       const record = input.record;
       const line = input.page.source.lines[index];
       const notes = (line && record?.lines[line.key]?.notes) || [];
       const first = notes[0];
-      const label = notes.length > 1 ? `注 ${notes.length}件` : first ? `注：${NOTE_LABELS[first.kind]}「${first.phrase}」` : '注';
+      const kinds = [...new Set(notes.map((n) => NOTE_LABELS[n.kind]))].join('・');
+      const label = first ? `注を開く：${kinds}` : '注を開く';
       const mark: HTMLButtonElement = h('button', {
         class: 'll-mark',
         type: 'button',
