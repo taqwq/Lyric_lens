@@ -63,6 +63,8 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-head-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-height: 28px; }
 .ll-status { flex: 1 1 14em; min-width: 0; color: var(--ll-ink); }
 .ll-status[data-tone="muted"] { color: var(--ll-label); }
+/* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
+.ll-status:focus { outline: none; }
 /* An empty live region stays in the accessibility tree (never `hidden`) so that its next text is
    announced. Taken out of the flow as well: a 0-wide flex item would still cost a row/column gap
    and its 14em basis would push the actions to the right edge. */
