@@ -7,10 +7,16 @@ const m = vi.hoisted(() => ({
   translateSong: vi.fn(),
   acquireLock: vi.fn(),
   render: vi.fn(),
+  cleanOtherProviders: vi.fn(),
 }));
 
 // The controller is driven without a real page: the DOM-facing pieces are stubs.
 vi.mock('../src/core/pipeline', () => ({ translateSong: m.translateSong }));
+// The real housekeeping, wrapped so a test can see when it was called.
+vi.mock('../src/llm/chain', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/llm/chain')>();
+  return { ...actual, cleanOtherProviders: m.cleanOtherProviders.mockImplementation(actual.cleanOtherProviders) };
+});
 vi.mock('../src/store/lock', () => ({ acquireLock: m.acquireLock, readLock: async () => null, requestAbort: async () => {}, TAB_ID: 'test-tab' }));
 vi.mock('../src/ui/head', () => ({ HeadRow: class { render = m.render; clear = vi.fn(); focusFirst = vi.fn(); element = null; } }));
 vi.mock('../src/ui/lines', () => ({ LineRenderer: class { render = vi.fn(); clear = vi.fn(); nodeFor = () => undefined; damaged = () => false; } }));
@@ -19,7 +25,7 @@ vi.mock('../src/ui/sheet', () => ({ openSheet: vi.fn(), closeSheet: vi.fn() }));
 
 import { App } from '../src/app';
 import { buildSong, emptyRecord } from '../src/core/song';
-import type { PageSong } from '../src/genius/extract';
+import { readPage, type PageSong } from '../src/genius/extract';
 import { memoryStorage, setKV, type KV } from '../src/platform/storage';
 import { loadSettings, setApiKey } from '../src/store/settings';
 import { loadSong, saveSong } from '../src/store/songs';
@@ -32,6 +38,7 @@ interface Inside {
   notice: { status: string; detail: string } | null;
   unsaved: boolean;
   annotations: unknown[] | null;
+  lines: { render: ReturnType<typeof vi.fn> };
   renderNow(): void;
   loadAnnotations(page: PageSong): Promise<unknown[]>;
 }
@@ -306,5 +313,47 @@ describe('translate: the tap does not wait long for Genius annotations', () => {
     // Let the 120 ms render debounce run out: the 2.5 s wait must not still be pending.
     await vi.advanceTimersByTimeAsync(130);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('start: housekeeping does not delay the first paint', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  it('paints the saved translation while cleanOtherProviders is still waiting, and still runs it once', async () => {
+    vi.useFakeTimers();
+    m.cleanOtherProviders.mockClear();
+    // 'Sit down' -> 'まあ座れよ'
+    document.body.innerHTML = '<div data-lyrics-container="true">Sit down<br>Count the cash twice</div>';
+    const page = readPage()!;
+    const inner = memoryStorage();
+    setKV(inner);
+    await loadSettings();
+    await setApiKey('test-key');
+    const record = emptyRecord(identityOf(page), page.path, page.source.meta);
+    record.lines[page.source.unique[0]!.key] = { ja: 'まあ座れよ' };
+    record.stop = { reason: 'closed', at: 1 };
+    await saveSong(record);
+
+    // The key scan behind the housekeeping only finishes when released.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let scanning = false;
+    setKV({ ...inner, keys: async () => { scanning = true; await gate; return inner.keys(); } });
+
+    const app = new App();
+    await app.start();
+
+    const painted = inside(app).lines.render.mock.calls.at(-1)?.[0] as { record: SongRecord | null } | undefined;
+    expect(Object.values(painted?.record?.lines ?? {}).map((l) => l.ja)).toContain('まあ座れよ');
+    expect(m.cleanOtherProviders).toHaveBeenCalledTimes(1);
+    expect(m.cleanOtherProviders).toHaveBeenCalledWith('test-key');
+    expect(scanning).toBe(true);
+
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(m.cleanOtherProviders).toHaveBeenCalledTimes(1);
   });
 });

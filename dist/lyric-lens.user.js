@@ -4102,7 +4102,6 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     async start() {
       const settings = await loadSettings();
-      await cleanOtherProviders(settings.apiKey);
       this.applyDisplay();
       onSettings(() => {
         this.applyDisplay();
@@ -4110,6 +4109,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       });
       await this.refresh();
       this.watch();
+      void cleanOtherProviders(settings.apiKey).catch(() => {
+      });
     }
     /* ---------- page lifecycle ---------- */
     refresh() {

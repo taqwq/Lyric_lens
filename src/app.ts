@@ -91,11 +91,12 @@ export class App {
 
   async start(): Promise<void> {
     const settings = await loadSettings();
-    await cleanOtherProviders(settings.apiKey);
     this.applyDisplay();
     onSettings(() => { this.applyDisplay(); this.scheduleRender(); });
     await this.refresh();
     this.watch();
+    // Housekeeping (a scan of every stored key) must not hold up the first paint of a saved translation.
+    void cleanOtherProviders(settings.apiKey).catch(() => {});
   }
 
   /* ---------- page lifecycle ---------- */
