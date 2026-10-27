@@ -58,6 +58,8 @@ export interface Decision {
   status: string;
   tone?: 'normal' | 'muted';
   note?: string;
+  /** 'reason': the note says why a button cannot be pressed, so it reads as text, not as a label. */
+  noteTone?: 'reason';
   actions: ActionSpec[];
   preface: boolean;
   lines: { slots: boolean; gaps: boolean; breathing: boolean; seam: SeamSpec | null };
@@ -238,7 +240,7 @@ export function decide(i: ViewInput): Decision {
     return {
       state: 'S5g',
       status: `${missing}行が訳せていません`,
-      ...(blocker ? { note: blocker } : {}),
+      ...(blocker ? { note: blocker, noteTone: 'reason' as const } : {}),
       actions: [resume('抜けた行を訳す'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: false, gaps: true, breathing: false, seam: null },
@@ -249,7 +251,7 @@ export function decide(i: ViewInput): Decision {
     return {
       state: 'S7',
       status: `歌詞が更新され、まだ訳していない行が${missing}行あります`,
-      ...(blocker ? { note: blocker } : {}),
+      ...(blocker ? { note: blocker, noteTone: 'reason' as const } : {}),
       actions: [resume('新しい行を訳す'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: true, gaps: false, breathing: false, seam: null },
@@ -263,7 +265,7 @@ export function decide(i: ViewInput): Decision {
   return {
     state: 'S6',
     status: `途中まで訳してあります（${i.done}/${i.total}行）`,
-    ...(explain ? { note: seam.text } : {}),
+    ...(explain ? { note: seam.text, noteTone: 'reason' as const } : {}),
     actions: [{ ...seam.button, primary: true }, hide, ...(seam.button.id === 'settings' ? [] : [SETTINGS])],
     preface: i.hasPreface,
     lines: { slots: true, gaps: false, breathing: false, seam },

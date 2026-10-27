@@ -321,6 +321,30 @@ describe('S3 reading the whole song first', () => {
   });
 });
 
+describe('noteTone: only a reason for a disabled button reads as a reason', () => {
+  // 'Gold on my neck like the sun owe me rent' / 'Told her come through, she said text me again'
+  it('a spent daily quota on a song with gaps: reason note beside a disabled primary', () => {
+    const d = decide(view({ done: 18, total: 20, stop: { reason: 'gaps', at: 0 }, avail: { ok: false, until: NOW + 3_600_000 } }));
+    expect(d.state).toBe('S5g');
+    expect(d.noteTone).toBe('reason');
+    expect(d.note).toBeTruthy();
+    expect(d.actions[0]).toMatchObject({ id: 'resume', primary: true, disabled: true });
+  });
+
+  it('the buffered-transport note stays untoned', () => {
+    const d = decide(view({ running: 'here', streams: false, done: 0 }));
+    expect(d.note).toBe('この環境では訳がまとめて届きます');
+    expect(d.noteTone).toBeUndefined();
+    expect('noteTone' in d).toBe(false);
+  });
+
+  it('the S8f detail stays untoned', () => {
+    const d = decide(view({ done: 25, notice: { status: '訳し直しは途中で止まりました。今の訳はそのままです', detail: '止めました' } }));
+    expect(d.state).toBe('S8f');
+    expect(d.noteTone).toBeUndefined();
+  });
+});
+
 describe('S4 lines arriving', () => {
   it('starts as soon as the preface is in (hide and 設定 appear)', () => {
     expectDecision(decide(view({ running: 'here', hasPreface: true })), {
@@ -444,6 +468,7 @@ describe('S5g complete with gaps', () => {
       state: 'S5g',
       status: '15行が訳せていません',
       note: BLOCKED_BY_OTHER,
+      noteTone: 'reason',
       actions: [resume({ disabled: true }), HIDE, SETTINGS],
       preface: false,
       lines: GAP_LINES,
@@ -455,6 +480,7 @@ describe('S5g complete with gaps', () => {
       state: 'S5g',
       status: '15行が訳せていません',
       note: '今日の無料枠は終わりました。15:00から訳せます',
+      noteTone: 'reason',
       actions: [resume({ disabled: true }), HIDE, SETTINGS],
       preface: false,
       lines: GAP_LINES,
@@ -496,6 +522,7 @@ describe('S7 Genius changed the lyrics', () => {
       state: 'S7',
       status: '歌詞が更新され、まだ訳していない行が15行あります',
       note: BLOCKED_BY_OTHER,
+      noteTone: 'reason',
       actions: [resume({ disabled: true }), HIDE, SETTINGS],
       preface: false,
       lines: NEW_LINES,
@@ -507,6 +534,7 @@ describe('S7 Genius changed the lyrics', () => {
       state: 'S7',
       status: '歌詞が更新され、まだ訳していない行が15行あります',
       note: '今日の無料枠は終わりました。明日 01:00から訳せます',
+      noteTone: 'reason',
       actions: [resume({ disabled: true }), HIDE, SETTINGS],
       preface: false,
       lines: NEW_LINES,
@@ -579,7 +607,7 @@ describe('S6 interrupted', () => {
   const expected = (row: Row, hidden: boolean, preface = false): Decision => ({
     state: 'S6',
     status: '途中まで訳してあります（10/40行）',
-    ...(hidden && row.explainWhenHidden ? { note: row.seam.text } : {}),
+    ...(hidden && row.explainWhenHidden ? { note: row.seam.text, noteTone: 'reason' as const } : {}),
     actions: [{ ...row.seam.button, primary: true }, hidden ? SHOW : HIDE, ...(settingsLike(row.seam) ? [] : [SETTINGS])],
     preface,
     lines: { slots: true, gaps: false, breathing: false, seam: row.seam },

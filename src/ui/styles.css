@@ -96,6 +96,7 @@ html.ll-dark { --ll-hl-bg: rgba(227, 135, 108, .14); }
 .ll-btn, .ll-preface-toggle, .ll-gn-toggle, .ll-gn-more { scroll-margin-top: 72px; scroll-margin-bottom: 24px; }
 .ll-head-row[data-bare="1"] .ll-actions { margin-left: 0; }
 .ll-head-note { display: block; margin-top: 2px; color: var(--ll-label); font-size: 12px; }
+.ll-head-note[data-tone="reason"] { font-size: 13px; color: var(--ll-ink); }
 .ll-preface-rows { display: block; flex: 1; min-width: 0; }
 
 .ll-preface { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 14px; line-height: 1.75; color: var(--ll-ink); -webkit-user-select: text; user-select: text; }
