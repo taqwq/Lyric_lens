@@ -23,7 +23,7 @@ vi.mock('../src/ui/lines', () => ({ LineRenderer: class { render = vi.fn(); clea
 vi.mock('../src/ui/notes', () => ({ NoteView: class { state = null; openIndex = null; close = vi.fn(); } }));
 vi.mock('../src/ui/sheet', () => ({ openSheet: vi.fn(), closeSheet: vi.fn() }));
 
-import { App } from '../src/app';
+import { App, latinFamilies } from '../src/app';
 import { buildSong, emptyRecord } from '../src/core/song';
 import { readPage, type PageSong } from '../src/genius/extract';
 import { memoryStorage, setKV, type KV } from '../src/platform/storage';
@@ -462,7 +462,15 @@ describe('--ll-latin', () => {
     const app = appOn(pageOf(ENGLISH, { containers: [el] }));
     inside(app).followLyricFont(inside(app).page!);
     expect(document.documentElement.style.getPropertyValue('--ll-latin')).toContain('Georgia');
+    // The generic fallback is dropped: it would draw the Japanese in the browser's default face.
+    expect(document.documentElement.style.getPropertyValue('--ll-latin')).not.toMatch(/serif/);
     el.remove();
+  });
+
+  it('keeps named Latin families and drops every generic one', () => {
+    expect(latinFamilies('Programme, Arial, sans-serif')).toBe('Programme, Arial');
+    expect(latinFamilies('"Programme", -apple-system, BlinkMacSystemFont, system-ui, ui-sans-serif, serif')).toBe('"Programme"');
+    expect(latinFamilies('sans-serif')).toBe('');
   });
 
   it('does nothing without a container', () => {

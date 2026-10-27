@@ -4301,6 +4301,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     return known;
   }
+  function latinFamilies(family) {
+    const GENERIC2 = /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|math|emoji|fangsong|-apple-system|blinkmacsystemfont)$/i;
+    return family.split(",").map((f) => f.trim()).filter((f) => f && !GENERIC2.test(f.replace(/^["']|["']$/g, ""))).join(", ");
+  }
   var SAVE_FAILED = { status: "保存できませんでした", detail: "この画面では読めますが、ページを閉じると消えます" };
   var App = class {
     constructor() {
@@ -4509,7 +4513,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     /** Latin text in a translated line is set in the lyrics' own face (--ll-latin). */
     followLyricFont(page) {
       try {
-        const family = getComputedStyle(page.containers[0]).fontFamily;
+        const family = latinFamilies(getComputedStyle(page.containers[0]).fontFamily);
         if (family) document.documentElement.style.setProperty("--ll-latin", family);
       } catch {
       }
@@ -5167,7 +5171,8 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   line-height: 26px;
   letter-spacing: .02em;
 }
-html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
+/* 訳を隠す gives back plain Genius: lines, notes and the preface all go. */
+html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { display: none !important; }
 .ll-ja { color: inherit !important; }
 .ll-line[data-repeat] { color: var(--ll-quiet) !important; }
 .ll-adlib { color: var(--ll-quiet) !important; }
@@ -5189,7 +5194,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note { display: none !important; }
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-left: .3em;
+  margin-left: .15em;
   vertical-align: -3px;
   color: var(--ll-black) !important;
   font: 700 15px/1 var(--ll-font);

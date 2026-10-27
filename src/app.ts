@@ -54,6 +54,13 @@ function isJapanese(page: PageSong): boolean {
   return known;
 }
 
+/** Genius' lyric font list without its generic fallbacks: a trailing `sans-serif` would make
+ *  the browser draw our Japanese with its default face before reaching our Japanese stack. */
+export function latinFamilies(family: string): string {
+  const GENERIC = /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|math|emoji|fangsong|-apple-system|blinkmacsystemfont)$/i;
+  return family.split(',').map((f) => f.trim()).filter((f) => f && !GENERIC.test(f.replace(/^["']|["']$/g, ''))).join(', ');
+}
+
 /** Head-row notice when the finished edition could not be stored. */
 const SAVE_FAILED = { status: '保存できませんでした', detail: 'この画面では読めますが、ページを閉じると消えます' };
 
@@ -286,7 +293,7 @@ export class App {
   /** Latin text in a translated line is set in the lyrics' own face (--ll-latin). */
   private followLyricFont(page: PageSong): void {
     try {
-      const family = getComputedStyle(page.containers[0]!).fontFamily;
+      const family = latinFamilies(getComputedStyle(page.containers[0]!).fontFamily);
       if (family) document.documentElement.style.setProperty('--ll-latin', family);
     } catch { /* no container yet: the stylesheet's fallback applies */ }
   }
