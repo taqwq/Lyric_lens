@@ -41,8 +41,8 @@ export function stopFromError(error: LLMError, now = Date.now()): StopInfo {
     case 'quota': return { reason: 'quota', at: now, until: error.retryAfterMs > 60_000 ? now + error.retryAfterMs : nextPacificMidnight(now) };
     case 'auth': return { reason: 'auth', at: now };
     case 'blocked': return { reason: 'blocked', at: now };
-    case 'network':
-    case 'timeout': return { reason: 'network', at: now };
+    case 'network': return { reason: 'network', at: now };
+    case 'timeout': return { reason: 'silent', at: now };
     case 'aborted': return { reason: 'stopped', at: now };
     case 'bad-request': return { reason: 'rejected', at: now };
     case 'not-found': return { reason: 'no-model', at: now };

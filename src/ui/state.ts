@@ -95,6 +95,7 @@ export function seamText(stop: StopInfo, i: ViewInput): string {
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
     blocked: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
     network: '接続が切れました。つながったら続きを訳せます',
+    silent: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます',
     rejected: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります',
     'no-model': 'AIをいま使えません。少しおいてから続きを訳せます',
     empty: 'AIの返事が空のまま、ここで途切れました。もう一度試せます',
@@ -118,6 +119,7 @@ export function startFailText(stop: StopInfo, i: ViewInput): string {
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
     blocked: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
     network: '接続が切れて、訳し始められませんでした。つながったら訳せます',
+    silent: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ',
     rejected: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります',
     'no-model': 'AIをいま使えません。少しおいてからもう一度どうぞ',
     empty: 'AIから空の返事が返ってきました。もう一度試せます',
@@ -137,6 +139,7 @@ export function failureText(stop: StopInfo, now: number): string {
     auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
     blocked: 'AIの安全フィルタで止められました',
     network: '接続が切れました',
+    silent: 'AIから返事がありませんでした',
     rejected: 'AIが訳しませんでした',
     'no-model': 'AIをいま使えませんでした',
     empty: 'AIの返事が空でした',
@@ -157,7 +160,7 @@ export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null): S
   if (blocker && stop.reason !== 'quota') {
     // A per-minute or busy stop next to a spent daily quota would name two limits: the quota
     // is the one that matters, so the first sentence only says where it stopped.
-    const transient = stop.reason === 'rate' || stop.reason === 'busy' || stop.reason === 'no-model';
+    const transient = stop.reason === 'rate' || stop.reason === 'busy' || stop.reason === 'no-model' || stop.reason === 'silent';
     const quotaBlocker = !i.otherSong;
     const head = transient && quotaBlocker ? 'ここで途切れました' : text.split('。')[0];
     return { text: `${head}。${blocker}`, button: { id: 'noop', label: '続きを訳す', disabled: true } };

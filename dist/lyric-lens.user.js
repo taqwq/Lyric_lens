@@ -1422,8 +1422,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       case "blocked":
         return { reason: "blocked", at: now };
       case "network":
-      case "timeout":
         return { reason: "network", at: now };
+      case "timeout":
+        return { reason: "silent", at: now };
       case "aborted":
         return { reason: "stopped", at: now };
       case "bad-request":
@@ -2042,7 +2043,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const notes = (Array.isArray(raw.notes) ? raw.notes : []).map(cleanNote).filter((n) => n !== null);
     return notes.length ? { ja: raw.ja, notes } : { ja: raw.ja };
   }
-  var STOP_REASONS = ["busy", "rate", "quota", "auth", "blocked", "network", "rejected", "no-model", "empty", "unusable", "stopped", "length", "closed", "gaps"];
+  var STOP_REASONS = ["busy", "rate", "quota", "auth", "blocked", "network", "silent", "rejected", "no-model", "empty", "unusable", "stopped", "length", "closed", "gaps"];
   function cleanStop(raw, fallbackAt) {
     if (!isObject(raw) || !STOP_REASONS.includes(raw.reason)) return void 0;
     const until = typeof raw.until === "number" && Number.isFinite(raw.until) ? raw.until : void 0;
@@ -3968,6 +3969,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れました。つながったら続きを訳せます",
+      silent: "AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます",
       rejected: "AIがこの先を訳しませんでした。もう一度試すと通ることがあります",
       "no-model": "AIをいま使えません。少しおいてから続きを訳せます",
       empty: "AIの返事が空のまま、ここで途切れました。もう一度試せます",
@@ -3988,6 +3990,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
       network: "接続が切れて、訳し始められませんでした。つながったら訳せます",
+      silent: "AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ",
       rejected: "AIがこの曲を訳しませんでした。もう一度試すと通ることがあります",
       "no-model": "AIをいま使えません。少しおいてからもう一度どうぞ",
       empty: "AIから空の返事が返ってきました。もう一度試せます",
@@ -4005,6 +4008,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
       blocked: "AIの安全フィルタで止められました",
       network: "接続が切れました",
+      silent: "AIから返事がありませんでした",
       rejected: "AIが訳しませんでした",
       "no-model": "AIをいま使えませんでした",
       empty: "AIの返事が空でした",
@@ -4020,7 +4024,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const text2 = seamText(stop, i);
     if (stop.reason === "auth") return { text: text2, button: { id: "settings", label: "設定を開く" } };
     if (blocker && stop.reason !== "quota") {
-      const transient = stop.reason === "rate" || stop.reason === "busy" || stop.reason === "no-model";
+      const transient = stop.reason === "rate" || stop.reason === "busy" || stop.reason === "no-model" || stop.reason === "silent";
       const quotaBlocker = !i.otherSong;
       const head = transient && quotaBlocker ? "ここで途切れました" : text2.split("。")[0];
       return { text: `${head}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };

@@ -129,7 +129,7 @@ function cleanLine(raw: unknown): LineResult | null {
   return notes.length ? { ja: raw.ja, notes } : { ja: raw.ja };
 }
 
-const STOP_REASONS: readonly StopReason[] = ['busy', 'rate', 'quota', 'auth', 'blocked', 'network', 'rejected', 'no-model', 'empty', 'unusable', 'stopped', 'length', 'closed', 'gaps'];
+const STOP_REASONS: readonly StopReason[] = ['busy', 'rate', 'quota', 'auth', 'blocked', 'network', 'silent', 'rejected', 'no-model', 'empty', 'unusable', 'stopped', 'length', 'closed', 'gaps'];
 
 function cleanStop(raw: unknown, fallbackAt: number): StopInfo | undefined {
   if (!isObject(raw) || !STOP_REASONS.includes(raw.reason as StopReason)) return undefined;

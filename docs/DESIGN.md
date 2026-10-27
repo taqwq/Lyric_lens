@@ -69,6 +69,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | no usable model | `AIをいま使えません。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
 | empty answer | `AIの返事が空のまま、ここで途切れました。もう一度試せます` | `続きを訳す`, enabled |
 | network | `接続が切れました。つながったら続きを訳せます` | Disabled while `navigator.onLine` is false, enabled when the connection returns. Never fires automatically. |
+| silent (two models timed out) | `AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
 | unusable output | `AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます` | `続きを訳す` |
 | reader stopped | `ここで止めました` | `続きを訳す` |
 | output-length cut (long song) | `長い曲なので、ここで一度区切りました` | `続きを訳す` |
@@ -97,6 +98,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
   - no-model: `AIをいま使えません。少しおいてからもう一度どうぞ`
   - empty: `AIから空の返事が返ってきました。もう一度試せます`
   - network: `接続が切れて、訳し始められませんでした。つながったら訳せます`
+  - silent: `AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ`
   - unusable: `AIの返事をうまく読み取れませんでした。もう一度試せます`
   - length: `長い曲なので、一度では訳し切れませんでした`
 - `別の曲（{title}）を訳しています · 終わると訳せます` · `あちらを止める`
@@ -110,7 +112,7 @@ The seam is written in the label colour after a short dashed slot, so it reads a
 - `訳し直しています · 終わるまで今の訳を表示します`
 - `この曲は日本語の歌詞です` (SJ)
 - `保存できませんでした` with `この画面では読めますが、ページを閉じると消えます` (the edition could not be stored; it stays on screen and is not replaced by a same-song refresh)
-- `訳し直しは途中で止まりました。今の訳はそのままです`, with the reason on a second line: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `AIが訳しませんでした` · `AIをいま使えませんでした` · `AIの返事が空でした` · `接続が切れました` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
+- `訳し直しは途中で止まりました。今の訳はそのままです`, with the reason on a second line: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `AIが訳しませんでした` · `AIをいま使えませんでした` · `AIの返事が空でした` · `接続が切れました` · `AIから返事がありませんでした` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
 
 **Preface**
 - Labels: `誰が誰に` / `この曲は`; the content comes from the model.

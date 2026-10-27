@@ -214,6 +214,7 @@ describe('S2f the first request produced nothing', () => {
     { name: 'blocked', stop: stopOf('blocked'), status: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
     { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, status: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
+    { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, status: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ' },
     { name: 'rejected', stop: stopOf('rejected'), status: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
     { name: 'no-model', stop: stopOf('no-model'), status: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
     { name: 'empty', stop: stopOf('empty'), status: 'AIから空の返事が返ってきました。もう一度試せます' },
@@ -608,6 +609,8 @@ describe('S6 interrupted', () => {
     { name: 'blocked', stop: stopOf('blocked'), seam: { text: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'network, offline: waiting button', stop: stopOf('network'), over: { online: false }, seam: { text: '接続が切れました。つながったら続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
+    { name: 'silent, online: the button stays enabled', stop: stopOf('silent'), over: { online: true }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
+    { name: 'silent, offline: not a connection stop, still enabled', stop: stopOf('silent'), over: { online: false }, seam: { text: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'rejected', stop: stopOf('rejected'), seam: { text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります', button: RESUME }, explainWhenHidden: false },
     { name: 'no-model', stop: stopOf('no-model'), seam: { text: 'AIをいま使えません。少しおいてから続きを訳せます', button: RESUME }, explainWhenHidden: false },
     { name: 'empty', stop: stopOf('empty'), seam: { text: 'AIの返事が空のまま、ここで途切れました。もう一度試せます', button: RESUME }, explainWhenHidden: false },
@@ -619,11 +622,13 @@ describe('S6 interrupted', () => {
     { name: 'another song running, busy: blocker said in the seam, noop button', stop: stopOf('busy'), over: { otherSong: 'X' }, seam: { text: 'AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, rate', stop: stopOf('rate', { until: MINUTE_LATER }), over: { otherSong: 'X' }, seam: { text: 'AIの回数制限にかかりました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, network', stop: stopOf('network'), over: { otherSong: 'X' }, seam: { text: '接続が切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
+    { name: 'another song running, silent', stop: stopOf('silent'), over: { otherSong: 'X' }, seam: { text: 'AIから返事がなく、ここで途切れました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, stopped', stop: stopOf('stopped'), over: { otherSong: 'X' }, seam: { text: 'ここで止めました。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, closed', stop: stopOf('closed'), over: { otherSong: 'X' }, seam: { text: 'ここまで訳してあります。別の曲を訳し終えると続きを訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'another song running, quota: the quota sentence already says it', stop: stopOf('quota', { until: SOON }), over: { otherSong: 'X', avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'another song running, auth: settings still wins', stop: stopOf('auth'), over: { otherSong: 'X', keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
     { name: 'quota spent, stopped: blocker appended, noop button', stop: stopOf('stopped'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで止めました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
+    { name: 'quota spent, silent: the head only says where it stopped', stop: stopOf('silent'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota spent, busy', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota spent with unknown reset, closed', stop: stopOf('closed'), over: { avail: { ok: false, until: 0 } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。あとで訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota stop whose own reset passed while still exhausted reads as closed + blocker', stop: stopOf('quota', { until: NOW - 1 }), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
@@ -983,6 +988,26 @@ describe('copy on the reading surface does not talk about models', () => {
       text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります',
       button: { id: 'resume', label: '続きを訳す', disabled: false },
     });
+  });
+
+  it('a silent Gemini is told as silence, not as a lost connection, and the start button stays enabled', () => {
+    const d = decide(view({ online: true, done: 0, total: 18, stop: stopOf('silent') }));
+    expect(d.state).toBe('S2f');
+    expect(d.status).toBe('AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ');
+    expect(d.status).not.toMatch(/接続/);
+    expect(d.actions[0]).toEqual({ id: 'start', label: '日本語で読む', primary: true, disabled: false });
+  });
+
+  it('a silent stop after some lines puts silence in the seam and keeps 続きを訳す enabled', () => {
+    const d = decide(view({ online: true, done: 7, total: 18, stop: stopOf('silent') }));
+    expect(d.state).toBe('S6');
+    expect(d.lines.seam!.text).toBe('AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます');
+    expect(d.lines.seam!.text).not.toMatch(/接続/);
+    expect(d.lines.seam!.button).toEqual({ id: 'resume', label: '続きを訳す', disabled: false });
+  });
+
+  it('the retranslation failure line for a silent stop does not blame the connection', () => {
+    expect(failureText(stopOf('silent'), NOW)).toBe('AIから返事がありませんでした');
   });
 
   it('no-model before any line is S2f with a plain sentence', () => {
