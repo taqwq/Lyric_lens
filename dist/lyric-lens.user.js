@@ -1274,12 +1274,14 @@ ${ask}${what}注は今回の行全体で多くても${noteBudget(targets.length)
     const lines = source.lines;
     if (lines.length < 4) return false;
     let ja = 0;
+    let kana = 0;
     for (const l of lines) {
+      if (/[぀-ヿ]/.test(l.text)) kana += 1;
       const outside = l.text.replace(/\([^)]*\)|（[^）]*）/g, "");
       const latin = (outside.match(/[A-Za-z]/g) ?? []).length;
       if (/[぀-ヿ一-鿿]/.test(outside) && latin < 3) ja += 1;
     }
-    return ja / lines.length >= 0.6;
+    return ja / lines.length >= 0.6 && kana / lines.length >= 0.3;
   }
   function missingLines(source, record) {
     if (!record) return source.unique.slice();

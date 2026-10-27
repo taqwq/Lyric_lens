@@ -73,12 +73,15 @@ export function isMostlyJapanese(source: SongSource): boolean {
   const lines = source.lines;
   if (lines.length < 4) return false;
   let ja = 0;
+  let kana = 0;
   for (const l of lines) {
+    if (/[぀-ヿ]/.test(l.text)) kana += 1;
     const outside = l.text.replace(/\([^)]*\)|（[^）]*）/g, '');
     const latin = (outside.match(/[A-Za-z]/g) ?? []).length;
     if (/[぀-ヿ一-鿿]/.test(outside) && latin < 3) ja += 1;
   }
-  return ja / lines.length >= 0.6;
+  // Kana-less CJK lyrics are Chinese: the ideograph rule alone cannot tell them apart.
+  return ja / lines.length >= 0.6 && kana / lines.length >= 0.3;
 }
 
 export function missingLines(source: SongSource, record: SongRecord | null | undefined): UniqueLine[] {

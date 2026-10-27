@@ -176,6 +176,15 @@ describe('isMostlyJapanese', () => {
     expect(isMostlyJapanese(of('I walk the quiet street', 'きみ (yeah)', 'Hold the light', 'Down the road we go'))).toBe(false);
   });
 
+  it('is false for kana-less (Chinese) lyrics', () => {
+    expect(isMostlyJapanese(of('夜深人静的街道', '我想念你的笑容', '月光照亮前路', '明天会更好'))).toBe(false);
+  });
+
+  it('needs kana in 30% of the lines: 2 of 5 passes, 1 of 5 does not', () => {
+    expect(isMostlyJapanese(of('夜深人静的街道', '我想念你的笑容', '月光照亮前路', 'きみの声', 'もういちど'))).toBe(true);
+    expect(isMostlyJapanese(of('夜深人静的街道', '我想念你的笑容', '月光照亮前路', '明天会更好', 'もういちど'))).toBe(false);
+  });
+
   it('is false below four lines', () => {
     expect(isMostlyJapanese(of('きみのこえが', '夜明け前の街を歩く', 'もういちど あしたへ'))).toBe(false);
     expect(isMostlyJapanese(of())).toBe(false);
