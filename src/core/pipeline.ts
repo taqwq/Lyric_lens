@@ -270,6 +270,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     stop = stopWithDetail(error);
   }
   if (builder.misaligned) console.warn('[Lyric Lens]', { misaligned: builder.misaligned });
+  if (parser.dropped) console.warn('[Lyric Lens]', { dropped: parser.dropped, samples: parser.droppedSamples });
 
   if (model) record.model = model;
   if (!missingLines(source, record).length) {
@@ -279,6 +280,10 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
   // Skipped lines ('gaps') only if the answer really ended; a stream that just went quiet
   // was cut, and reads "ここまで訳してあります" with 続きを訳す.
   const reason = !builder.added ? 'unusable' : finished || builder.ended ? 'gaps' : 'closed';
-  record.stop = stop ?? { reason, at: Date.now() };
+  // A line lost to an unreadable record is told apart from one the model skipped.
+  const detail = parser.dropped && (reason === 'gaps' || reason === 'closed')
+    ? { kind: 'dropped', model, status: 0, text: `dropped=${parser.dropped} ${parser.droppedSamples[0] ?? ''}`.trim().slice(0, 200) }
+    : undefined;
+  record.stop = stop ?? { reason, at: Date.now(), ...(detail ? { detail } : {}) };
   return { record, complete: false, stop: record.stop, model };
 }

@@ -356,3 +356,79 @@ describe('ProtocolParser', () => {
     expect(p.feed(`${lineRec()}\n`)).toHaveLength(1);
   });
 });
+
+describe('parseRecord: repairing and salvaging a line record', () => {
+  const head = '"t":"line","id":"L3","head":"one two three"';
+
+  it('repairs bare double quotes inside a note text and keeps the note', () => {
+    const ev = parseRecord(`{${head},"ja":"それは例だ","notes":[{"q":"one two","k":"slang","x":"English "word" here is a made-up phrase","c":false}]}`);
+    expect(ev).toEqual({
+      type: 'line', uid: 3, head: 'one two three', ja: 'それは例だ',
+      notes: [{ phrase: 'one two', kind: 'slang', text: 'English "word" here is a made-up phrase', conjecture: false }],
+    });
+  });
+
+  it('keeps an escaped quote in ja through the repair', () => {
+    const ev = parseRecord(`{${head},"ja":"彼は\\"待て\\"と言った","notes":[{"q":"one","k":"idiom","x":"the "plain" sense","c":false}]}`);
+    expect(ev).toMatchObject({ type: 'line', uid: 3, ja: '彼は"待て"と言った' });
+    expect((ev as { notes: unknown[] }).notes).toHaveLength(1);
+  });
+
+  it('salvages id, head and ja when the notes are beyond repair, with no notes', () => {
+    const ev = parseRecord(`{${head},"ja":"それは例だ","notes":[{"q":"one two","k":"slang","x":"cut {[ garbage}`);
+    expect(ev).toEqual({ type: 'line', uid: 3, head: 'one two three', ja: 'それは例だ', notes: [] });
+  });
+
+  it('keeps an escaped quote in ja when salvaging', () => {
+    const ev = parseRecord(`{${head},"ja":"彼は\\"待て\\"と言った","notes":[{"q":"one","x":"oops}`);
+    expect(ev).toMatchObject({ type: 'line', uid: 3, ja: '彼は"待て"と言った', notes: [] });
+  });
+
+  it('returns null when nothing usable survives', () => {
+    expect(parseRecord(`{${head},"notes":[{"q":"one","x":"oops}`)).toBeNull();
+    expect(parseRecord('{"t":"line","id":"L3","ja":"訳","notes":[{"x":"oops}')).toBeNull();
+    expect(parseRecord('{"t":"line","head":"one two three","ja":"訳","notes":[{"x":"oops}')).toBeNull();
+  });
+
+  it('does not salvage song or end records', () => {
+    expect(parseRecord('{"t":"song","who":"誰が","what":"何を","motifs":[{"en":"a"')).toBeNull();
+    expect(parseRecord('{"t":"end" "x"}')).toBeNull();
+  });
+});
+
+describe('ProtocolParser: dropped line records', () => {
+  const broken = '{"t":"line","id":"L5","head":"one two three","x":"oops}';
+
+  it('counts a line record that cannot be read, keeping the start of it', () => {
+    const p = new ProtocolParser();
+    expect(p.feed(`${lineRec()}\n${broken}\n${lineRec({ id: 'L6' })}\n`)).toHaveLength(2);
+    expect(p.dropped).toBe(1);
+    expect(p.droppedSamples).toEqual([broken]);
+  });
+
+  it('counts nothing for repaired records, non-line junk or an empty buffer', () => {
+    const p = new ProtocolParser();
+    p.feed('{"t":"line","id":"L1","head":"a b c","ja":"訳","notes":[{"q":"a","k":"slang","x":"a "b" c","c":false}]}\n{{{{\nnot json\n');
+    p.flush();
+    expect(p.dropped).toBe(0);
+  });
+
+  it('counts a complete final record without a newline but not one that was cut off', () => {
+    const p = new ProtocolParser();
+    p.feed(broken);
+    p.flush();
+    expect(p.dropped).toBe(1);
+    const q = new ProtocolParser();
+    q.feed(lineRec({ id: 'L2' }).slice(0, -6));
+    q.flush();
+    expect(q.dropped).toBe(0);
+  });
+
+  it('keeps only the first few samples, 300 characters each', () => {
+    const p = new ProtocolParser();
+    p.feed(`${Array.from({ length: 5 }, () => `${broken.slice(0, -5)}${'y'.repeat(400)}}`).join('\n')}\n`);
+    expect(p.dropped).toBe(5);
+    expect(p.droppedSamples).toHaveLength(3);
+    expect(p.droppedSamples[0]).toHaveLength(300);
+  });
+});

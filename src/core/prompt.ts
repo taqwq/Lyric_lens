@@ -47,7 +47,8 @@ export const SYSTEM_PROMPT = `あなたは、外国語（主に英語）のヒ�
 
 - line は指定された ID を番号順に1回ずつ、漏れなく出す。(=L7) と書かれた行は L7 の繰り返しなので出さない。
 - head には、その ID の原文の最初の3語をそのまま書く。
-- notes が無ければ空配列。g・c は不要なら省略してよい。`;
+- notes が無ければ空配列。g・c は不要なら省略してよい。
+- JSON の文字列の中で語句を引用するときは「」を使い、半角の " は書かない。`;
 
 const ABOUT_LIMIT = 1400;
 const ANNOTATION_LIMIT = 9000;

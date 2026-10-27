@@ -1099,7 +1099,8 @@ ${req.user}` : req.user }] }],
 
 - line は指定された ID を番号順に1回ずつ、漏れなく出す。(=L7) と書かれた行は L7 の繰り返しなので出さない。
 - head には、その ID の原文の最初の3語をそのまま書く。
-- notes が無ければ空配列。g・c は不要なら省略してよい。`;
+- notes が無ければ空配列。g・c は不要なら省略してよい。
+- JSON の文字列の中で語句を引用するときは「」を使い、半角の " は書かない。`;
   var ABOUT_LIMIT = 1400;
   var ANNOTATION_LIMIT = 9e3;
   var ANNOTATION_EACH = 520;
@@ -1268,6 +1269,54 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     return out;
   }
+  var LINE_RECORD = /"t"\s*:\s*"line"/;
+  function escapeStrayQuotes(text2) {
+    let out = "";
+    let inString = false;
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
+      if (!inString) {
+        if (ch === '"') inString = true;
+        out += ch;
+      } else if (ch === "\\") {
+        out += ch + (text2[i + 1] ?? "");
+        i += 1;
+      } else if (ch === '"') {
+        let j = i + 1;
+        while (j < text2.length && /\s/.test(text2[j])) j += 1;
+        if (j >= text2.length || ",:}]".includes(text2[j])) {
+          inString = false;
+          out += ch;
+        } else {
+          out += '\\"';
+        }
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+  function unescapeString(body) {
+    try {
+      return JSON.parse(`"${body}"`);
+    } catch {
+      return null;
+    }
+  }
+  function salvageLine(json) {
+    if (!LINE_RECORD.test(json)) return null;
+    const idText = /"id"\s*:\s*"(L?\d{1,4})"/.exec(json)?.[1];
+    const headBody = /"head"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(json)?.[1];
+    const jaBody = /"ja"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"notes"/.exec(json)?.[1];
+    if (idText == null || headBody == null || jaBody == null) return null;
+    const uid = uidOf(idText);
+    const head = unescapeString(headBody);
+    const ja = unescapeString(jaBody);
+    if (uid == null || head == null || ja == null) return null;
+    const text2 = stripWrappingQuotes(ja.trim());
+    if (!text2) return null;
+    return { type: "line", uid, ja: text2, notes: [], ...head.trim() ? { head: head.trim() } : {} };
+  }
   function parseRecord(raw) {
     let line = raw.trim();
     if (!line || line.startsWith("```")) return null;
@@ -1275,11 +1324,16 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const start = line.indexOf("{");
     const end = line.lastIndexOf("}");
     if (start < 0 || end <= start) return null;
+    const json = line.slice(start, end + 1);
     let data;
     try {
-      data = JSON.parse(line.slice(start, end + 1));
+      data = JSON.parse(json);
     } catch {
-      return null;
+      try {
+        data = JSON.parse(escapeStrayQuotes(json));
+      } catch {
+        return salvageLine(json);
+      }
     }
     const t = str(data.t ?? data.type).toLowerCase();
     if (t === "end") return { type: "end" };
@@ -1303,13 +1357,25 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var ProtocolParser = class {
     constructor() {
       __publicField(this, "buffer", "");
+      /** Line records that could not be read at all, counted across attempts. */
+      __publicField(this, "dropped", 0);
+      /** The first 300 characters of the first few of them, for the console. */
+      __publicField(this, "droppedSamples", []);
+    }
+    parse(raw, complete) {
+      const ev = parseRecord(raw);
+      if (!ev && LINE_RECORD.test(raw) && (complete || raw.trimEnd().endsWith("}"))) {
+        this.dropped += 1;
+        if (this.droppedSamples.length < 3) this.droppedSamples.push(raw.trim().slice(0, 300));
+      }
+      return ev;
     }
     feed(chunk) {
       this.buffer += chunk;
       const events = [];
       let nl;
       while ((nl = this.buffer.indexOf("\n")) >= 0) {
-        const ev = parseRecord(this.buffer.slice(0, nl));
+        const ev = this.parse(this.buffer.slice(0, nl), true);
         this.buffer = this.buffer.slice(nl + 1);
         if (ev) events.push(ev);
       }
@@ -1322,7 +1388,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     /** The last line has no newline; a JSON record is self-delimiting, so it is safe to
      *  parse even after a cut (a truncated record simply fails to parse). */
     flush() {
-      const ev = parseRecord(this.buffer);
+      const ev = this.parse(this.buffer, false);
       this.buffer = "";
       return ev ? [ev] : [];
     }
@@ -1611,13 +1677,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       stop = stopWithDetail(error);
     }
     if (builder.misaligned) console.warn("[Lyric Lens]", { misaligned: builder.misaligned });
+    if (parser.dropped) console.warn("[Lyric Lens]", { dropped: parser.dropped, samples: parser.droppedSamples });
     if (model) record.model = model;
     if (!missingLines(source, record).length) {
       delete record.stop;
       return { record, complete: true, model };
     }
     const reason = !builder.added ? "unusable" : finished || builder.ended ? "gaps" : "closed";
-    record.stop = stop ?? { reason, at: Date.now() };
+    const detail = parser.dropped && (reason === "gaps" || reason === "closed") ? { kind: "dropped", model, status: 0, text: `dropped=${parser.dropped} ${parser.droppedSamples[0] ?? ""}`.trim().slice(0, 200) } : void 0;
+    record.stop = stop ?? { reason, at: Date.now(), ...detail ? { detail } : {} };
     return { record, complete: false, stop: record.stop, model };
   }
 
