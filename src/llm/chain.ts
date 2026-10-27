@@ -473,10 +473,11 @@ export async function generateWithFallback(
   /** How long `model` may stay silent before its first text, or null when it is Flash with less
    *  than FLASH_MIN_ATTEMPT_MS of the budget left. The budget needs somewhere faster to hand over
    *  to (`handOver`: a Flash-Lite candidate behind it; Gemma is slower than a slow Flash), and
-   *  never applies to a pinned model or once Flash has started writing. */
-  const firstTextTimeout = (model: string, handOver: boolean): number | null => {
+   *  never applies to a pinned model or once Flash has started writing. `extraMs` asks it ahead of
+   *  time: the same question as if that much time had already gone by (an inline wait). */
+  const firstTextTimeout = (model: string, handOver: boolean, extraMs = 0): number | null => {
     if (onlyModels?.length || flashSpoke || !handOver || modelTier(model) !== 0) return FIRST_TEXT_TIMEOUT_MS;
-    const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt);
+    const left = FLASH_BUDGET_MS - (Date.now() - startedCallAt) - extraMs;
     return left < FLASH_MIN_ATTEMPT_MS ? null : Math.min(left, FIRST_TEXT_TIMEOUT_MS);
   };
   /** Flash was too slow: the next calls put Flash-Lite first for a while. Written once per call. */
@@ -583,7 +584,10 @@ export async function generateWithFallback(
           }
           // Silent for a shortened first-text timeout: the budget ended it, not a full 30 s of silence.
           budgetCut = error.kind === 'timeout' && firstTextMs === null && firstTextTimeoutMs < FIRST_TEXT_TIMEOUT_MS;
-          if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS) {
+          // A wait that would leave Flash no budget for the retry is not served: the model is
+          // passed over at once (and benched for the rate limit) and Flash-Lite takes over.
+          if (error.kind === 'rate' && attempt === 1 && error.retryAfterMs > 0 && error.retryAfterMs <= MAX_INLINE_WAIT_MS
+            && firstTextTimeout(model, handOver, error.retryAfterMs + 500) !== null) {
             for (let left = Math.ceil((error.retryAfterMs + 500) / 1000); left > 0; left -= 1) {
               onStatus?.(`${shortModel(model)} の回数制限 · ${left}秒後に再試行`);
               await sleep(1000, signal);

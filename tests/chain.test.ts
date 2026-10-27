@@ -1617,6 +1617,58 @@ describe('generateWithFallback: the Flash time budget (fake timers)', () => {
     expect(await readDegraded()).toEqual({ [degradedKey]: NOW + 14_000 + 10 * MIN });
   });
 
+  describe('an inline per-minute wait the Flash budget could not use', () => {
+    const LINE = 'L1: Cold coffee, warm phone, your name on the screen\n';
+
+    it('is not served: Flash is passed over at once and benched, and Flash-Lite answers', async () => {
+      listModels(A, C);
+      reply(A, slowly(1_000, rateLimited('20s'))); // a second retry of A would have no budget: 20 s + 0.5 s > what is left
+      reply(C, ok(LINE));
+      const run = start(gemini());
+      const done = settle(run);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(generated).toEqual([A, C]); // Flash-Lite was asked within seconds, not after a 21 s countdown
+      const { result, error } = await done;
+      expect(error).toBeUndefined();
+      expect(result?.model).toBe(C);
+      expect(run.chunks.join('')).toBe(LINE);
+      expect(run.statuses.some((s) => s.includes('秒後に再試行'))).toBe(false);
+      expect(run.statuses).toContain('3.5-flash が回数制限 · 次へ');
+      expect((await readCooldowns())[cooldownKey(A)]?.reason).toBe('rate');
+      expect(await readDegraded()).toEqual({}); // a rate limit is not Flash being slow
+    });
+
+    it('is still served when the budget can take the retry (control: 5 s)', async () => {
+      listModels(A, C);
+      reply(A, slowly(1_000, rateLimited('5s')), ok(LINE));
+      reply(C, ok('L1: not asked\n'));
+      const run = start(gemini());
+      const done = settle(run);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(generated).toEqual([A]);
+      await vi.advanceTimersByTimeAsync(7_000);
+      const { result } = await done;
+      expect(result?.model).toBe(A);
+      expect(generated).toEqual([A, A]);
+      expect(run.statuses).toContain('3.5-flash の回数制限 · 6秒後に再試行');
+      expect(await readDegraded()).toEqual({});
+    });
+
+    it('is still served with no Flash-Lite behind Flash, since there is nowhere to hand over to (control)', async () => {
+      listModels(A);
+      reply(A, slowly(1_000, rateLimited('20s')), ok(LINE));
+      const run = start(gemini());
+      const done = settle(run);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(generated).toEqual([A]);
+      await vi.advanceTimersByTimeAsync(22_000);
+      const { result } = await done;
+      expect(result?.model).toBe(A);
+      expect(generated).toEqual([A, A]);
+      expect(run.statuses).toContain('3.5-flash の回数制限 · 21秒後に再試行');
+    });
+  });
+
   it('never aborts a Flash model that is writing, however late it finishes', async () => {
     const timeouts: Array<number | undefined> = [];
     http.mockImplementation(async (req) => {
