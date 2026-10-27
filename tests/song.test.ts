@@ -282,6 +282,19 @@ describe('headWords', () => {
 });
 
 describe('headMatches', () => {
+  it('accepts a head with or without the leading parenthesised ad-lib', () => {
+    const text = '(Ayy) Pull up in the dark';
+    expect(headMatches('Pull up in', text)).toBe(true);
+    expect(headMatches('(Ayy) Pull up', text)).toBe(true);
+    expect(headMatches('Ayy pull up', text)).toBe(true);
+    expect(headMatches('Walk down the', text)).toBe(false);
+  });
+
+  it('strips several leading groups, but only at the start', () => {
+    expect(headMatches('Pull up in', '(Ayy) (Yeah) Pull up in the dark')).toBe(true);
+    expect(headMatches('Pull up in', 'Walk (Pull up in) the dark')).toBe(false);
+  });
+
   it('accepts a missing or empty head (the line is then trusted)', () => {
     expect(headMatches(undefined, 'I woke up early')).toBe(true);
     expect(headMatches('', 'I woke up early')).toBe(true);

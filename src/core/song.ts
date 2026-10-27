@@ -116,7 +116,15 @@ export function headMatches(head: string | undefined, text: string): boolean {
   if (!head) return true;
   const want = headWords(head).slice(0, 3);
   if (!want.length) return true;
-  const have = headWords(text);
+  if (wordsMatch(want, headWords(text))) return true;
+  // A model often drops a leading ad-lib: "(Ayy) Pull up in" is echoed as "Pull up in".
+  const bare = text.replace(LEADING_GROUPS, '');
+  return bare !== text && wordsMatch(want, headWords(bare));
+}
+
+const LEADING_GROUPS = /^\s*(?:[（(][^（）()]*[）)]\s*)+/;
+
+function wordsMatch(want: string[], have: string[]): boolean {
   const hits = want.filter((w, i) => have[i] === w || have[i]?.replace(/in'?$/, 'ing') === w.replace(/in'?$/, 'ing')).length;
   return hits >= Math.min(2, want.length) || have.join(' ').startsWith(want.join(' '));
 }
