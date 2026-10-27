@@ -11,7 +11,7 @@ import type { GenerateRequest, GenerateResult, ModelInfo } from './types';
 
 const COOLDOWN_KEY = 'll3:cooldowns';
 const MODELS_KEY = 'll3:models:';
-const MODEL_LIST_TTL = 24 * 60 * 60 * 1000;
+const MODEL_LIST_TTL = 7 * 24 * 60 * 60 * 1000;
 const MAX_INLINE_WAIT_MS = 30_000;
 
 /* ---------- cooldowns ---------- */
@@ -225,18 +225,28 @@ export async function availability(apiKey: string): Promise<Availability> {
 
 /* ---------- model lists ---------- */
 
+/** The model list: a cached one up to a week old; otherwise fetched. If the fetch fails, the stale
+ *  cached list of any age is still better than the hard-coded one (an explicit refresh reports the failure). */
 export async function modelsFor(apiKey: string, opts: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
   const key = MODELS_KEY + cooldownId(apiKey, '');
-  if (!opts.refresh) {
-    const cached = await getJSON<{ at: number; models: ModelInfo[] } | null>(key, null);
-    if (cached && Date.now() - cached.at < MODEL_LIST_TTL && cached.models.length) return cached.models;
+  const cached = await getJSON<{ at: number; models: ModelInfo[] } | null>(key, null);
+  if (!opts.refresh && cached && Date.now() - cached.at < MODEL_LIST_TTL && cached.models.length) return cached.models;
+  try {
+    const models = await new GeminiProvider(apiKey).listModels(opts.signal);
+    await setJSON(key, { at: Date.now(), models });
+    return models;
+  } catch (error) {
+    const recoverable = error instanceof LLMError && error.kind !== 'auth' && error.kind !== 'aborted';
+    if (!opts.refresh && recoverable && cached?.models.length) return cached.models;
+    throw error;
   }
-  const models = await new GeminiProvider(apiKey).listModels(opts.signal);
-  await setJSON(key, { at: Date.now(), models });
-  return models;
 }
 
-const FALLBACK_GEMINI = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+/** Only for a first run whose model list cannot be fetched (ids the live list returned on 2026-10-27). */
+const FALLBACK_GEMINI = [
+  'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash',
+  'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemma-4-31b-it',
+];
 
 async function candidateModels(apiKey: string, signal?: AbortSignal): Promise<string[]> {
   try {

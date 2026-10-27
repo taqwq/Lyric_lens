@@ -10,6 +10,7 @@ import {
   keyStatus as keyStatusOf,
   keyTag as keyTagOf,
   markKey as markKeyOf,
+  modelsFor,
   nextPacificMidnight,
   orderByHealth,
   selectCandidates,
@@ -740,6 +741,38 @@ describe('generateWithFallback: repeated silence', () => {
     reply(B, ok('L1: あ\n'));
     const result = await start(gemini()).promise;
     expect(result.model).toBe(B);
+  });
+});
+
+describe('modelsFor: caching', () => {
+  const key = () => `ll3:models:${cooldownKey('')}`;
+  const stored = (at: number) => setJSON(key(), { at, models: [{ id: C, label: C, rank: 135 }] });
+  const listCalls = () => http.mock.calls.filter(([r]) => r.url.includes('/v1beta/models?')).length;
+
+  it('uses a list fetched six days ago without a request', async () => {
+    await stored(Date.now() - 6 * DAY);
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+    expect(listCalls()).toBe(0);
+  });
+
+  it('fetches again after a week and stores the new list', async () => {
+    await stored(Date.now() - 8 * DAY);
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual(expect.arrayContaining([A, B, C]));
+    expect(listCalls()).toBe(1);
+  });
+
+  it('serves the stale list of any age when the refresh fails', async () => {
+    await stored(Date.now() - 90 * DAY);
+    listReply = { status: 500, body: 'internal error' };
+    expect((await modelsFor('test-key')).map((m) => m.id)).toEqual([C]);
+  });
+
+  it('does not hide an auth error behind the stale list, nor an explicit refresh failing', async () => {
+    await stored(Date.now() - 90 * DAY);
+    listReply = unauthorized();
+    await expect(modelsFor('test-key')).rejects.toMatchObject({ kind: 'auth' });
+    listReply = { status: 500, body: 'internal error' };
+    await expect(modelsFor('test-key', { refresh: true })).rejects.toBeInstanceOf(LLMError);
   });
 });
 

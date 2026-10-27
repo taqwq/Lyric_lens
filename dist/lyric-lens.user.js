@@ -581,7 +581,7 @@ ${req.user}` : req.user }] }],
   // src/llm/chain.ts
   var COOLDOWN_KEY = "ll3:cooldowns";
   var MODELS_KEY = "ll3:models:";
-  var MODEL_LIST_TTL = 24 * 60 * 60 * 1e3;
+  var MODEL_LIST_TTL = 7 * 24 * 60 * 60 * 1e3;
   var MAX_INLINE_WAIT_MS = 3e4;
   function keyTag(apiKey) {
     let h2 = 0;
@@ -722,15 +722,30 @@ ${req.user}` : req.user }] }],
   }
   async function modelsFor(apiKey, opts = {}) {
     const key = MODELS_KEY + cooldownId(apiKey, "");
-    if (!opts.refresh) {
-      const cached2 = await getJSON(key, null);
-      if (cached2 && Date.now() - cached2.at < MODEL_LIST_TTL && cached2.models.length) return cached2.models;
+    const cached2 = await getJSON(key, null);
+    if (!opts.refresh && cached2 && Date.now() - cached2.at < MODEL_LIST_TTL && cached2.models.length) return cached2.models;
+    try {
+      const models = await new GeminiProvider(apiKey).listModels(opts.signal);
+      await setJSON(key, { at: Date.now(), models });
+      return models;
+    } catch (error) {
+      const recoverable = error instanceof LLMError && error.kind !== "auth" && error.kind !== "aborted";
+      if (!opts.refresh && recoverable && cached2?.models.length) return cached2.models;
+      throw error;
     }
-    const models = await new GeminiProvider(apiKey).listModels(opts.signal);
-    await setJSON(key, { at: Date.now(), models });
-    return models;
   }
-  var FALLBACK_GEMINI = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
+  var FALLBACK_GEMINI = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemma-4-31b-it"
+  ];
   async function candidateModels(apiKey, signal) {
     try {
       const models = await modelsFor(apiKey, { signal });
