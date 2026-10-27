@@ -714,6 +714,35 @@ describe('generateWithFallback: tier slots', () => {
   });
 });
 
+describe('generateWithFallback: repeated silence', () => {
+  const silent = (): Reply => ({ throws: new LLMError('timeout', '応答が途切れました。') });
+
+  it('stops after two silent models in a row without trying the rest', async () => {
+    reply(A, silent());
+    reply(B, silent());
+    reply(C, ok('should not be used'));
+    const { error } = await settle(start(gemini()));
+    expect(error?.kind).toBe('timeout');
+    expect(generated).toEqual([A, B]);
+  });
+
+  it('does not count silences that another failure separates', async () => {
+    reply(A, silent());
+    reply(B, dailyQuota());
+    reply(C, silent());
+    const { error } = await settle(start(gemini()));
+    expect(generated).toEqual([A, B, C]);
+    expect(error).toBeDefined();
+  });
+
+  it('still succeeds when the second model answers after one silence', async () => {
+    reply(A, silent());
+    reply(B, ok('L1: あ\n'));
+    const result = await start(gemini()).promise;
+    expect(result.model).toBe(B);
+  });
+});
+
 describe('generateWithFallback: partial output', () => {
   it('returns the result with `error` set when the stream breaks after some text, without trying other models', async () => {
     reply(A, { partial: textEvent('L1: あ\n'), throws: new LLMError('network', 'ネットワークに接続できませんでした。') });
@@ -1147,14 +1176,18 @@ describe('generateWithFallback: model health (fake timers)', () => {
       for (const model of [A, B, C]) reply(model, { throws: silent(), hangMs: 30_000 });
       const first = await call(90_000);
       expect(first.error?.kind).toBe('timeout');
-      expect(generated).toEqual([A, B, C]);
+      expect(generated).toEqual([A, B]); // two silent models in a row end the call
+      const third = await call(90_000);
+      expect(third.error?.kind).toBe('timeout');
+      expect(generated).toEqual([A, B, C]); // the next call reaches the one that was left
 
       generated = [];
+      const aUntil = (await readCooldowns())[cooldownKey(A)]!.until;
       const second = await call();
       expect(generated).toEqual([]); // nothing is asked
       expect(second.error?.kind).toBe('rate');
       expect(second.error?.status).toBe(429);
-      expect(second.error?.retryAfterMs).toBe(30_000 + 5 * MIN - 90_000); // A is the first to come back
+      expect(second.error?.retryAfterMs).toBe(aUntil - Date.now()); // A is the first to come back
       // the head's "worth a tap" check agrees: this is a short wait, not "out for the day"
       expect(await availability(gemini())).toEqual({ ok: true, until: 0 });
       expect(await keyStatus(gemini())).toEqual({ kind: 'ok' });

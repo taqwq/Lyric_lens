@@ -292,6 +292,7 @@ export interface ChainOptions {
 // so the reader must not be told to wait until tomorrow.
 const PRIORITY: LLMErrorKind[] = ['auth', 'rate', 'overloaded', 'blocked', 'timeout', 'network', 'quota', 'bad-request', 'not-found', 'empty', 'unusable', 'unknown'];
 /** When every model is merely busy, wait and go around again before giving up. */
+const MAX_SILENT_IN_A_ROW = 2;
 const BUSY_PASS_WAITS_MS = [10_000, 25_000];
 
 function pickReportedError(errors: LLMError[]): LLMError {
@@ -359,6 +360,8 @@ export async function generateWithFallback(
   };
 
   let keyRejected = false;
+  /** Silent models in a row: two mean Gemini itself is not answering, and each costs a 30 s wait. */
+  let silentInARow = 0;
   for (let pass = 0; pass <= BUSY_PASS_WAITS_MS.length && !keyRejected; pass += 1) {
     if (pass > 0) {
       const wait = BUSY_PASS_WAITS_MS[pass - 1]!;
@@ -459,6 +462,8 @@ export async function generateWithFallback(
       if (!error) continue;
       passErrors.push(error);
       await remember(model, error);
+      silentInARow = error.kind === 'timeout' ? silentInARow + 1 : 0;
+      if (silentInARow >= MAX_SILENT_IN_A_ROW) throw error;
       if (error.kind === 'overloaded') busyNow.add(cooldownId(apiKey, model));
       else busyNow.delete(cooldownId(apiKey, model));
       if (error.kind === 'auth') {
