@@ -321,6 +321,32 @@ describe('S3 reading the whole song first', () => {
   });
 });
 
+describe('S6 a per-minute stop next to a spent daily quota names one limit', () => {
+  // 'Ran it up twice, still nobody clapping'
+  // The per-minute stop is still live (until ahead): once its own wait has passed it reads as closed.
+  const spent = { ok: false, until: NOW + 5 * HOUR } as const;
+  const resting = (reason: 'rate' | 'busy') =>
+    decide(view({ done: 9, total: 30, stop: { reason, at: NOW - 30_000, until: NOW + 30_000 }, avail: spent }));
+
+  it('rate: ここで途切れました, then the quota; no 回数制限', () => {
+    const d = resting('rate');
+    expect(d.state).toBe('S6');
+    expect(d.lines.seam!.text.startsWith('ここで途切れました。今日の無料枠は終わりました')).toBe(true);
+    expect(d.lines.seam!.text).not.toContain('回数制限');
+    expect(d.lines.seam!.button.disabled).toBe(true);
+    expect(d.actions[0]).toMatchObject({ disabled: true });
+  });
+
+  it('busy: the same', () => {
+    expect(resting('busy').lines.seam!.text.startsWith('ここで途切れました。今日の無料枠')).toBe(true);
+  });
+
+  it('another song running keeps the reason sentence and the lock blocker', () => {
+    const d = decide(view({ done: 9, total: 30, stop: { reason: 'rate', at: NOW - 30_000, until: NOW + 30_000 }, otherSong: 'Midnight Static' }));
+    expect(d.lines.seam!.text.startsWith('AIの回数制限にかかりました。別の曲を訳し終えると続きを訳せます')).toBe(true);
+  });
+});
+
 describe('noteTone: only a reason for a disabled button reads as a reason', () => {
   // 'Gold on my neck like the sun owe me rent' / 'Told her come through, she said text me again'
   it('a spent daily quota on a song with gaps: reason note beside a disabled primary', () => {
@@ -598,7 +624,7 @@ describe('S6 interrupted', () => {
     { name: 'another song running, quota: the quota sentence already says it', stop: stopOf('quota', { until: SOON }), over: { otherSong: 'X', avail: { ok: false, until: SOON } }, seam: { text: '今日の無料枠が終わりました。15:00ごろから続きを訳せます', button: RESUME_WAITING }, explainWhenHidden: true },
     { name: 'another song running, auth: settings still wins', stop: stopOf('auth'), over: { otherSong: 'X', keyBad: true }, seam: { text: 'APIキーが使えなくなりました。設定でキーを入れ直してください', button: OPEN_SETTINGS }, explainWhenHidden: true },
     { name: 'quota spent, stopped: blocker appended, noop button', stop: stopOf('stopped'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで止めました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
-    { name: 'quota spent, busy', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'AIが混み合っていて、ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
+    { name: 'quota spent, busy', stop: stopOf('busy'), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここで途切れました。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota spent with unknown reset, closed', stop: stopOf('closed'), over: { avail: { ok: false, until: 0 } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。あとで訳せます', button: NOOP }, explainWhenHidden: true },
     { name: 'quota stop whose own reset passed while still exhausted reads as closed + blocker', stop: stopOf('quota', { until: NOW - 1 }), over: { avail: { ok: false, until: SOON } }, seam: { text: 'ここまで訳してあります。今日の無料枠は終わりました。15:00から訳せます', button: NOOP }, explainWhenHidden: true },
   ];
@@ -982,8 +1008,20 @@ describe('seamFor', () => {
   });
 
   it('a blocker on a non-quota reason is appended after the first sentence and the button is a disabled noop', () => {
-    expect(seamFor(stopOf('busy'), i, 'BLOCK')).toEqual({
+    expect(seamFor(stopOf('network'), i, 'BLOCK')).toEqual({
+      text: '接続が切れました。BLOCK',
+      button: { id: 'noop', label: '続きを訳す', disabled: true },
+    });
+    // The lock blocker (another song running) keeps the join for every reason.
+    expect(seamFor(stopOf('busy'), view({ otherSong: 'X' }), 'BLOCK')).toEqual({
       text: 'AIが混み合っていて、ここで途切れました。BLOCK',
+      button: { id: 'noop', label: '続きを訳す', disabled: true },
+    });
+  });
+
+  it.each<StopReason>(['rate', 'busy', 'no-model'])('a transient %s stop next to a spent quota only says where it stopped', (reason) => {
+    expect(seamFor(stopOf(reason), i, 'BLOCK')).toEqual({
+      text: 'ここで途切れました。BLOCK',
       button: { id: 'noop', label: '続きを訳す', disabled: true },
     });
   });

@@ -154,7 +154,14 @@ export function failureText(stop: StopInfo, now: number): string {
 export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null): SeamSpec {
   const text = seamText(stop, i);
   if (stop.reason === 'auth') return { text, button: { id: 'settings', label: '設定を開く' } };
-  if (blocker && stop.reason !== 'quota') return { text: `${text.split('。')[0]}。${blocker}`, button: { id: 'noop', label: '続きを訳す', disabled: true } };
+  if (blocker && stop.reason !== 'quota') {
+    // A per-minute or busy stop next to a spent daily quota would name two limits: the quota
+    // is the one that matters, so the first sentence only says where it stopped.
+    const transient = stop.reason === 'rate' || stop.reason === 'busy' || stop.reason === 'no-model';
+    const quotaBlocker = !i.otherSong;
+    const head = transient && quotaBlocker ? 'ここで途切れました' : text.split('。')[0];
+    return { text: `${head}。${blocker}`, button: { id: 'noop', label: '続きを訳す', disabled: true } };
+  }
   let disabled = Boolean(blocker);
   if (stop.reason === 'rate' && stop.until && i.now < stop.until) disabled = true;
   if (stop.reason === 'network' && !i.online) disabled = true;
