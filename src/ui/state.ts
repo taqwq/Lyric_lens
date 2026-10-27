@@ -29,6 +29,8 @@ export interface ViewInput {
   online: boolean;
   /** Answers arrive incrementally here (transportStreams()). */
   streams: boolean;
+  /** How long this tab's request has been waiting, in ms (undefined when none runs here). */
+  waitedMs?: number;
   /** 訳を隠す is on. */
   hidden: boolean;
   /** A key is saved. */
@@ -174,11 +176,16 @@ export function decide(i: ViewInput): Decision {
   // S3 / S4: this tab is writing this song. Arriving once the preface or any line is in.
   if (i.running === 'here') {
     const arriving = i.hasPreface || i.done > 0;
+    // A slow first line reads the same as a hung one: say the wait is expected (no model, quota or switching).
+    const slow = !arriving && (i.waitedMs ?? 0) >= 15_000;
+    const wait = '返事を待っています。混んでいると1分ほどかかることもあります';
+    const buffered = 'この環境では訳がまとめて届きます';
+    const note = slow && !i.streams ? `${wait} · ${buffered}` : slow ? wait : !i.streams ? buffered : undefined;
     return {
       state: arriving ? 'S4' : 'S3',
       status: arriving ? '' : '曲全体を読んでいます',
       actions: arriving ? [STOP, hide, SETTINGS] : [STOP],
-      ...(i.streams ? {} : { note: 'この環境では訳がまとめて届きます' }),
+      ...(note ? { note } : {}),
       preface: i.hasPreface,
       lines: writing,
     };

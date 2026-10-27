@@ -30,6 +30,7 @@ interface Run {
   controller: AbortController;
   saver: SaveQueue;
   lock: LockHandle;
+  startedAt: number;
 }
 
 type Kind = 'start' | 'resume' | 'retranslate';
@@ -407,6 +408,7 @@ export class App {
       now: Date.now(),
       online: navigator.onLine,
       streams: transportStreams(),
+      waitedMs: here ? Date.now() - here.startedAt : undefined,
       hidden: settings.hideTranslation,
       hasKey: hasKey(settings),
       keyBad: this.keyBad,
@@ -534,6 +536,7 @@ export class App {
     this.starting = true;
     let lock: LockHandle | null = null;
     let run: Run | null = null;
+    let wakeSlow: ReturnType<typeof setTimeout> | undefined;
     const id = this.identity;
     // A retranslation is confirmed in the settings sheet, away from the page: if it cannot
     // start, say so in the head row instead of silently doing nothing.
@@ -578,8 +581,10 @@ export class App {
       // leaves a resumable song rather than one that looks finished.
       record.stop = { reason: 'closed', at: Date.now() };
 
-      run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock };
+      run = { id, title: record.title, record, retranslate, controller: new AbortController(), saver: new SaveQueue(), lock, startedAt: Date.now() };
       this.run = run;
+      // The slow-first-line sentence appears once 15 s have passed; no state change wakes a render by itself.
+      wakeSlow = setTimeout(() => this.scheduleRender(), 15_100);
       this.starting = false;
       this.fromCache = false;
       this.notice = null;
@@ -665,6 +670,7 @@ export class App {
         document.removeEventListener('visibilitychange', hiddenNow);
       }
     } finally {
+      clearTimeout(wakeSlow);
       this.starting = false;
       // A storage failure while releasing must not leave this.run set (the tab would stay
       // stuck until reload). run is cleared only after release, so a new translate cannot
