@@ -1,8 +1,9 @@
 /*
  * The ruled paper: one node under every lyric line (docs/DESIGN.md §2 row 3). A node is an
- * empty slot, the next slot (breathing), a filled translation or a gap. Where an interrupted
- * translation stopped, one more node, the seam, sits between the last translated line and the
- * plain English that follows. Rendering is idempotent: nodes are reused in place.
+ * empty slot, the next slot (breathing), a filled translation, a gap (――) or, under a line
+ * that is only sounds, a ♪. Where an interrupted translation stopped, one more node, the seam,
+ * sits between the last translated line and the plain English that follows. Rendering is
+ * idempotent: nodes are reused in place.
  */
 import { splitAdlibs, visibleJa } from '../core/adlib';
 import { NOTE_LABELS, type SongRecord } from '../core/types';
@@ -19,7 +20,7 @@ export interface LinesInput {
   record: SongRecord | null;
   /** Missing lines show empty ruled slots (waiting, arriving, interrupted). */
   slots: boolean;
-  /** Missing lines show a quiet "—" instead (lines the model skipped). */
+  /** Missing lines show a quiet "――" instead (lines the model skipped). */
   gaps: boolean;
   /** The first empty slot breathes while a request is in flight. */
   breathing: boolean;
@@ -36,7 +37,10 @@ export interface LinesInput {
   onMarkHover?: (index: number, on: boolean) => void;
 }
 
-type State = 'empty' | 'next' | 'filled' | 'gap';
+type State = 'empty' | 'next' | 'filled' | 'gap' | 'voice';
+
+/** Kana or kanji (as in song.ts): a line that is Japanese already needs no row. */
+const JAPANESE = /[぀-ヿ一-鿿]/;
 
 /** Within the viewport ±600 px: only those slots are worth animating. */
 function nearViewport(anchor: Node): boolean {
@@ -95,16 +99,21 @@ export class LineRenderer {
     // With a seam to show, writing stopped at the frontier: from there on the page is plain
     // English, even where a repeat is already translated, until the reader resumes.
     const stopAt = input.seam && frontier >= 0 ? frontier : -1;
+    // Rows are drawn at all: a translation is being written, was cut short, or is on the page.
+    const ruled = input.slots || input.gaps || Boolean(input.seam) || lastFilled >= 0;
     page.source.lines.forEach((line, i) => {
       const anchor = page.anchors[i];
       const result = record?.lines[line.key];
       // What is left to show once the sounds and an echo of the English are taken out (adlib.ts).
       const ja = result?.ja ? visibleJa(result.ja, line.text) : '';
       let state: State | null = null;
-      // Sounds get no row, even where an older edition stored one (ウー、オー).
-      if (line.sound) state = null;
-      else if (stopAt >= 0 && i >= stopAt) state = null;
-      else if (result?.ja) state = ja ? 'filled' : null;
+      if (stopAt >= 0 && i >= stopAt) state = null;
+      // A line of sounds is never written: wherever rows are drawn, its row is a quiet ♪, so it
+      // reads as done rather than missing, even where an older edition stored one (ウー、オー).
+      else if (line.sound) state = ruled ? 'voice' : null;
+      // So is a row with nothing left once its sounds go, or one that repeats its English line
+      // (the prompt leaves nothing but sounds as written), unless the line was Japanese already.
+      else if (result?.ja) state = ja ? 'filled' : JAPANESE.test(line.text) ? null : 'voice';
       else if (input.gaps) state = 'gap';
       else if (input.slots) state = i < frontier && lastFilled > i ? 'gap' : input.breathing && i === frontier ? 'next' : 'empty';
 
@@ -140,7 +149,7 @@ export class LineRenderer {
           el.dataset.ink = '';
           setTimeout(() => { if (el) delete el.dataset.ink; }, 260);
         }
-        if (input.opening && isNew && (state === 'empty' || state === 'next') && nearViewport(anchor)) {
+        if (input.opening && isNew && (state === 'empty' || state === 'next' || state === 'voice') && nearViewport(anchor)) {
           const node = el;
           node.dataset.enter = '';
           const done = () => { delete node.dataset.enter; };
@@ -222,6 +231,7 @@ export class LineRenderer {
     if (state === 'empty') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
     if (state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' }, h('span', { class: 'll-pen' }))];
     if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'この行は訳せていません' }, '――')];
+    if (state === 'voice') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': '声だけの行' }, '♪')];
     // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
     const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');
     const out: Node[] = [h('span', { class: 'll-ja' }, main, tail ? h('span', { class: 'll-adlib' }, tail) : null)];

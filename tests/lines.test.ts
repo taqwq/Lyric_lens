@@ -883,48 +883,78 @@ describe('lines of sounds', () => {
     p = readPage()!;
   });
 
-  it('get no node in any state', () => {
+  it('show a quiet ♪ wherever rows are drawn, and nothing on a plain page', () => {
     const r = new LineRenderer();
+    r.render(input(p));
+    expect(states(r, p)).toEqual([null, null, null, null]);
     r.render(input(p, { slots: true }));
-    expect(states(r, p)).toEqual(['empty', null, 'empty', null]);
+    expect(states(r, p)).toEqual(['empty', 'voice', 'empty', 'voice']);
     r.render(input(p, { gaps: true }));
-    expect(states(r, p)).toEqual(['gap', null, 'gap', null]);
+    expect(states(r, p)).toEqual(['gap', 'voice', 'gap', 'voice']);
+    const mark = r.nodeFor(1)!.querySelector('.ll-ja')!;
+    expect(mark.textContent).toBe('♪');
+    expect(mark.getAttribute('role')).toBe('img');
+    expect(mark.getAttribute('aria-label')).toBe('声だけの行');
   });
 
-  it('an older edition that stored them (ウォー、イェー) does not draw them', () => {
+  it('an older edition that stored them (ウォー、イェー) shows the ♪ instead', () => {
     const r = new LineRenderer();
     r.render(input(p, { record: record(p, { 0: 'ひとりで歩く', 1: 'ウォー、ウォー', 2: '夜を抜けて', 3: '（イェー、イェー）' }) }));
-    expect(states(r, p)).toEqual(['filled', null, 'filled', null]);
-    expect(llLines()).toHaveLength(2);
+    expect(states(r, p)).toEqual(['filled', 'voice', 'filled', 'voice']);
+    expect(llLines().map((el) => el.textContent)).toEqual(['ひとりで歩く', '♪', '夜を抜けて', '♪']);
   });
 
   it('the pen and the seam skip them: the frontier is the next line with words', () => {
     const r = new LineRenderer();
     const rec = record(p, { 0: 'ひとりで歩く' });
     r.render(input(p, { record: rec, slots: true, breathing: true }));
-    expect(states(r, p)).toEqual(['filled', null, 'next', null]);
+    expect(states(r, p)).toEqual(['filled', 'voice', 'next', 'voice']);
     r.render(input(p, { record: rec, seam: seamOf() }));
-    // everything above the seam is done, the sound line included
-    expect(r.seamNode()!.previousSibling).toBe(p.anchors[1]);
+    // everything above the seam is done, the sound line included; below it the page is plain
+    expect(states(r, p)).toEqual(['filled', 'voice', null, null]);
+    expect(r.seamNode()!.previousSibling).toBe(r.nodeFor(1));
   });
 
-  it('a row that only repeats its English line is not drawn, but counts as written', () => {
+  it('a row that only repeats its English line reads as a ♪ and counts as written', () => {
     const r = new LineRenderer();
     r.render(input(p, { record: record(p, { 0: 'I walk alone', 2: '夜を抜けて' }), slots: true, breathing: true }));
-    expect(states(r, p)).toEqual([null, null, 'filled', null]);
+    expect(states(r, p)).toEqual(['voice', 'voice', 'filled', 'voice']);
+  });
+
+  it('a Japanese line left as it is gets no row', () => {
+    document.body.innerHTML = '<div data-lyrics-container="true">I walk alone<br>ありがとう<br>Through the night</div>';
+    const q = readPage()!;
+    const r = new LineRenderer();
+    r.render(input(q, { record: record(q, { 0: 'ひとりで歩く', 1: 'ありがとう', 2: '夜を抜けて' }) }));
+    expect(states(r, q)).toEqual(['filled', null, 'filled']);
   });
 
   it('a row shows its translation without the sounds kept in their own spelling', () => {
     const r = new LineRenderer();
     r.render(input(p, { record: record(p, { 0: 'Ayy、ひとりで歩く、ayy', 2: 'Yeah、yeah' }) }));
     expect(r.nodeFor(0)!.textContent).toBe('ひとりで歩く');
-    // nothing left once the sounds go: no row, but the line counts as written
-    expect(states(r, p)).toEqual(['filled', null, null, null]);
+    // nothing left once the sounds go: a ♪, and the line counts as written
+    expect(states(r, p)).toEqual(['filled', 'voice', 'voice', 'voice']);
   });
 
   it('a last line of sounds does not count as written, so the frontier stays put', () => {
     const r = new LineRenderer();
     r.render(input(p, { record: record(p, { 0: 'ひとりで歩く', 3: '（イェー、イェー）' }), slots: true, breathing: true }));
-    expect(states(r, p)).toEqual(['filled', null, 'next', null]);
+    expect(states(r, p)).toEqual(['filled', 'voice', 'next', 'voice']);
+  });
+
+  it('a song that opens with sounds, cut before a line is written: the ♪ stays above the seam', () => {
+    document.body.innerHTML = '<div data-lyrics-container="true">Woah, woah<br>I walk alone<br>Through the night</div>';
+    const q = readPage()!;
+    const r = new LineRenderer();
+    r.render(input(q, { slots: true, seam: seamOf() }));
+    expect(states(r, q)).toEqual(['voice', null, null]);
+    expect(r.seamNode()!.previousSibling).toBe(r.nodeFor(0));
+  });
+
+  it('their ♪ unfolds with the slots on the tap that opens them', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { slots: true, opening: true }));
+    expect(r.nodeFor(1)!.hasAttribute('data-enter')).toBe(true);
   });
 });

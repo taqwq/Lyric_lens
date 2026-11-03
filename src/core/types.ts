@@ -73,7 +73,7 @@ export interface LyricLine {
   /** 0 for the first occurrence of its text, 1 for the next repeat, … */
   occurrence: number;
   section: number;
-  /** Only vocal sounds ("Woah, woah"): never translated, no Japanese row (core/sounds.ts). */
+  /** Only vocal sounds ("Woah, woah"): never translated; its row is a ♪ (core/sounds.ts). */
   sound?: true;
 }
 

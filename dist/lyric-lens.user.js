@@ -2563,6 +2563,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
 
   // src/ui/lines.ts
+  var JAPANESE = /[぀-ヿ一-鿿]/;
   function nearViewport(anchor) {
     const target = anchor instanceof Element ? anchor : anchor.parentElement;
     if (!target) return true;
@@ -2610,14 +2611,15 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && toWrite(i));
       if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => toWrite(i));
       const stopAt = input.seam && frontier >= 0 ? frontier : -1;
+      const ruled = input.slots || input.gaps || Boolean(input.seam) || lastFilled >= 0;
       page.source.lines.forEach((line, i) => {
         const anchor = page.anchors[i];
         const result = record?.lines[line.key];
         const ja = result?.ja ? visibleJa(result.ja, line.text) : "";
         let state = null;
-        if (line.sound) state = null;
-        else if (stopAt >= 0 && i >= stopAt) state = null;
-        else if (result?.ja) state = ja ? "filled" : null;
+        if (stopAt >= 0 && i >= stopAt) state = null;
+        else if (line.sound) state = ruled ? "voice" : null;
+        else if (result?.ja) state = ja ? "filled" : JAPANESE.test(line.text) ? null : "voice";
         else if (input.gaps) state = "gap";
         else if (input.slots) state = i < frontier && lastFilled > i ? "gap" : input.breathing && i === frontier ? "next" : "empty";
         const current = this.nodes.get(i);
@@ -2658,7 +2660,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
               if (el) delete el.dataset.ink;
             }, 260);
           }
-          if (input.opening && isNew && (state === "empty" || state === "next") && nearViewport(anchor)) {
+          if (input.opening && isNew && (state === "empty" || state === "next" || state === "voice") && nearViewport(anchor)) {
             const node = el;
             node.dataset.enter = "";
             const done = () => {
@@ -2734,6 +2736,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       if (state === "empty") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
       if (state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" }, h("span", { class: "ll-pen" }))];
       if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "この行は訳せていません" }, "――")];
+      if (state === "voice") return [h("span", { class: "ll-ja", role: "img", "aria-label": "声だけの行" }, "♪")];
       const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
       const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
       if (noteCount) {
@@ -5222,7 +5225,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   --ll-quiet: #6B6B6B;        /* ad-libs, repeats, captions, counts */
   --ll-rule: #E5E5E5;         /* the head's track */
   --ll-yellow: #FFFF64;       /* the words you asked about */
-  --ll-font: var(--ll-latin, Programme, "Helvetica Neue", Arial), "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  --ll-ja-font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  --ll-font: var(--ll-latin, Programme, "Helvetica Neue", Arial), var(--ll-ja-font);
   font-family: var(--ll-font);
   font-style: normal;
   font-weight: 400;
@@ -5377,7 +5381,11 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
 /* the parting: on the tap, the space for the Japanese opens under the lines near the viewport */
 .ll-line[data-enter] { overflow: hidden; animation: ll-open .26s cubic-bezier(.2, 0, 0, 1) backwards; }
 @keyframes ll-open { from { max-height: 0; padding-top: 0; padding-bottom: 0; } to { max-height: 40px; } }
-.ll-line[data-state="gap"] .ll-ja { color: var(--ll-quiet) !important; letter-spacing: 0; }
+/* marks in place of a translation: ―― a line the model skipped, ♪ a line that is only sounds */
+.ll-line[data-state="gap"] .ll-ja, .ll-line[data-state="voice"] .ll-ja { color: var(--ll-quiet) !important; letter-spacing: 0; }
+/* the Japanese face's ♪: a Latin face (Arial) draws a small, thin note that reads as a stray mark.
+   Set on the row, not the mark, so the line box keeps one face's metrics and the row its height. */
+.ll-line[data-state="voice"] { font-family: var(--ll-ja-font); }
 
 .ll-mark {
   all: unset;
