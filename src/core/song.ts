@@ -1,3 +1,4 @@
+import { isSoundOnly } from './sounds';
 import { KEY_VERSION } from './types';
 import type { LyricLine, Section, SongMeta, SongRecord, SongSource, UniqueLine } from './types';
 
@@ -55,6 +56,11 @@ export function buildSong(meta: SongMeta, rows: RawLyricRow[]): SongSource {
       sections.push(current);
       pendingLabel = null;
     }
+    // A line of sounds keeps its place on the page but is not one of the lines to translate.
+    if (isSoundOnly(text)) {
+      lines.push({ index: lines.length, text, key, uid: 0, occurrence: 0, section: current.index, sound: true });
+      continue;
+    }
     let u = byKey.get(key);
     if (!u) {
       u = { uid: unique.length + 1, key, text, occurrences: 0 };
@@ -69,10 +75,12 @@ export function buildSong(meta: SongMeta, rows: RawLyricRow[]): SongSource {
 
 /** The lyrics are already Japanese: most lines hold kana/kanji and almost no Latin letters
  *  (a bracketed ad-lib like "(yeah)" does not count). Kept strict so an English song with a
- *  few Japanese words is unaffected. Header rows are already excluded by buildSong. */
+ *  few Japanese words is unaffected. Header rows are already excluded by buildSong; a line
+ *  of sounds ("Oh, oh") is in no language, so it does not count either way. */
 export function isMostlyJapanese(source: SongSource): boolean {
-  const lines = source.lines;
-  if (lines.length < 4) return false;
+  if (source.lines.length < 4) return false;
+  const lines = source.lines.filter((l) => !l.sound);
+  if (!lines.length) return false;
   let ja = 0;
   let kana = 0;
   for (const l of lines) {

@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { translateSong } from '../src/core/pipeline';
-import { emptyRecord, songStatus } from '../src/core/song';
+import { buildSong, emptyRecord, songStatus, type RawLyricRow } from '../src/core/song';
 import type { SongSource } from '../src/core/types';
 import { readPage } from '../src/genius/extract';
 import { fetchAnnotations } from '../src/genius/annotations';
@@ -29,7 +29,19 @@ function arg(name: string): string | undefined {
 
 async function loadSource(target: string): Promise<{ source: SongSource; path: string; songId?: string | null }> {
   if (target.endsWith('.json')) {
-    return JSON.parse(readFileSync(target, 'utf8')) as { source: SongSource; path: string; songId?: string | null };
+    const saved = JSON.parse(readFileSync(target, 'utf8')) as { source: SongSource; path: string; songId?: string | null };
+    // Rebuilt from its rows, so a song saved by an older version gets today's song model.
+    const rows: RawLyricRow[] = [];
+    let section = -1;
+    for (const line of saved.source.lines) {
+      if (line.section !== section) {
+        section = line.section;
+        const label = saved.source.sections[section]?.label;
+        if (label) rows.push({ kind: 'header', text: label });
+      }
+      rows.push({ kind: 'line', text: line.text });
+    }
+    return { ...saved, source: buildSong(saved.source.meta, rows) };
   }
   const res = await fetch(target, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36', 'accept-language': 'en-US,en;q=0.9' } });
   if (!res.ok) throw new Error(`fetch ${target}: HTTP ${res.status}`);
@@ -102,8 +114,8 @@ for (const line of source.lines) {
     out.push('', `### ${source.sections[section]?.label ?? ''}`);
   }
   const r = record.lines[line.key];
-  out.push(`- ${line.text}`, `  - ${r?.ja ?? '（未訳）'}`);
-  if (line.occurrence > 0) continue;
+  out.push(`- ${line.text}`, `  - ${line.sound ? '（声のみ・訳さない）' : r?.ja ?? '（未訳）'}`);
+  if (line.sound || line.occurrence > 0) continue;
   for (const n of r?.notes ?? []) out.push(`    - [${n.kind}${n.conjecture ? '?' : ''}${n.genius ? ` g:${n.genius}` : ''}] «${n.phrase}» ${n.text}`);
 }
 mkdirSync('tmp', { recursive: true });

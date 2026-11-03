@@ -19,6 +19,7 @@
   word-break: auto-phrase;
   overflow-wrap: anywhere;
   text-spacing-trim: trim-start;
+  text-autospace: normal;
   hanging-punctuation: none;
   background: transparent !important;
   text-decoration: none !important;

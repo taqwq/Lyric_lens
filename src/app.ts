@@ -62,7 +62,7 @@ export function latinFamilies(family: string): string {
 }
 
 /** Head-row notice when the finished edition could not be stored. */
-const SAVE_FAILED = { status: '保存できませんでした', detail: 'この画面では読めますが、ページを閉じると消えます' };
+const SAVE_FAILED = { status: '訳を保存できませんでした', detail: '今は読めますが、このページを閉じると消えます' };
 
 export class App {
   private page: PageSong | null = null;
@@ -427,6 +427,7 @@ export class App {
     const run = this.run;
     const here = run && run.id === this.identity ? run : null;
     const shown = this.shown();
+    const lines = page.source.lines.filter((l) => !l.sound);
     return {
       now: Date.now(),
       online: navigator.onLine,
@@ -435,8 +436,8 @@ export class App {
       hidden: Boolean(shown?.hidden),
       hasKey: hasKey(settings),
       keyBad: this.keyBad,
-      total: page.source.lines.length,
-      done: page.source.lines.filter((l) => shown?.lines[l.key]?.ja).length,
+      total: lines.length,
+      done: lines.filter((l) => shown?.lines[l.key]?.ja).length,
       stop: shown?.stop,
       hasPreface: Boolean(shown?.song && (shown.song.who || shown.song.what)),
       japanese: isJapanese(page),
@@ -587,7 +588,7 @@ export class App {
       }
       await this.refreshKeys();
       if (!this.avail.ok) {
-        cannotRetranslate(`今日の無料枠は終わりました${this.avail.until > Date.now() ? `（${formatWhen(this.avail.until)}に戻ります）` : ''}`);
+        cannotRetranslate(`今日の無料枠を使い切りました${this.avail.until > Date.now() ? `。${formatWhen(this.avail.until)}からもう一度試せます` : ''}`);
         this.renderNow();
         return;
       }
@@ -595,7 +596,7 @@ export class App {
       lock = await acquireLock(id, source.meta.title || '前の曲');
       if (!lock) {
         this.foreignLock = await this.otherLock();
-        cannotRetranslate('別の曲を訳しています。終わってからもう一度');
+        cannotRetranslate('別の曲を訳しています。訳し終えてからもう一度試せます');
         this.renderNow();
         return;
       }
@@ -697,7 +698,10 @@ export class App {
             }
           } else if (this.identity === id) {
             const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
-            this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText(stop, Date.now()) };
+            // A stop the reader chose reads as their own action, not as a failure with a reason.
+            this.notice = stop.reason === 'stopped'
+              ? { status: '訳し直しを止めました。今の訳はそのまま残っています', detail: '' }
+              : { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText(stop, Date.now()) };
           }
         } else {
           if (leaving && record.stop?.reason === 'stopped') record.stop = { reason: 'closed', at: Date.now() };

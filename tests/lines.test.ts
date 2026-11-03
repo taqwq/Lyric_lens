@@ -396,7 +396,7 @@ describe('※ notes', () => {
     const mark = r.nodeFor(4)!.querySelector('.ll-mark')!;
     expect(mark.tagName).toBe('BUTTON');
     expect(mark.textContent).toBe('※');
-    expect(mark.getAttribute('aria-label')).toBe('注を開く：スラング');
+    expect(mark.getAttribute('aria-label')).toBe('注：スラング');
     expect(mark.getAttribute('aria-expanded')).toBe('false');
   });
 
@@ -406,10 +406,10 @@ describe('※ notes', () => {
     expect(document.querySelector('.ll-mark')).toBeNull();
   });
 
-  it('several notes list their kinds joined with ・', () => {
+  it('several notes list their kinds joined with 、', () => {
     const r = new LineRenderer();
     r.render(input(page, { record: record(page, { 4: { ja: 'd', notes: [slangNote, idiomNote] } }) }));
-    expect(r.nodeFor(4)!.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注を開く：スラング・慣用句');
+    expect(r.nodeFor(4)!.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注：スラング、慣用句');
   });
 
   it('aria-expanded follows openIndex without rebuilding the node or the button', () => {
@@ -454,7 +454,7 @@ describe('※ notes', () => {
     const el = r.nodeFor(4)!;
     r.render(input(page, { record: record(page, { 4: { ja: 'd', notes: [slangNote, idiomNote] } }) }));
     expect(r.nodeFor(4)).toBe(el);
-    expect(el.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注を開く：スラング・慣用句');
+    expect(el.querySelector('.ll-mark')!.getAttribute('aria-label')).toBe('注：スラング、慣用句');
   });
 
   it('clicking ※ reports the line index', () => {
@@ -871,5 +871,60 @@ describe('clear', () => {
     r.clear();
     r.render(input(page, { slots: true }));
     expect(llLines()).toHaveLength(6);
+  });
+});
+
+describe('lines of sounds', () => {
+  /* 0 "I walk alone"  1 "Woah, woah" (sounds)  2 "Through the night"  3 "(Yeah, yeah)" (sounds, last). */
+  const SOUNDS = '<div data-lyrics-container="true">I walk alone<br>Woah, woah<br>Through the night<br>(Yeah, yeah)</div>';
+  let p: PageSong;
+  beforeEach(() => {
+    document.body.innerHTML = SOUNDS;
+    p = readPage()!;
+  });
+
+  it('get no node in any state', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { slots: true }));
+    expect(states(r, p)).toEqual(['empty', null, 'empty', null]);
+    r.render(input(p, { gaps: true }));
+    expect(states(r, p)).toEqual(['gap', null, 'gap', null]);
+  });
+
+  it('an older edition that stored them (ウォー、イェー) does not draw them', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { record: record(p, { 0: 'ひとりで歩く', 1: 'ウォー、ウォー', 2: '夜を抜けて', 3: '（イェー、イェー）' }) }));
+    expect(states(r, p)).toEqual(['filled', null, 'filled', null]);
+    expect(llLines()).toHaveLength(2);
+  });
+
+  it('the pen and the seam skip them: the frontier is the next line with words', () => {
+    const r = new LineRenderer();
+    const rec = record(p, { 0: 'ひとりで歩く' });
+    r.render(input(p, { record: rec, slots: true, breathing: true }));
+    expect(states(r, p)).toEqual(['filled', null, 'next', null]);
+    r.render(input(p, { record: rec, seam: seamOf() }));
+    // everything above the seam is done, the sound line included
+    expect(r.seamNode()!.previousSibling).toBe(p.anchors[1]);
+  });
+
+  it('a row that only repeats its English line is not drawn, but counts as written', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { record: record(p, { 0: 'I walk alone', 2: '夜を抜けて' }), slots: true, breathing: true }));
+    expect(states(r, p)).toEqual([null, null, 'filled', null]);
+  });
+
+  it('a row shows its translation without the sounds kept in their own spelling', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { record: record(p, { 0: 'Ayy、ひとりで歩く、ayy', 2: 'Yeah、yeah' }) }));
+    expect(r.nodeFor(0)!.textContent).toBe('ひとりで歩く');
+    // nothing left once the sounds go: no row, but the line counts as written
+    expect(states(r, p)).toEqual(['filled', null, null, null]);
+  });
+
+  it('a last line of sounds does not count as written, so the frontier stays put', () => {
+    const r = new LineRenderer();
+    r.render(input(p, { record: record(p, { 0: 'ひとりで歩く', 3: '（イェー、イェー）' }), slots: true, breathing: true }));
+    expect(states(r, p)).toEqual(['filled', null, 'next', null]);
   });
 });

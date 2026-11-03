@@ -2,7 +2,7 @@
   "name": "lyric-lens",
   "version": "3.0.0",
   "private": true,
-  "description": "Genius の歌詞を、曲全体の文脈を踏まえた自然な日本語訳と必要な注釈で読み解く userscript",
+  "description": "Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添える userscript",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

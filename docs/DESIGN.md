@@ -41,11 +41,11 @@ All of our CSS lives in one injected `<style id="ll-style">`. Every class uses t
 | 6 | **Seam** (a line node with `data-state="seam"`) | Its own node, directly after the last translated line (past a note open under it). From the first missing line on, nothing of ours is drawn. | A black 2 px line across the column, one calm sentence under it, and an underlined bold button. | Same. |
 | 7 | **Phrase highlights** | `CSS.highlights`: `ll-phrase` (note open) and `ll-phrase-peek` (desktop hover on ※). No DOM change. | — | `ll-phrase` only. |
 | 8 | **Sheet** (settings / first run) | A shadow-DOM host appended to `document.body`, position fixed. | A square 360 px panel under `設定`, hung from its right edge, flipping upward if there is no room. Max height 70 vh, scrolls internally. Without an anchor (the userscript menu) it is centred. | A bottom sheet (any viewport under 600 px, or a touch pointer), max height 85 vh, with `env(safe-area-inset-bottom)` padding and a backdrop of `rgba(0,0,0,.4)`. |
-| 9 | Userscript menu | `GM_registerMenuCommand("Lyric Lens の設定")` | — | — |
+| 9 | Userscript menu | `GM_registerMenuCommand("Lyric Lensの設定")` | — | — |
 
-Section headers (`[Chorus]`) and blank lines get no line node. There are no floating pills, rings, buttons or toasts.
+Section headers (`[Chorus]`) and blank lines get no line node. Neither does a **line of sounds**: a line whose every word is a pure vocal sound (`Woah, woah`, `(Yeah, yeah)`, `La-la-la`; the closed list in `core/sounds.ts`, which never includes a word that can mean something, such as hey, yo, nah or ho). It stays in the line model, aligned with its anchor, but it is not translated, not counted in `（12/67行）`, and the pen and the seam pass over it; a row an older edition stored for it is not drawn. There are no floating pills, rings, buttons or toasts.
 
-**Line model.** Walk the text nodes of each container in order, splitting at each `<br>` across nested `<a>` and `<span>` elements. Each line becomes `{index, text, norm, hash, occurrence}`, where `norm` is the text lowercased, with curly quotes and apostrophes straightened, punctuation stripped and whitespace collapsed. Lines with the same `norm` are **exact repeats**. A single changed word makes a line distinct.
+**Line model.** Walk the text nodes of each container in order, splitting at each `<br>` across nested `<a>` and `<span>` elements. Each line becomes `{index, text, key, uid, occurrence, section}` (plus `sound` for a line of sounds, which has `uid` 0 and is not one of the distinct lines to translate), where `key` is the text NFKC-normalized and lowercased, with curly quotes, apostrophes and dashes straightened, whitespace collapsed and trailing punctuation dropped. Lines with the same `key` are **exact repeats**. A single changed word makes a line distinct.
 
 ## 3. State model
 
@@ -55,21 +55,21 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 
 | State | Row | Under the row | Lines | The reader can |
 |---|---|---|---|---|
-| **S0 No lyrics** (no containers, or 0 translatable lines) | Nothing. Lyric Lens is invisible. | — | — | — |
-| **SJ Japanese lyrics** (≥60% of lines are kana/kanji with almost no Latin letters, **and** ≥30% of lines contain kana, so kana-less Chinese lyrics stay translatable; nothing is stored) | Settled: `この曲は日本語の歌詞です`. No links. | — | None | Nothing: no request is offered or sent. A song with a stored edition is shown as usual. |
-| **S1 No API key** | Primary `日本語で読む`. No links. | `はじめに無料のAPIキーを設定します` | None | Open the first-run sheet |
+| **S0 No lyrics** (no containers, or 0 translatable lines: none at all, or only lines of sounds) | Nothing. Lyric Lens is invisible. | — | — | — |
+| **SJ Japanese lyrics** (≥60% of lines are kana/kanji with almost no Latin letters, **and** ≥30% of lines contain kana, so kana-less Chinese lyrics stay translatable; lines of sounds count neither way; nothing is stored) | Settled: `この曲の歌詞は日本語です`. No links. | — | None | Nothing: no request is offered or sent. A song with a stored edition is shown as usual. |
+| **S1 No API key** | Primary `日本語で読む`. No links. | `最初に一度だけ、無料のAPIキーを設定します` | None | Open the first-run sheet |
 | **S2 Never read** | Primary `日本語で読む` · `設定` | — | None | Start the request |
 | **S2q Quota known exhausted** (every candidate model is in a quota cooldown, see §8) | `今日の無料枠を使い切りました` · `設定` | `{when}から、また訳せます` (omitted once that time has passed) | None | Nothing is sent. At reset the primary `日本語で読む` is back. |
 | **S2f First request failed** (a stop is recorded and no line arrived) | Primary `もう一度訳す` with the button rule of the seam table below · `設定`. An invalid key shows the primary `設定を開く` alone. | The reason, in a sentence that points at nothing on the page (no `ここ`, no `続き`; see §4) | None | Retry by tapping. A stop that no longer applies (quota reset, key fixed) reads as plain S2. |
-| **S2b Another song translating** (global lock held) | `別の曲を訳しています` · `あちらを止める` in the `止める` slot | `「{title}」が終わると、この曲も訳せます` | None | Stop the other job. When the lock is released the row returns to S2 by itself; no request is sent until the reader taps. |
-| **S3 Waiting** (before the preface) | `曲全体を読んでいます` · `止める`. Track: a short segment travels along it. | After 15 s with no preface and no line: `返事を待っています。混んでいると1分ほどかかることもあります`. Where answers arrive in one piece: `この環境では訳がまとめて届きます`. | A reserved blank slot under every line; the pen stands in the first | Scroll, listen, use Genius, stop |
+| **S2b Another song translating** (global lock held) | `別の曲を訳しています` · `あちらを止める` in the `止める` slot | `「{title}」を訳し終えると、この曲も訳せます` | None | Stop the other job. When the lock is released the row returns to S2 by itself; no request is sent until the reader taps. |
+| **S3 Waiting** (before the preface) | `歌詞を読んでいます` · `止める`. Track: a short segment travels along it. | After 15 s with no preface and no line: `AIの返事を待っています。混み合っていると1分ほどかかることもあります`. Where answers arrive in one piece: `この環境では訳がまとめて届きます`. | A reserved blank slot under every line; the pen stands in the first | Scroll, listen, use Genius, stop |
 | **S4 Arriving** | `訳しています` `（{done}/{total}行）` (no count on phones) · `止める` · `訳を隠す` · `設定`. Track: fills with {done}/{total}. | `この環境では訳がまとめて届きます` where answers arrive in one piece; the preface | Slots fill in order. The pen stands at the first missing line after the last filled one. Repeats fill together with their first occurrence. | Read, open notes, stop, hide |
 | **S4m Mirrored** (the same song is running in another tab) | `別のタブで訳しています` · `止める` · `訳を隠す` | The preface | Filled live from storage; the pen stands at the frontier | Read, stop (this sets an abort flag the owner tab obeys) |
 | **S5 Complete** | Settled: `AIによる日本語訳` (`訳を隠しています` while hidden) · `訳を隠す` / `訳を表示` · `設定` | The preface (collapsed when a saved song is opened again) | All filled. No motion on a return visit; in the session that wrote it the row settles once (§6). | Read, open notes, hide, open settings |
 | **S5g Complete with gaps** (some lines failed to parse or align) | Primary `抜けた行を訳す` · `訳を隠す` · `設定` | `{n}行が訳せていません。下の「――」の行です`, plus the blocker in ink when it disables the primary; the preface | Gap lines show a quiet `――` | Request only the gaps (one tap = one request) |
-| **S6 Interrupted (reason)** | The seam's button as the primary (`続きを訳す`; `設定を開く` for an invalid key, which drops the head's own `設定`) · `訳を隠す` · `設定`. Track: stands still at {done}/{total}. | `{total}行のうち{done}行まで訳してあります`; the preface if it arrived. With `訳を隠す` on, the seam is hidden with the translation, so the seam's sentence is repeated here, in ink, whenever the button cannot simply be pressed (disabled, `設定を開く`). | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `――`). Nothing is drawn below it. | Resume (subject to the reason's rule), hide, settings |
+| **S6 Interrupted (reason)** | The seam's button as the primary (`続きを訳す`; `設定を開く` for an invalid key, which drops the head's own `設定`) · `訳を隠す` · `設定`. Track: stands still at {done}/{total}. | `{total}行のうち{done}行を訳してあります`; the preface if it arrived. With `訳を隠す` on, the seam is hidden with the translation, so the seam's sentence is repeated here, in ink, whenever the button cannot simply be pressed (disabled, `設定を開く`); there it says `途中で`/`途中まで`/`途中から` instead of `ここで`/`ここまで`/`この先は`, since no line is there to point at. | Filled lines stay. The **seam** sits at the writing frontier: the first missing line after the last filled one (earlier holes are gaps, `――`). Nothing is drawn below it. | Resume (subject to the reason's rule), hide, settings |
 | **S7 Lyrics changed since** (some stored line hashes no longer match the DOM) | Primary `新しい行を訳す` · `訳を隠す` · `設定` | `歌詞が更新されました。まだ訳していない行が{n}行あります`, plus the blocker in ink when it disables the primary; the preface | Matching lines keep their translations; a new line shows a reserved blank slot, or `――` when translated lines follow it | Translate the new lines only |
-| **S8 Retranslating** | `訳し直しています` · `止める`. Track: a short segment travels along it. | `終わるまでは、今の訳をそのまま表示します`; the preface | The old edition stays. The new one is buffered out of sight and swapped in all at once when it completes. | Read the old edition, stop |
+| **S8 Retranslating** | `訳し直しています` · `止める`. Track: a short segment travels along it. | `訳し終えるまでは、今の訳をそのまま表示します`; the preface | The old edition stays. The new one is buffered out of sight and swapped in all at once when it completes. | Read the old edition, stop |
 | **S8f Retranslation failed** (or the finished edition could not be stored) | Settled: `AIによる日本語訳` · `訳を隠す` · `設定` | `訳し直せませんでした。今の訳はそのまま残っています`, then the reason in ink (§4); the preface | Old edition intact; the new partial is discarded | Dismiss by any interaction (while the row is on screen) |
 
 **The seam reasons (S6) and their buttons**
@@ -78,23 +78,23 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 |---|---|---|
 | busy (all fallbacks gave 503) | `AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
 | per-minute limit | `AIの回数制限にかかりました。1分ほどおいてから続きを訳せます` | Disabled until the limit's reset (about 60 s), then enabled. It does not fire on its own. When the wait is longer than 90 s (every model benched), the sentence names the time instead: `AIの回数制限にかかりました。{when}ごろから続きを訳せます`. |
-| daily quota | `今日の無料枠が終わりました。{when}ごろから続きを訳せます` | Disabled until reset, then enabled. It does not fire on its own. |
+| daily quota | `今日の無料枠を使い切りました。{when}から続きを訳せます` | Disabled until reset, then enabled. It does not fire on its own. |
 | invalid key | `APIキーが使えなくなりました。設定でキーを入れ直してください` | `設定を開く` (the head row then drops its own `設定`). The stop stops applying as soon as a configured key is believed to work, whichever page fixed it. |
 | safety filter | `この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります` | `続きを訳す` |
-| request rejected (400s) | `AIがこの先を訳しませんでした。もう一度試すと通ることがあります` | `続きを訳す`, enabled |
-| no usable model | `AIをいま使えません。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
-| empty answer | `AIの返事が空のまま、ここで途切れました。もう一度試せます` | `続きを訳す`, enabled |
+| request rejected (400s) | `AIへの依頼が通らず、ここで途切れました。もう一度試すと通ることがあります` | `続きを訳す`, enabled |
+| no usable model | `今はAIを使えません。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
+| empty answer | `AIの返事が空で、ここで途切れました。もう一度試せます` | `続きを訳す`, enabled |
 | network | `接続が切れました。つながったら続きを訳せます` | Disabled while `navigator.onLine` is false, enabled when the connection returns. Never fires automatically. |
 | silent (two models timed out) | `AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます` | `続きを訳す`, enabled |
 | unusable output | `AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます` | `続きを訳す`. While every model is benched for it (up to 10 min, a stored `until` longer than 90 s ahead) the button is disabled and the sentence names the time: `AIの返事をうまく読み取れず、ここで途切れました。{when}ごろからもう一度試せます`. |
 | reader stopped | `ここで止めました` | `続きを訳す` |
 | output-length cut (long song) | `長い曲なので、ここで一度区切りました` | `続きを訳す` |
 | tab closed or suspended (partial record found, no live lock), or a stop that no longer applies | `ここまで訳してあります` | `続きを訳す` |
-| another song holds the lock, or today's quota is known spent | The reason's first sentence, then the blocker: `別の曲を訳し終えると続きを訳せます` / `今日の無料枠は終わりました。{when}から訳せます` (`あとで訳せます` once the time has passed). A busy, per-minute, no-model or silent stop next to a spent quota says only `ここで途切れました`, so two limits are never named. | Disabled until the blocker clears |
+| another song holds the lock, or today's quota is known spent | The reason's first sentence, then the blocker: `別の曲を訳し終えると、この曲も訳せます` / `今日の無料枠を使い切りました。{when}から訳せます` (`あとで訳せます` once the time has passed). A busy, per-minute, no-model or silent stop next to a spent quota says only `ここで途切れました`, so two limits are never named. | Disabled until the blocker clears |
 
 The seam is a stop line, not a decoration: a black 2 px rule across the column right after the last translated line, the reason under it, and the next step as an underlined bold button. It is the border between what has been translated and the plain English that follows, so it reads as a statement about the page, not as the translation of the lyric above it. Below it nothing of ours is drawn (no slots, no gaps, no translated repeats) until the reader resumes.
 
-`{when}` is the next Pacific midnight, computed with `Intl` in `America/Los_Angeles` and formatted in `Asia/Tokyo` as `HH:MM`. It reads `16:00` or `17:00`, with the prefix `明日 ` when the reset falls on the next JST date.
+`{when}` is the next Pacific midnight, computed with `Intl` in `America/Los_Angeles` and formatted in `Asia/Tokyo` as `H:MM` (no leading zero: `9:05`). It reads `16:00` or `17:00`, with the prefix `明日 ` when the reset falls on the next JST date.
 
 **Request guards.** A button locks the moment it is pressed. There is one global lock in GM storage, `{songId, tabId, heartbeat}`, with a heartbeat every 2 s; a lock older than 10 s is stale. Before every request the client checks the exhausted registry. Nothing restarts on reload.
 
@@ -105,39 +105,40 @@ The seam is a stop line, not a decoration: a black 2 px rule across the column r
 ## 4. Japanese UI copy (verbatim, complete)
 
 **Head row**
-- Status, working or asking: `曲全体を読んでいます` · `訳しています` + `（{done}/{total}行）` · `別のタブで訳しています` · `別の曲を訳しています` · `今日の無料枠を使い切りました` · `訳し直しています`
-- Status, settled (small): `AIによる日本語訳` · `訳を隠しています` · `この曲は日本語の歌詞です`
+- Status, working or asking: `歌詞を読んでいます` · `訳しています` + `（{done}/{total}行）` · `別のタブで訳しています` · `別の曲を訳しています` · `今日の無料枠を使い切りました` · `訳し直しています`
+- Status, settled (small): `AIによる日本語訳` · `訳を隠しています` · `この曲の歌詞は日本語です`
 - Primary actions (bold, underlined): `日本語で読む` · `もう一度訳す` · `続きを訳す` · `抜けた行を訳す` · `新しい行を訳す` · `設定を開く`
 - Links, in their slots: `止める` · `訳を隠す` / `訳を表示` · `設定`; `あちらを止める` takes the `止める` slot.
 
 **Captions (under the row)**
-- `はじめに無料のAPIキーを設定します` (S1)
+- `最初に一度だけ、無料のAPIキーを設定します` (S1)
 - `{when}から、また訳せます` (S2q)
-- `「{title}」が終わると、この曲も訳せます` (S2b)
-- `返事を待っています。混んでいると1分ほどかかることもあります` (S3, after 15 s)
+- `「{title}」を訳し終えると、この曲も訳せます` (S2b)
+- `AIの返事を待っています。混み合っていると1分ほどかかることもあります` (S3, after 15 s)
 - `この環境では訳がまとめて届きます` (buffered fallback only)
 - First request failed (S2f), by reason:
-  - busy: `AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ`
+  - busy: `AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度試せます`
   - rate: `AIの回数制限にかかりました。1分ほどおいてから訳せます` (wait over 90 s: `AIの回数制限にかかりました。{when}ごろから訳せます`)
-  - quota: `今日の無料枠が終わりました。{when}ごろから訳せます` (`あとで訳せます` when no time is known)
+  - quota: `今日の無料枠を使い切りました。{when}から訳せます` (`あとで訳せます` when no time is known)
   - auth: `APIキーが使えなくなりました。設定でキーを入れ直してください` · primary `設定を開く`
   - blocked: `この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります`
-  - rejected: `AIがこの曲を訳しませんでした。もう一度試すと通ることがあります`
-  - no-model: `AIをいま使えません。少しおいてからもう一度どうぞ`
-  - empty: `AIから空の返事が返ってきました。もう一度試せます`
+  - rejected: `AIへの依頼が通らず、訳し始められませんでした。もう一度試すと通ることがあります`
+  - no-model: `今はAIを使えません。少しおいてからもう一度試せます`
+  - empty: `AIの返事が空で、訳し始められませんでした。もう一度試せます`
   - network: `接続が切れて、訳し始められませんでした。つながったら訳せます`
-  - silent: `AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ`
+  - silent: `AIから返事がなく、訳し始められませんでした。少しおいてからもう一度試せます`
   - unusable: `AIの返事をうまく読み取れませんでした。もう一度試せます` (benched over 90 s: `AIの返事をうまく読み取れませんでした。{when}ごろからもう一度試せます`)
   - length: `長い曲なので、一度では訳し切れませんでした`
 - `{n}行が訳せていません。下の「――」の行です` (S5g)
 - `歌詞が更新されました。まだ訳していない行が{n}行あります` (S7)
-- `{total}行のうち{done}行まで訳してあります` (S6)
-- `終わるまでは、今の訳をそのまま表示します` (S8)
-- A blocker that disables the primary (S5g, S7, S6 with the translation hidden): `別の曲を訳し終えると続きを訳せます` / `今日の無料枠は終わりました。{when}から訳せます`
+- `{total}行のうち{done}行を訳してあります` (S6)
+- `訳し終えるまでは、今の訳をそのまま表示します` (S8)
+- A blocker that disables the primary (S5g, S7, S6 with the translation hidden): `別の曲を訳し終えると、この曲も訳せます` / `今日の無料枠を使い切りました。{when}から訳せます`
 - Retranslation failed (S8f): `訳し直せませんでした。今の訳はそのまま残っています`, with the reason in ink on a second line:
-  - when it ran and stopped: `混み合っていました。少しおいてから試せます` · `AIの回数制限にかかりました。1分ほどおいてから試せます` · `今日の無料枠が終わりました（{when}に戻ります）` · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `AIが訳しませんでした` · `AIをいま使えませんでした` · `AIの返事が空でした` · `接続が切れました` · `AIから返事がありませんでした` · `AIの返事をうまく読み取れませんでした` · `止めました` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
-  - when it could not start: `今日の無料枠は終わりました（{when}に戻ります）` · `別の曲を訳しています。終わってからもう一度`
-- The edition could not be stored (S8f): `保存できませんでした` with `この画面では読めますが、ページを閉じると消えます` (the edition stays on screen and is not replaced by a same-song refresh)
+  - when it ran and stopped: `AIが混み合っていました。少しおいてからもう一度試せます` · `AIの回数制限にかかりました。1分ほどおいてからもう一度試せます` · `今日の無料枠を使い切りました。{when}からもう一度試せます`（時刻が分からなければ `今日の無料枠を使い切りました`） · `APIキーが使えなくなりました。設定でキーを入れ直してください` · `AIの安全フィルタで止められました` · `AIへの依頼が通りませんでした` · `AIを使えませんでした` · `AIの返事が空でした` · `接続が切れました` · `AIから返事がありませんでした` · `AIの返事をうまく読み取れませんでした` · `長い曲なので、一度では訳し切れませんでした` · `返事が途中で途切れました` · `訳せない行が残りました`
+  - when it could not start: `今日の無料枠を使い切りました。{when}からもう一度試せます` · `別の曲を訳しています。訳し終えてからもう一度試せます`
+- The reader stopped a retranslation (S8f): `訳し直しを止めました。今の訳はそのまま残っています`, with no reason line (it is their own action, not a failure).
+- The edition could not be stored (S8f): `訳を保存できませんでした` with `今は読めますが、このページを閉じると消えます` (the edition stays on screen and is not replaced by a same-song refresh)
 
 **Preface**
 - No labels: the sentences say what they are. The first is one natural sentence in the form `AからBへ` (the prompt asks for it: no arrow, at most 40 characters); the second says what the speaker does in the lyrics (at most 80 characters) and is indented one character. Both come from the model.
@@ -149,12 +150,12 @@ The seam is a stop line, not a decoration: a black 2 px rule across the column r
 - Gap: `――`, labelled `この行は訳せていません` for assistive technology
 
 **Notes**
-- Kind labels, after the English phrase: `〔スラング〕` · `〔掛詞〕` · `〔引用・元ネタ〕` · `〔慣用句〕` · `〔二通りに読める〕`
+- Kind labels, after the English phrase: `〔スラング〕` · `〔言葉遊び〕` · `〔元ネタ〕` · `〔慣用句〕` · `〔二通りに読める〕`
 - Conjecture tag: `〔推測〕`
-- Grounding: `Genius注釈より`
-- Disclosure: `Geniusの注釈を英語で読む ▾` with `▲{votes}` after it · expanded `たたむ ▴` · truncated text `…` + `続きを読む`
+- Grounding: `Geniusの注釈を参考にしました` (the note is ours; より would read as a quotation of Genius' text)
+- Disclosure: `Geniusの注釈を英語で読む ▾` with `{votes}票` after it · expanded `たたむ ▴` · truncated text `…` + `続きを読む`
 - Close: `注を閉じる` (only while an annotation is unfolded)
-- Mark aria-label: `注を開く：{kind}` (with several kinds, joined with `・`)
+- Mark aria-label: `注：{kind}` (with several kinds, joined with `、`); `aria-expanded` says whether it is open
 
 **First-run sheet**
 - Title: `日本語訳をはじめる` · `閉じる`
@@ -162,30 +163,31 @@ The seam is a stop line, not a decoration: a black 2 px rule across the column r
 - Step 2: `キーをコピーして、下に貼り付けます`
 - Placeholder: `ここに貼り付け`
 - Empty field: `キーを貼り付けてください`
-- Privacy note: `キーはこのブラウザにだけ保存され、Google以外には送られません`
+- Privacy note: `キーはこのブラウザにだけ保存され、Google以外には送られません。無料枠では、送った歌詞などがGoogleのサービス改善に使われることがあります`
 - Primary: `保存してこの曲を訳す` · secondary: `保存だけする`
 - While checking: `確かめています…`
 - Bad key: `このキーは使えませんでした。コピーし直してください`
-- Network: `確かめられませんでした。接続を確認してください`
-- Google busy or failing (503, 429, timeout): `Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ`
+- Network: `Googleにつながりませんでした。接続を確認してください`
+- The key could not be stored: `キーを保存できませんでした。もう一度試してください`
+- Google busy or failing (503, 429, timeout): `Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください`
 
 **Settings sheet**
 - Title: `Lyric Lensの設定` · `閉じる`
 - Section: `翻訳に使うAI`
-- Row: `Google AI Studio（Gemini）`, its status at the right, then the masked key `••••abcd` with `キーを消す` (`キーを入れ直す` while the key is rejected; the new field is then focused), or, with no key, a field, `保存` and `キーを作る（Google AI Studio）`
-- Row status, in words: `使えます` · `未設定` · `今日の枠を使い切りました（{when}から使えます）` · `キーが使えません` · `確かめています…`
-- Row messages (after a failed check): the three first-run sentences for a bad key, a network failure and a busy Google
+- Row: `Google Gemini`, its status at the right, then the masked key `••••abcd` with `キーを消す` (`キーを入れ直す` while the key is rejected; the new field is then focused), or, with no key, a field, `保存` and `Google AI Studioでキーを作る`
+- Row status, in words: `使えます` · `未設定` · `今日の無料枠を使い切りました（{when}から使えます）` · `キーが使えません` · `確かめています…`
+- Row messages (after a failed check): for a rejected key only the next step, `コピーし直して、貼り付けてください` (the status already says `キーが使えません`); the first-run sentences for a network failure and a busy Google
 - Section: `この曲`
   - `{YYYY}年{M}月{D}日に{model}で訳しました`, with the model as a reader says it (`Gemini 3.5 Flash-Lite`, see §7). A part that is unknown is left out: `Gemma 4で訳しました`, `2026年12月31日に訳しました`.
-  - `直近のエラー` (a collapsed disclosure, shown only when the song's stop carries detail): `{model} · {status} · {kind}` (`不明` and `—` when unknown) and the error text (at most 200 characters, selectable, small, quiet)
-  - `この曲を訳し直す` → confirm `今の訳を残したまま訳し直します。終わると入れ替わります` · `訳し直す` · `やめる`
+  - `直近のエラー` (a collapsed disclosure, shown only when the song's stop carries detail): `{model} · {status} · {kind}` (the model as a reader says it; `—` for any part that is unknown) and the error text (at most 200 characters, selectable, small, quiet)
+  - `この曲を訳し直す` → confirm `今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます` · `訳し直す` · `やめる`
   - `この曲の訳を消す` → confirm `この曲の保存した訳を消します。元に戻せません` · `消す` · `やめる`
 - Section: `保存データ`, top to bottom:
-  - `{n}曲を保存しています（{size}）` (`保存した曲：…` until the count is read)
+  - `{n}曲を保存しています（{size}）` (`保存した曲：…` until the count is read; `保存した曲はありません` when there are none)
   - `書き出す` · `読み込む` · `すべて消す`
   - `書き出したファイルは、別の端末でも読み込めます`
-  - The result of the last action: `{n}曲を書き出しました` / `書き出せませんでした`; `{n}曲を読み込みました` / `新しく読み込める曲はありませんでした` / `読み込めませんでした。Lyric Lensで書き出したファイルを選んでください`
-  - `すべて消す` → confirm `保存した{n}曲をすべて消します。元に戻せません` · `すべて消す` · `やめる`
+  - The result of the last action: `{n}曲を書き出しました` / `書き出せませんでした`; `{n}曲を読み込みました` / `新しく読み込める曲はありませんでした` / `読み込めませんでした。Lyric Lensで書き出したファイルを選んでください`; `消せませんでした` when すべて消す fails
+  - `すべて消す` → confirm `保存した{n}曲の訳をすべて消します。元に戻せません` · `すべて消す` · `やめる`
 
 ## 5. Notes
 
@@ -209,7 +211,7 @@ The phrase in the lyric, the open `※` and the note's heading (below) are the y
   - Row 1: the quoted English phrase without quotation marks, in Genius' own lyric face (15 px, weight 600), black on yellow; then `〔{kind}〕` in quiet grey (13 px), then `〔推測〕` if flagged. They wrap together. The phrase is always shown, so nothing is lost if the Highlight API or the phrase match fails.
   - Row 2: the explanation.
   - Multiple notes are 12 px apart, with no rule between them.
-- When `g` matches a fetched Genius annotation that overlaps this line, a row shows `Genius注釈より` (quiet, 13 px). When a fetched annotation's fragment overlaps the quoted phrase (with or without `g`), an underlined link `Geniusの注釈を英語で読む ▾` appears, with `▲{votes}` after it. Expanded, it reads `たたむ ▴` and shows the plain annotation text in Genius' face (14/22 px), cut at 400 characters with `…` and an underlined `続きを読む`. Only the single highest-voted overlapping annotation is shown.
+- When `g` matches a fetched Genius annotation that overlaps this line, a row shows `Geniusの注釈を参考にしました` (quiet, 13 px). When a fetched annotation's fragment overlaps the quoted phrase (with or without `g`), an underlined link `Geniusの注釈を英語で読む ▾` appears, with `{votes}票` after it. Expanded, it reads `たたむ ▴` and shows the plain annotation text in Genius' face (14/22 px), cut at 400 characters with `…` and an underlined `続きを読む`. Only the single highest-voted overlapping annotation is shown.
 - `注を閉じる`, an underlined link at the foot of the note, appears only while an annotation is unfolded (a long read worth leaving) and closes the note.
 
 **Closing.** Tap `※` again, press Esc (while focus is on the mark or inside the note; focus returns to `※`), tap `注を閉じる`, or open another note. `訳を隠す` closes it too. Notes never close on scroll. When a note above the viewport closes, the scroll position is compensated.
@@ -230,7 +232,7 @@ The phrase in the lyric, the open `※` and the note's heading (below) are the y
 |---|---|---|---|
 | `black` | `#000` | `#F2F2F2` | the primary action, the status, links, the track's fill, the seam's line, the pen, `※`, focus rings |
 | `ink` | `#262626` | `#E6E6E6` | the translation, the preface, note text, the seam's sentence, a caption that says why (about 15:1 on white) |
-| `quiet` | `#6B6B6B` | `#A3A3A3` | ad-libs, repeats, captions, the count, `〔kind〕`, `Genius注釈より`, votes, a disabled link (5.3:1 on white) |
+| `quiet` | `#6B6B6B` | `#A3A3A3` | ad-libs, repeats, captions, the count, `〔kind〕`, `Geniusの注釈を参考にしました`, votes, a disabled link (5.3:1 on white) |
 | `rule` | `#E5E5E5` | `#3A3A3A` | the head's empty track |
 | `yellow` | `#FFFF64` | `#FFFF64` | only the words the reader asked about (§5); text on it is always `#000` |
 
@@ -259,9 +261,9 @@ The sheet (a shadow root) keeps the same five values as `--paper` `#FFFFFF`, `--
 | Seam button | 15 | same | 700 · `black`, underlined |
 | Note body | 14 / 24 | 13 / 22 | `ink` |
 | Note phrase | 15 / 22, Genius' face | same | 600 · `black` on yellow |
-| `〔kind〕`, `〔推測〕`, `Genius注釈より` | 13 | same | `quiet` |
+| `〔kind〕`, `〔推測〕`, `Geniusの注釈を参考にしました` | 13 | same | `quiet` |
 | Genius disclosure, `続きを読む`, `注を閉じる` | 13 / 32 | same | `black`, underlined |
-| Votes `▲312` | 12 | same | `quiet`, tabular figures |
+| Votes `312票` | 12 | same | `quiet`, tabular figures |
 | Genius annotation text | 14 / 22, Genius' face | same | `ink` |
 
 - Underlines are 1 px, offset 3 px; where hover exists they thicken to 2 px.
@@ -276,7 +278,7 @@ The sheet (a shadow root) keeps the same five values as `--paper` `#FFFFFF`, `--
 - `letter-spacing: .02em;` (none on English phrases and Genius' annotation text)
 - `text-wrap: pretty;` on the Japanese lines, the preface paragraph, note text, captions and seam sentences
 - No `palt`: tightening the spacing makes body text harder to read.
-- Sheet copy is set without hand-typed spaces between Japanese and Latin letters (`Google AI Studioを開く`); the sheet's `text-autospace: normal` does the spacing where it is supported.
+- Copy is set without hand-typed spaces between Japanese and Latin letters (`Google AI Studioを開く`); `text-autospace: normal`, on the sheet and on every `ll-` node of the reading surface, does the spacing where it is supported.
 
 **Spacing**
 - The head sits 16 px under Genius' header and 28 px above the first lyric (24 px on phones). The row is 44 px tall; the first caption is 8 px under it (2 px between captions) and the preface 16 px under the row and captions.
@@ -328,8 +330,8 @@ The sheet (a shadow root) keeps the same five values as `--paper` `#FFFFFF`, `--
 - `保存だけする` saves the key and moves to S2.
 
 **Settings layout** (one scrolling column, three sections)
-1. **翻訳に使うAI.** One Gemini key row; the engine chooses among Gemini's models itself (§8). The row names the service, `Google AI Studio（Gemini）`, and says its status in words at the right; below it are the masked key (`••••abcd`) with `キーを消す`, or, with no key, the field with `保存` and a link `キーを作る（Google AI Studio）`. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM (apart from the field's value while the reader types).
-2. **この曲.** Shown when this song has an edition or a recorded error and no request is writing it. One sentence gives the date and the model as a reader says it (this is the only place a model name appears), then `直近のエラー` when there is one, then `この曲を訳し直す` and `この曲の訳を消す`, each with an inline confirmation that replaces the buttons in place. Models are named by `modelLabel`: `gemini-3.5-flash-lite` reads `Gemini 3.5 Flash-Lite`, `gemma-4-31b-it` reads `Gemma 4 31B IT`, `gemini-3-flash-preview` reads `Gemini 3 Flash Preview`; an id it does not recognise is shown as it is.
+1. **翻訳に使うAI.** One Gemini key row; the engine chooses among Gemini's models itself (§8). The row names the service, `Google Gemini`, and says its status in words at the right; below it are the masked key (`••••abcd`) with `キーを消す`, or, with no key, the field with `保存` and a link `Google AI Studioでキーを作る`. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM (apart from the field's value while the reader types).
+2. **この曲.** Shown when this song has an edition or a recorded error and no request is writing it. One sentence gives the date and the model as a reader says it (this is the only place a model name appears), then `直近のエラー` when there is one, then `この曲を訳し直す` and `この曲の訳を消す`, each with an inline confirmation that replaces the buttons in place. Models are named by `modelLabel`: `gemini-3.5-flash-lite` reads `Gemini 3.5 Flash-Lite`, `gemma-4-31b-it` reads `Gemma 4 31B` (the `-it` build tag is dropped), `gemini-3-flash-preview` reads `Gemini 3 Flash Preview`; an id it does not recognise is shown as it is.
 3. **保存データ.** Top to bottom: the status line (count and size, `{n} KB` or `{n.n} MB`), the actions (`書き出す` · `読み込む` · `すべて消す`; with nothing saved only `読み込む` can be pressed), the explanation, and one message line for the result of the last action. Export writes `lyric-lens-YYYYMMDD.json`. Import validates every record, merges only what is strictly better (more translated lines, then finished over cut, then newer), and skips the song a request is writing. Eviction past 300 songs orders by last read and never removes a partly translated song.
 
 **Statuses are words, never colour.** A working key says `使えます`, a rejected one `キーが使えません` in bold. A destructive step is guarded by a sentence and a second tap (`やめる` puts the buttons back), not by a warning colour.
@@ -341,7 +343,7 @@ There is no auto-translate, no note-amount setting, no font-size control (the pa
 ## 8. Engine contract (the parts that shape the UX)
 
 **Request.**
-- The full lyrics in order, each line tagged with an ID. Exact repeats carry the ID of their first occurrence as `(=L7)`, and section headers are kept as context.
+- The full lyrics in order, each line tagged with an ID. Exact repeats carry the ID of their first occurrence as `(=L7)`, lines of sounds are shown as `(声)` with no ID (context only, never asked for), and section headers are kept as context.
 - Fetched Genius annotations as grounding: the fragment, the text, the votes and an id.
 - The model writes the song record first, then one record per **distinct** ID.
 - Prompt rules:
@@ -400,7 +402,7 @@ There is no auto-translate, no note-amount setting, no font-size control (the pa
 2. After the batch, call `scrollBy` with the difference.
 3. This also applies to wraps that grow a slot, to notes opening or closing above the viewport, and to the retranslation swap.
 
-**Clicks inside Genius `<a>`.** Native `click`, `pointerdown` and `mousedown` listeners on our own nodes call `stopPropagation()`. `click` also calls `preventDefault()`, except on our real external links (`Google AI Studioを開く`, `キーを作る（Google AI Studio）`). React's root listener therefore never sees them, and the Genius panel never opens from our text. English text and highlight ranges are never our tap targets.
+**Clicks inside Genius `<a>`.** Native `click`, `pointerdown` and `mousedown` listeners on our own nodes call `stopPropagation()`. `click` also calls `preventDefault()`, except on our real external links (`Google AI Studioを開く`, `Google AI Studioでキーを作る`). React's root listener therefore never sees them, and the Genius panel never opens from our text. English text and highlight ranges are never our tap targets.
 
 **Annotation click rewrites the URL.** The song identity is unchanged, so nothing happens. Genius' panel opens as usual.
 
@@ -464,7 +466,7 @@ Amendments made during implementation:
 20. **Japanese songs are left alone** (SJ): translating Japanese into Japanese would spend a request for nothing.
 21. **A storage failure never erases what is on screen.** The edition is shown first and saved second; a failed save says so (S8f) and keeps the edition until the page closes. A failed lock release or a stale page during client-side navigation can no longer leave the tab stuck or write one song's lines under another's id.
 22. **A failed Genius annotation fetch is retried** on the next tap instead of being remembered as "no annotations".
-23. **Sound-only ad-libs stay sounds** (ayy, uh, skrrt, funk → エイ, アー, スカー, ファンク): they are never given an invented meaning. The preface is held to one plain sentence for 誰が誰に (≤40 characters, no bracketed asides) and what the lyrics support for この曲は (≤80 characters); the song-wide note ceiling is enforced in code (wordplay and ambiguity may use two extra slots).
+23. **Sound-only ad-libs stay sounds:** they are never given an invented meaning (the katakana rendering chosen here, エイ, アー, スカー, is superseded by 45). The preface is held to one plain sentence for 誰が誰に (≤40 characters, no bracketed asides) and what the lyrics support for この曲は (≤80 characters); the song-wide note ceiling is enforced in code (wordplay and ambiguity may use two extra slots).
 24. **Accessibility.** The head row's status is one persistent polite live region updated in place (so streaming does not re-announce it); gap and repeat marks are labelled images (44 dropped the repeat mark); buttons dim while pressed on touch, and hover styles apply only where hover exists.
 25. **Automatically chosen Gemini models adapt to how they have behaved** (`ll3:health`, per key and model, entries older than 14 days dropped): a model that answered within the week and has not failed since goes first, fastest first-text time first; unknown models keep their rank order after those; a model that was busy or silent in the last half hour goes last. Flash always stays ahead of Flash-Lite and Gemma. A model silent for 30 s is given up on, benched for five minutes like a busy one (but skipped, not tried last), and the next model starts at once.
 
@@ -482,7 +484,7 @@ Amendments made during implementation:
 37. **公認 marks `verified` or `accepted` annotations;** a retranslation that carried old lines over keeps the new motifs and records `carried: n` on the record (no UI).
 38. **Flash has a 20 s time budget for its first line** (measured live: Flash flaps, 503s and 30 s silences, while Flash-Lite answers its first line in about 1.5 s). The budget runs from the start of the call; each Flash attempt's first-text timeout is the remaining budget (never above 30 s), and no Flash attempt starts with less than 8 s left. It applies only while a Flash-Lite candidate is queued behind to take over (Gemma is slower than a slow Flash), never to a pinned model, and not once any Flash text has arrived. A budget timeout benches the model for 5 min like any silence but is not one of the two silent models that end a call. A call that left Flash for lack of time stores `flashDegradedUntil` = now + 10 min (`ll3:flashdegraded`, per key); until then the order is Flash-Lite, Flash, Gemma, and the next successful Flash answer clears it. `availability()` is unaffected.
 
-39. **Silence is not a lost connection.** Two silent models end the call with stop reason `silent` (「AIから返事がなく…」, button enabled); a wait longer than 90 s (rate or an unusable bench) is shown as `{when}ごろから`, and the button stays disabled until then. A key check that fails on Google's side says 「Googleが混み合っていて確かめられませんでした…」, not "check your connection". An inline per-minute wait the Flash budget cannot use is skipped, and the reported reason follows each model's latest error.
+39. **Silence is not a lost connection.** Two silent models end the call with stop reason `silent` (「AIから返事がなく…」, button enabled); a wait longer than 90 s (rate or an unusable bench) is shown as `{when}ごろから`, and the button stays disabled until then. A key check that fails on Google's side says 「Googleが混み合っていて、確かめられませんでした…」, not "check your connection". An inline per-minute wait the Flash budget cannot use is skipped, and the reported reason follows each model's latest error.
 40. **A line record that is not valid JSON is repaired or salvaged** (stray quotes escaped; else id/head/ja kept without notes); records that still cannot be read are counted (`dropped`) into the stop's detail and the log. Measured: a 59-line song that ended with gaps now completes in one request.
 41. **Insults and address terms keep their strength** (no softening to neutral words, no age added for lil'), distinct English words keep distinct renderings, and the motif rendering is reused in every repeat.
 
@@ -491,5 +493,8 @@ Amendments made during implementation:
 43. **(Superseded by 44.)** **Apple-like redesign** (after the reader asked for that direction): the head became one soft card, the next step a tinted capsule, empty slots soft placeholder bars with a shimmer, the seam a callout card, notes rounded cards, and the settings sheet a translucent grouped list with filled and tinted buttons, red destructive actions and a phone grabber. Checked with real-size screenshots on desktop and phone.
 
 44. **Design v4: 「聴きながら、わかる。」** The visual system was rebuilt from the reader's situation (reading along with a song) and from Genius' own grammar instead of from a style, replacing 42, 43 and the interim 対訳 booklet pass (明朝, 金赤 ink, a vertical edition mark). The head is one row in Genius' info-row grammar (an `あ` icon, a bold underlined action or a status sentence, underlined links, a 2 px track that exists only while there is progress and fills in black, captions underneath, a settled `AIによる日本語訳` row once done); the preface lost its labels (the prompt asks for 「AからBへ」, then a paragraph indented one character, `続きを読む ▾` when collapsed); unwritten lines are reserved blank slots with one breathing pen, written lines are plain ink with no fade, gaps are `――`, repeats are quiet grey without `↺`; notes are unboxed and set 2em in with `〔kind〕` and `〔推測〕`, and the phrase in the lyric, the open `※` and the note's heading turn the marker yellow together; the seam is a black line across the column; the sheets are square, with a title rule, underlined links, one black button and statuses in words; no web fonts, no red, no accent colour. Review fixes: the links own fixed slots (`止める` · `訳を隠す` · `設定`) that never move, an absent one held as an invisible placeholder; the pen no longer grows its line; the seam is its own node right after the last translated line, with nothing drawn below it (translated repeats included); the settings panel hangs from the right edge of `設定`; the sheet names models as a reader says them (`modelLabel`), has a privacy note and no hand-typed spaces between Japanese and Latin letters, and 保存データ reads status, actions, explanation, message; Japanese is drawn in our stack, because Genius' lyric font list reaches us as Latin only (generic families dropped); `訳を隠す` is remembered per song and hides the preface with the translation.
+
+45. **Sounds are not translated** (after the reader found ウー for Woah and オー for Oh off-putting, without wanting a free translation either). A line made only of sounds gets no Japanese row at all (§2), and an older edition's row for it is no longer drawn. The list in `core/sounds.ts` holds non-words only: a question (`Huh?`), a pair that means something (`uh-oh`, `uh-uh`), `who`, and a lone or fused scat syllable (`La` = LA, `Nana`) are lines like any other. Inside a line, the prompt keeps a sound in its own spelling, the same number of times, in its place (`Ayy、マジでイカれてる、ayy`, `（Yeah、待てよ）`), never as katakana and never as a word; sound effects (`brr`, `bop`) likewise. An interjection or a call that means something is translated by that meaning (`Whoa, slow down` → `待て待て、落ち着け`, `hold up` → `待てよ`, `Nah` → `いや`). On the page the Japanese row carries the meaning and the sounds are left to the English line above, as 字幕 does: a trailing `( )` group made only of sounds is not drawn (older editions' `（イェー、イェー）` disappear with it), a sound the model kept between the phrases of a row is taken out with the separator it leaves (`Ayy、マジでイカれてる、ayy` → `マジでイカれてる`; one inside 「」, touching kana or asked as a question, `Huh？`, is a word and stays), and a row that only repeats its English line (`Hey, hey` left as written, a Japanese line in an English song) or holds nothing but sounds is not drawn. This is done on the page because Flash cannot hold the count: on HUMBLE one run added a leading Ayy to 5 rows, the next dropped them from 7 of 8. Measured with gemini-3.5-flash on God's Plan, HUMBLE, No Role Modelz and Kill Bill: no katakana sound in any row, 4 of God's Plan's 50 lines get no row.
+46. **Copy review: one fact, one phrase.** Three independent reviews of every visible string (reading surface, sheets and docs, consistency and typography). The spent daily quota reads `今日の無料枠を使い切りました` everywhere, with `{when}から` (the reset is exact; `ごろ` is kept for estimated waits); every retry says `もう一度試せます` (never `どうぞ`, never a fragment); a rejected request is `AIへの依頼が通らず` (not `訳しませんでした`, which reads as a refusal); waits name `訳し終える`, not a bare `終わる` that reads as the song ending; `いま` with a past tense is gone; a note drawn from Genius says `Geniusの注釈を参考にしました` (`より` would read as a quotation); kinds are `〔言葉遊び〕` and `〔元ネタ〕`; votes read `{n}票`; times have no leading zero; the reading surface gets `text-autospace` like the sheet; diagnostics name models as a reader says them and drop sentence-final `。`; the README stops pointing at a button that no longer exists. The translation prompt also lost habits a Japanese editor would fix: meaningful English left as katakana (`ホールドアップ` reads as a stick-up, `シスター` as nuns), nigga locked to one motif (`ダチ` for people the speaker despises), `bitch` aimed at men turned into a woman's word, the placeholder `this shit` as the noun `クソ`, and `〜かしら`/`〜のよ` for a contemporary woman.
 
 Each of these came out of many rounds of multi-lens review with adversarial verification, all fixed and covered by the unit tests.

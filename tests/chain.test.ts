@@ -301,7 +301,7 @@ describe('generateWithFallback: quota cooldowns', () => {
     const second = await settle(start(gemini()));
     expect(second.error?.kind).toBe('quota');
     expect(second.error?.status).toBe(429);
-    expect(second.error?.message).toContain('上限');
+    expect(second.error?.message).toContain('無料枠');
     expect(generated).toEqual([]);
   });
 
@@ -420,7 +420,7 @@ describe('generateWithFallback: when every candidate is cooling down', () => {
     const { error } = await settle(start(g));
     expect(error?.kind).toBe('quota'); // as before: nothing better to say
     expect(error?.retryAfterMs).toBe(0);
-    expect(error?.message).toContain('上限');
+    expect(error?.message).toContain('無料枠');
     expect(http).not.toHaveBeenCalled();
   });
 
@@ -687,7 +687,7 @@ describe('cooldown ids and API keys', () => {
     generated = [];
     const again = await settle(start(gemini({ apiKey: '  key-one ' })));
     expect(again.error?.kind).toBe('quota');
-    expect(again.error?.message).toContain('上限');
+    expect(again.error?.message).toContain('無料枠');
     expect(generated).toEqual([]);
   });
 

@@ -90,8 +90,8 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
       try { handle?.abort?.(); } catch { /* ignore */ }
       reject(error);
     };
-    const watchdog = new Watchdog(req, () => fail(new LLMError('timeout', '応答が途切れました。')));
-    const onAbort = () => fail(new LLMError('aborted', '中止しました。'));
+    const watchdog = new Watchdog(req, () => fail(new LLMError('timeout', '返事がないため打ち切りました')));
+    const onAbort = () => fail(new LLMError('aborted', '中止しました'));
     if (req.signal?.aborted) { onAbort(); return; }
     req.signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -159,9 +159,9 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
         });
       },
       // Keep the manager's own reason (e.g. a refused @connect) for the error details.
-      onerror: (r) => fail(new LLMError('network', 'ネットワークに接続できませんでした。', { detail: String((r as GMResponse & { error?: string })?.error || r?.statusText || '') })),
-      ontimeout: () => fail(new LLMError('timeout', '応答がタイムアウトしました。')),
-      onabort: () => fail(new LLMError('aborted', '中止しました。')),
+      onerror: (r) => fail(new LLMError('network', 'ネットワークに接続できませんでした', { detail: String((r as GMResponse & { error?: string })?.error || r?.statusText || '') })),
+      ontimeout: () => fail(new LLMError('timeout', '時間内に返事がありませんでした')),
+      onabort: () => fail(new LLMError('aborted', '中止しました')),
     };
     const ret = fn(details);
     if (ret && typeof (ret as GMHandle).abort === 'function') handle = ret as GMHandle;
@@ -172,9 +172,9 @@ async function viaFetch(req: StreamRequest): Promise<HttpResult> {
   const controller = new AbortController();
   let reason: LLMError | null = null;
   const stop = (error: LLMError) => { reason ??= error; controller.abort(); };
-  const watchdog = new Watchdog(req, () => stop(new LLMError('timeout', '応答が途切れました。')));
-  const onAbort = () => stop(new LLMError('aborted', '中止しました。'));
-  if (req.signal?.aborted) throw new LLMError('aborted', '中止しました。');
+  const watchdog = new Watchdog(req, () => stop(new LLMError('timeout', '返事がないため打ち切りました')));
+  const onAbort = () => stop(new LLMError('aborted', '中止しました'));
+  if (req.signal?.aborted) throw new LLMError('aborted', '中止しました');
   req.signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const res = await fetch(req.url, { method: req.method ?? 'POST', headers: req.headers, body: req.body, signal: controller.signal });
@@ -201,7 +201,7 @@ async function viaFetch(req: StreamRequest): Promise<HttpResult> {
   } catch (error) {
     if (reason) throw reason;
     if (error instanceof LLMError) throw error;
-    throw new LLMError('network', 'ネットワークに接続できませんでした。', { detail: String(error) });
+    throw new LLMError('network', 'ネットワークに接続できませんでした', { detail: String(error) });
   } finally {
     watchdog.clear();
     req.signal?.removeEventListener('abort', onAbort);

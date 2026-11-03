@@ -366,7 +366,7 @@ describe('first-run sheet', () => {
     openSheet({ mode: 'first-run', onClose });
     type(shadow().querySelector('input')!, GEMINI_KEY);
     buttonNamed('保存だけする').click();
-    await vi.waitFor(() => expect(text()).toContain('確かめられませんでした。接続を確認してください'));
+    await vi.waitFor(() => expect(text()).toContain('Googleにつながりませんでした。接続を確認してください'));
     expect(host()).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe('');
@@ -375,7 +375,7 @@ describe('first-run sheet', () => {
     buttonNamed('保存だけする').click();
     await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
-    expect(text()).toContain('Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    expect(text()).toContain('Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
     expect(text()).not.toContain('接続を確認してください');
   });
 
@@ -394,15 +394,15 @@ describe('first-run sheet', () => {
     };
 
     type(input, 'AIzaTESTKEY0000000000000000000');
-    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
+    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
     expect(markKeyMock).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe('');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect(onClose).not.toHaveBeenCalled();
 
-    await check(new LLMError('rate', 'x', { status: 429 }), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
-    await check(new Error('boom'), 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ');
-    await check(new LLMError('network', 'x'), '確かめられませんでした。接続を確認してください');
+    await check(new LLMError('rate', 'x', { status: 429 }), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
+    await check(new Error('boom'), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
+    await check(new LLMError('network', 'x'), 'Googleにつながりませんでした。接続を確認してください');
     await check(new LLMError('auth', 'x', { status: 400 }), 'このキーは使えませんでした。コピーし直してください');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect((await loadSettings()).apiKey).toBe('');
@@ -440,10 +440,10 @@ describe('settings sheet', () => {
 
     const rows = Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]'));
     expect(rows.map((r) => r.dataset.service)).toEqual(['gemini']);
-    expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google AI Studio（Gemini）');
+    expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google Gemini');
     const when = formatWhen(until);
     const status = rows[0]!.querySelector<HTMLElement>('.status')!;
-    expect(status.textContent).toBe(`今日の枠を使い切りました（${when}から使えます）`);
+    expect(status.textContent).toBe(`今日の無料枠を使い切りました（${when}から使えます）`);
     expect(status.dataset.s).toBe('resting');
 
     // the saved key is masked, with キーを消す and no field
@@ -460,7 +460,7 @@ describe('settings sheet', () => {
     expect(rowFor('gemini').querySelector('input')).not.toBeNull();
     expect(rowFor('gemini').textContent).toContain('保存');
     const make = rowFor('gemini').querySelector('a')!;
-    expect(make.textContent).toBe('キーを作る（Google AI Studio）');
+    expect(make.textContent).toBe('Google AI Studioでキーを作る');
     expect(make.getAttribute('href')).toBe('https://aistudio.google.com/app/apikey');
     expect(make.getAttribute('target')).toBe('_blank');
     expect(text()).not.toContain('キーを足す');
@@ -521,7 +521,7 @@ describe('settings sheet', () => {
 
     modelsForMock.mockRejectedValue(new LLMError('network', 'offline'));
     save();
-    await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('確かめられませんでした。接続を確認してください'));
+    await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('Googleにつながりませんでした。接続を確認してください'));
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect((await loadSettings()).apiKey).toBe('');
   });
@@ -533,7 +533,7 @@ describe('settings sheet', () => {
     modelsForMock.mockRejectedValue(new LLMError('overloaded', 'x', { status: 503 }));
     type(input, 'AIzaTESTKEY0000000000000000000');
     Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
-    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ'));
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください'));
     expect(rowFor('gemini').textContent).not.toContain('接続を確認してください');
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
@@ -554,7 +554,7 @@ describe('settings sheet', () => {
     expect(details).not.toBeNull();
     expect(details!.open).toBe(false);
     expect(details!.querySelector('summary')!.textContent).toBe('直近のエラー');
-    expect(details!.textContent).toContain('gemini-3.5-flash · 400 · bad-request');
+    expect(details!.textContent).toContain('Gemini 3.5 Flash · 400 · bad-request');
     expect(details!.textContent).toContain('invalid field');
   });
 
@@ -586,7 +586,7 @@ describe('settings sheet', () => {
     expect(text()).not.toContain('gemini-3.5-flash');
 
     buttonNamed('この曲を訳し直す').click();
-    expect(text()).toContain('今の訳を残したまま訳し直します。終わると入れ替わります');
+    expect(text()).toContain('今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます');
     expect(hasButton('この曲を訳し直す')).toBe(false); // the confirm replaced the button row in place
     expect(onRetranslate).not.toHaveBeenCalled();
 
@@ -648,11 +648,11 @@ describe('settings sheet', () => {
     buttonNamed('すべて消す').click();
     expect(shadow().querySelector('[data-danger]')).toBeNull();
     expect(buttonNamed('すべて消す').dataset.v).toBe('solid'); // the confirm button
-    expect(text()).toContain('保存した2曲をすべて消します。元に戻せません');
+    expect(text()).toContain('保存した2曲の訳をすべて消します。元に戻せません');
     expect((await storageSummary()).count).toBe(2); // nothing yet
     buttonNamed('すべて消す').click();
 
-    await vi.waitFor(() => expect(text()).toContain('0曲を保存しています'));
+    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
     expect((await storageSummary()).count).toBe(0);
     expect(host()).not.toBeNull(); // the sheet stays open
     expect(buttonNamed('すべて消す').disabled).toBe(true);
@@ -778,7 +778,7 @@ describe('saved data export and import', () => {
   it('shows 書き出す, 読み込む and すべて消す, with only 読み込む available when nothing is saved', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(text()).toContain('0曲を保存しています'));
+    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
     expect(text()).toContain('書き出したファイルは、別の端末でも読み込めます');
     expect(buttonNamed('書き出す').disabled).toBe(true);
     expect(buttonNamed('読み込む').disabled).toBe(false);
@@ -843,7 +843,7 @@ describe('saved data export and import', () => {
     const onClose = vi.fn();
     openSheet({ mode: 'settings', onClose });
     await settingsReady();
-    await vi.waitFor(() => expect(text()).toContain('0曲を保存しています'));
+    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
     choose(fileInput(), exported);
     await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲を読み込みました'));
     expect(dataMessage().dataset.kind).toBeUndefined();
@@ -925,7 +925,7 @@ describe('saved data export and import', () => {
     buttonNamed('すべて消す').click();
     expect(hasButton('書き出す')).toBe(false); // the confirm replaced the row
     buttonNamed('すべて消す').click();
-    await vi.waitFor(() => expect(text()).toContain('0曲を保存しています'));
+    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
     expect(hasButton('書き出す')).toBe(true);
     expect(hasButton('読み込む')).toBe(true);
     expect(buttonNamed('書き出す').disabled).toBe(true);
@@ -940,14 +940,14 @@ describe('modelLabel', () => {
     expect(modelLabel('gemini-3.8-flash')).toBe('Gemini 3.8 Flash');
     expect(modelLabel('gemini-3-flash-preview')).toBe('Gemini 3 Flash Preview');
     expect(modelLabel('gemini-3.5-flash-lite')).toBe('Gemini 3.5 Flash-Lite');
-    expect(modelLabel('gemma-4-31b-it')).toBe('Gemma 4 31B IT');
+    expect(modelLabel('gemma-4-31b-it')).toBe('Gemma 4 31B');
   });
 
   it('reads the other ids of the same kind the same way', () => {
     expect(modelLabel('gemini-2.5-flash')).toBe('Gemini 2.5 Flash');
     expect(modelLabel('gemini-3.1-flash-lite')).toBe('Gemini 3.1 Flash-Lite');
     expect(modelLabel('gemini-2.5-pro')).toBe('Gemini 2.5 Pro');
-    expect(modelLabel('gemma-3-27b-it')).toBe('Gemma 3 27B IT');
+    expect(modelLabel('gemma-3-27b-it')).toBe('Gemma 3 27B');
     expect(modelLabel('gemma-4')).toBe('Gemma 4');
   });
 

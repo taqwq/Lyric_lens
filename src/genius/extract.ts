@@ -227,6 +227,7 @@ export function readPage(doc: Document = document, loc: Location = location): Pa
   const extraction = extractLyrics(doc);
   if (!extraction) return null;
   const source = buildSong(extractMeta(doc), extraction.rows);
-  if (!source.lines.length) return null;
+  // Nothing to translate (no lines, or only sounds): Lyric Lens stays out of the page.
+  if (!source.unique.length) return null;
   return { path: songPath(loc, doc), songId: songIdFromPage(doc), source, anchors: extraction.anchors, texts: extraction.texts, containers: extraction.containers };
 }

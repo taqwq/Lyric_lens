@@ -46,18 +46,20 @@ const COPY = {
   step2: 'キーをコピーして、下に貼り付けます',
   placeholder: 'ここに貼り付け',
   pasteKey: 'キーを貼り付けてください',
-  keyNote: 'キーはこのブラウザにだけ保存され、Google以外には送られません',
+  keyNote: 'キーはこのブラウザにだけ保存され、Google以外には送られません。無料枠では、送った歌詞などがGoogleのサービス改善に使われることがあります',
   primary: '保存してこの曲を訳す',
   secondary: '保存だけする',
   checking: '確かめています…',
   badKey: 'このキーは使えませんでした。コピーし直してください',
-  network: '確かめられませんでした。接続を確認してください',
-  busyCheck: 'Googleが混み合っていて確かめられませんでした。少しおいてからもう一度どうぞ',
+  network: 'Googleにつながりませんでした。接続を確認してください',
+  busyCheck: 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください',
+  badKeyRow: 'コピーし直して、貼り付けてください',
+  keySaveFailed: 'キーを保存できませんでした。もう一度試してください',
   settingsTitle: 'Lyric Lensの設定',
   close: '閉じる',
   services: '翻訳に使うAI',
   save: '保存',
-  makeKey: 'キーを作る（Google AI Studio）',
+  makeKey: 'Google AI Studioでキーを作る',
   removeKey: 'キーを消す',
   reenterKey: 'キーを入れ直す',
   statusMissing: '未設定',
@@ -66,7 +68,7 @@ const COPY = {
   song: 'この曲',
   lastError: '直近のエラー',
   retranslate: 'この曲を訳し直す',
-  retranslateConfirm: '今の訳を残したまま訳し直します。終わると入れ替わります',
+  retranslateConfirm: '今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます',
   retranslateOk: '訳し直す',
   deleteSong: 'この曲の訳を消す',
   deleteSongConfirm: 'この曲の保存した訳を消します。元に戻せません',
@@ -79,13 +81,15 @@ const COPY = {
   importNothing: '新しく読み込める曲はありませんでした',
   importFailed: '読み込めませんでした。Lyric Lensで書き出したファイルを選んでください',
   deleteAll: 'すべて消す',
+  deleteFailed: '消せませんでした',
+  nothingSaved: '保存した曲はありません',
   ok: '消す',
   cancel: 'やめる',
 } as const;
 
 const AI_STUDIO_URL = 'https://aistudio.google.com/app/apikey';
 
-const SERVICE_LABEL = 'Google AI Studio（Gemini）';
+const SERVICE_LABEL = 'Google Gemini';
 
 /* ---------- small helpers ---------- */
 
@@ -140,11 +144,17 @@ export function modelLabel(id: string): string {
   const words: string[] = [];
   for (const part of m[3]!.split('-').filter(Boolean)) {
     if (part === 'lite' && words.length) words[words.length - 1] += '-Lite';
-    else if (part === 'it') words.push('IT');
+    else if (part === 'it') continue; // instruction-tuned: a build tag, not part of the name
     else if (/^\d+(?:\.\d+)?[bm]$/.test(part)) words.push(part.toUpperCase());
     else words.push(part.charAt(0).toUpperCase() + part.slice(1));
   }
   return [m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1), m[2]!, ...words].join(' ');
+}
+
+/** What a screen reader says for the masked key. */
+function maskLabel(key: string): string {
+  const k = key.trim();
+  return k.length >= 8 ? `保存したキー（末尾${k.slice(-4)}）` : '保存したキー';
 }
 
 /** ••••abcd. A short key shows no tail at all. */
@@ -222,7 +232,7 @@ function statusText(row: Row): string {
     case 'resting': {
       if (row.until <= 0) return COPY.statusOk;
       const when = formatWhen(row.until);
-      return `今日の枠を使い切りました（${when}から使えます）`;
+      return `今日の無料枠を使い切りました（${when}から使えます）`;
     }
     default: return '';
   }
@@ -533,7 +543,7 @@ function mount(options: OpenSheetOptions): Active {
       } catch {
         if (closed) return;
         setBusy(false);
-        say(COPY.network, 'error');
+        say(COPY.keySaveFailed, 'error');
         focusEl(input);
         return;
       }
@@ -594,10 +604,10 @@ function mount(options: OpenSheetOptions): Active {
       if (mode === 'key') {
         const remove = button(COPY.removeKey, 'text', () => { void removeKey(row); });
         row.removeButton = remove;
-        row.controls.replaceChildren(h('div', { class: 'inline' }, h('span', { class: 'mask' }, maskKey(row.apiKey)), remove));
+        row.controls.replaceChildren(h('div', { class: 'inline' }, h('span', { class: 'mask', role: 'img', 'aria-label': maskLabel(row.apiKey) }, maskKey(row.apiKey)), remove));
         return;
       }
-      const input = keyInput(`${SERVICE_LABEL} のAPIキー`, () => { void saveKey(row); }, () => {
+      const input = keyInput(`${SERVICE_LABEL}のAPIキー`, () => { void saveKey(row); }, () => {
         if (!row.busy && (row.kind === 'bad' || row.message)) { row.kind = 'missing'; row.message = ''; paintRow(row); }
       });
       row.input = input;
@@ -619,7 +629,7 @@ function mount(options: OpenSheetOptions): Active {
       if (verdict !== 'ok') {
         row.busy = false;
         row.kind = verdict === 'auth' ? 'bad' : 'missing';
-        row.message = verdict === 'auth' ? COPY.badKey : verdict === 'busy' ? COPY.busyCheck : COPY.network;
+        row.message = verdict === 'auth' ? COPY.badKeyRow : verdict === 'busy' ? COPY.busyCheck : COPY.network;
         paintRow(row);
         focusEl(row.input);
         return;
@@ -631,7 +641,7 @@ function mount(options: OpenSheetOptions): Active {
         if (closed) return;
         row.busy = false;
         row.kind = 'missing';
-        row.message = COPY.network;
+        row.message = COPY.keySaveFailed;
         paintRow(row);
         focusEl(row.input);
         return;
@@ -751,7 +761,7 @@ function mount(options: OpenSheetOptions): Active {
         song.lastError
           ? h('details', { class: 'error-detail' },
             h('summary', {}, COPY.lastError),
-            h('p', { class: 'error-head' }, [song.lastError.model || '不明', song.lastError.status || '—', song.lastError.kind].join(' · ')),
+            h('p', { class: 'error-head' }, [song.lastError.model ? modelLabel(song.lastError.model) : '—', song.lastError.status || '—', song.lastError.kind].join(' · ')),
             song.lastError.text ? h('p', { class: 'error-text' }, song.lastError.text) : null)
           : null,
         edition ? zone : null));
@@ -837,17 +847,20 @@ function mount(options: OpenSheetOptions): Active {
       if (!summary) return;
       const count = summary.count;
       askInline(zone, deleteAll, {
-        message: `保存した${count}曲をすべて消します。元に戻せません`,
+        message: `保存した${count}曲の訳をすべて消します。元に戻せません`,
         ok: COPY.deleteAllOk,
         focusCancel: true,
         onOk: (done) => {
           deleting = true;
+          sayData('');
           void (async () => {
+            let failed = false;
             try {
               await deleteAllSongs();
               changed = true;
             } catch {
               console.error('[Lyric Lens] sheet deleteAllSongs failed');
+              failed = true;
             }
             deleting = false;
             if (closed) return;
@@ -856,6 +869,7 @@ function mount(options: OpenSheetOptions): Active {
             if (closed) return;
             zone.replaceChildren(dataActions);
             paintSummary();
+            if (failed) sayData(COPY.deleteFailed, 'error');
             focusEl(deleteAll.disabled ? importButton : deleteAll);
           })();
         },
@@ -865,7 +879,7 @@ function mount(options: OpenSheetOptions): Active {
     zone.append(dataActions);
 
     function paintSummary(): void {
-      summaryEl.textContent = summary ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : '保存した曲：…';
+      summaryEl.textContent = !summary ? '保存した曲：…' : summary.count ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : COPY.nothingSaved;
       const none = !summary || summary.count === 0;
       exportButton.disabled = none || dataBusy();
       importButton.disabled = dataBusy();
