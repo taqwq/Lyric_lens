@@ -36,16 +36,16 @@ describe('status live region', () => {
     const first = statusOf();
     expect(first).not.toBeNull();
 
-    head.render(page, view({ status: '曲全体を読んでいます' }));
+    head.render(page, view({ status: '歌詞を読んでいます' }));
     const second = statusOf();
     expect(second).toBe(first);
-    expect(second.textContent).toBe('曲全体を読んでいます');
+    expect(second.textContent).toBe('歌詞を読んでいます');
     expect(second.getAttribute('aria-live')).toBe('polite');
 
     // Same view again: no rebuild, same node, same text.
-    head.render(page, view({ status: '曲全体を読んでいます' }));
+    head.render(page, view({ status: '歌詞を読んでいます' }));
     expect(statusOf()).toBe(first);
-    expect(statusOf().textContent).toBe('曲全体を読んでいます');
+    expect(statusOf().textContent).toBe('歌詞を読んでいます');
 
     // Back to empty: still in the DOM (never `hidden`), flagged for the CSS to collapse it.
     head.render(page, view({ status: '' }));
@@ -96,7 +96,7 @@ describe('止める right after the button just pressed', () => {
     state: 'S2',
     actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }, { id: 'settings', label: '設定', onClick: vi.fn() }],
   });
-  const s3 = (onClick = vi.fn()): HeadView => ({ tone: 'speaking', captions: [], status: '曲全体を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
+  const s3 = (onClick = vi.fn()): HeadView => ({ tone: 'speaking', captions: [], status: '歌詞を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
   const s4 = (onClick = vi.fn()): HeadView => ({
     tone: 'speaking',
     captions: [],
@@ -227,7 +227,7 @@ describe('row content', () => {
   });
 
   it('an indeterminate bar has no values; null removes the bar', () => {
-    head.render(page, view({ status: '曲全体を読んでいます', actions: [stopA], progress: 'indeterminate' }));
+    head.render(page, view({ status: '歌詞を読んでいます', actions: [stopA], progress: 'indeterminate' }));
     const b = bar()!;
     expect(b.hasAttribute('data-indeterminate')).toBe(true);
     expect(b.getAttribute('role')).toBe('progressbar');
@@ -247,9 +247,9 @@ describe('row content', () => {
   });
 
   it('captions follow the row in order, with data-tone only for a reason', () => {
-    head.render(page, view({ captions: [{ text: '67行のうち31行まで訳してあります' }, { text: '別の曲を訳し終えると続きを訳せます', tone: 'reason' }] }));
+    head.render(page, view({ captions: [{ text: '67行のうち31行を訳してあります' }, { text: '別の曲を訳し終えると、この曲も訳せます', tone: 'reason' }] }));
     const caps = Array.from(head.element!.querySelectorAll<HTMLElement>('.ll-caption'));
-    expect(caps.map((c) => c.textContent)).toEqual(['67行のうち31行まで訳してあります', '別の曲を訳し終えると続きを訳せます']);
+    expect(caps.map((c) => c.textContent)).toEqual(['67行のうち31行を訳してあります', '別の曲を訳し終えると、この曲も訳せます']);
     expect(caps[0]!.hasAttribute('data-tone')).toBe(false);
     expect(caps[1]!.dataset.tone).toBe('reason');
     expect(head.element!.children[1]).toBe(caps[0]);

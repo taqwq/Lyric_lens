@@ -13,7 +13,7 @@ function boot(): void {
   injectStyle('ll-style', css);
   const app = new App();
   if (__DEV__) (window as unknown as { __ll: App }).__ll = app;
-  registerMenu('Lyric Lens の設定', () => app.openSettings(null));
+  registerMenu('Lyric Lensの設定', () => app.openSettings(null));
   app.start().catch((error) => console.error('[Lyric Lens] failed to start', error));
   console.info(`[Lyric Lens] v${__VERSION__}`);
 }

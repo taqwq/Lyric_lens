@@ -138,7 +138,7 @@ export class NoteView {
         note.conjecture ? h('span', { class: 'll-note-conj' }, '〔推測〕') : null,
       ),
       h('p', { class: 'll-note-text' }, note.text),
-      cited ? h('p', { class: 'll-note-src' }, 'Genius注釈より') : null,
+      cited ? h('p', { class: 'll-note-src' }, 'Geniusの注釈を参考にしました') : null,
       genius ? this.geniusBlock(genius, onToggle) : null,
     );
   }
@@ -149,7 +149,7 @@ export class NoteView {
     const setText = (all: boolean) => {
       body.replaceChildren(all || full.length <= GENIUS_CLIP ? full : `${full.slice(0, GENIUS_CLIP)}…`);
       if (!all && full.length > GENIUS_CLIP) {
-        body.append(h('button', { class: 'll-gn-more', type: 'button', onclick: () => setText(true) }, '続きを読む'));
+        body.append(h('button', { class: 'll-gn-more', type: 'button', lang: 'ja', onclick: () => setText(true) }, '続きを読む'));
       }
     };
     setText(false);
@@ -165,6 +165,6 @@ export class NoteView {
         onToggle();
       },
     }, GN_LABEL);
-    return h('div', { class: 'll-gn' }, toggle, h('span', { class: 'll-gn-votes' }, `▲${a.votes}`), body);
+    return h('div', { class: 'll-gn' }, toggle, h('span', { class: 'll-gn-votes' }, `${a.votes}票`), body);
   }
 }

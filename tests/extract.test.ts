@@ -183,6 +183,11 @@ describe('extractLyrics: other markup', () => {
     expect(page.source.sections.map((s) => s.label)).toEqual(['[Intro]', '[Chorus]']);
   });
 
+  it('readPage stays out of a page whose lyrics are only sounds', () => {
+    const doc = parse('<body><div data-lyrics-container="true">[Intro]<br>Ooh, ooh<br>(Yeah, yeah)<br>La-la-la</div></body>');
+    expect(readPage(doc, { pathname: '/Artist-hums-lyrics' } as Location)).toBeNull();
+  });
+
   it('songPath strips trailing slashes', () => {
     expect(songPath({ pathname: '/a-b-lyrics//' } as Location)).toBe('/a-b-lyrics');
     expect(songPath({ pathname: '/' } as Location)).toBe('/');

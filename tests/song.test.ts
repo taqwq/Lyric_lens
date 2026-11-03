@@ -151,6 +151,22 @@ describe('buildSong', () => {
     expect(song.lines.map((l) => l.text)).toEqual(['padded']);
   });
 
+  it('keeps a line of sounds in its place, outside the lines to translate', () => {
+    const song = buildSong(meta, [line('Woah, woah'), line('I walk alone'), line('(Yeah, yeah)'), line('Woah, woah'), line('I walk alone')]);
+    expect(song.lines.map((l) => l.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(song.lines.map((l) => Boolean(l.sound))).toEqual([true, false, true, true, false]);
+    expect(song.lines.filter((l) => l.sound).every((l) => l.uid === 0 && l.occurrence === 0)).toBe(true);
+    expect(song.unique.map((u) => u.text)).toEqual(['I walk alone']);
+    expect(song.lines[4]).toMatchObject({ uid: 1, occurrence: 1 });
+  });
+
+  it('a song is complete when every line with words is translated; its sounds never are', () => {
+    const song = buildSong(meta, [line('Oh, oh'), line('I walk alone'), line('Yeah')]);
+    const r: SongRecord = { ...emptyRecord('1', '/x', meta), lines: { [song.unique[0]!.key]: { ja: 'ひとりで歩く' } } };
+    expect(missingLines(song, r)).toEqual([]);
+    expect(songStatus(song, r)).toEqual({ kind: 'complete' });
+  });
+
   it('never drops a punctuation-only line (line i must stay aligned with anchor i)', () => {
     const rows = [line('first'), line('!'), line('.'), line('?'), line('!'), line('last')];
     const song = buildSong(meta, rows);
@@ -198,6 +214,12 @@ describe('isMostlyJapanese', () => {
   it('needs 60% of the lines: 3 of 5 passes, 2 of 5 does not', () => {
     expect(isMostlyJapanese(of('きみの声', '夜明け前', '歩いていく', 'Hold the light', 'Down the road'))).toBe(true);
     expect(isMostlyJapanese(of('きみの声', '夜明け前', 'Hold the light', 'Down the road', 'Run away'))).toBe(false);
+  });
+
+  it('does not count lines of sounds either way', () => {
+    expect(isMostlyJapanese(of('きみの声', 'Oh, oh, oh', 'Yeah, yeah', 'Woah', '歩いていく', 'La la la'))).toBe(true);
+    expect(isMostlyJapanese(of('I walk alone', 'Oh, oh, oh', 'きみの声', 'Yeah, yeah'))).toBe(false);
+    expect(isMostlyJapanese(of('Oh', 'Yeah', 'Woah', 'La la'))).toBe(false);
   });
 
   it('does not count section headers (buildSong drops them)', () => {

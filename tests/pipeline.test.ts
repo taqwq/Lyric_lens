@@ -77,9 +77,9 @@ const endRec = () => rec({ t: 'end' });
 const jsonl = (...records: string[]) => `${records.join('\n')}\n`;
 
 const meta: SongMeta = { title: 'T', artist: 'A' };
-const LYRICS = ['I woke up early', 'Brought the heat from the street', 'Yeah', 'We never fall'];
-const HEADS = ['I woke up', 'Brought the heat', 'Yeah', 'We never fall'];
-const JA = ['早起きした', '通りの熱気を持ってきた', 'イェー', '俺たちは倒れない'];
+const LYRICS = ['I woke up early', 'Brought the heat from the street', 'Hold it down', 'We never fall'];
+const HEADS = ['I woke up', 'Brought the heat', 'Hold it down', 'We never fall'];
+const JA = ['早起きした', '通りの熱気を持ってきた', '踏ん張れ', '俺たちは倒れない'];
 
 function makeSource(lines: string[] = LYRICS): SongSource {
   return buildSong(meta, lines.map((text) => ({ kind: 'line' as const, text })));
@@ -353,7 +353,7 @@ describe('translateSong: stopping early', () => {
   it('finish "length": keeps the lines that arrived, drops the half-written one, stop "length"', async () => {
     const source = makeSource();
     const record = newRecord();
-    const cut = lineRec(3, HEADS[2]!, 'イェーの途中').slice(0, -12);
+    const cut = lineRec(3, HEADS[2]!, '踏ん張れの途中').slice(0, -12);
     script({ text: `${jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!))}${cut}`, finish: 'length' });
     const out = await translateSong(source, record, options);
 

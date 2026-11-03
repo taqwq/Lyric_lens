@@ -45,8 +45,8 @@ const FIRST_RUN: ActionSpec = { id: 'firstRun', label: '日本語で読む', pri
 const NONE = { slots: false, gaps: false, breathing: false, seam: null };
 const WRITING = { slots: true, gaps: false, breathing: true, seam: null };
 
-const BLOCKED_BY_OTHER = '別の曲を訳し終えると続きを訳せます';
-const quotaBlocker = (until: number) => `今日の無料枠は終わりました。${at(until)}から訳せます`;
+const BLOCKED_BY_OTHER = '別の曲を訳し終えると、この曲も訳せます';
+const quotaBlocker = (until: number) => `今日の無料枠を使い切りました。${at(until)}から訳せます`;
 
 /** A Decision with the quiet defaults filled in (count is absent unless given). */
 const D = (over: Partial<Decision> & Pick<Decision, 'state'>): Decision => ({
@@ -65,7 +65,7 @@ describe('S1 no key', () => {
   it('asks for the key in a caption, behind one primary button', () => {
     expectDecision(decide(view({ hasKey: false })), D({
       state: 'S1',
-      captions: [{ text: 'はじめに無料のAPIキーを設定します' }],
+      captions: [{ text: '最初に一度だけ、無料のAPIキーを設定します' }],
       actions: [FIRST_RUN],
     }));
   });
@@ -110,7 +110,7 @@ describe('S2 ready', () => {
 
 describe('SJ Japanese lyrics', () => {
   it('says so quietly (settled) and offers nothing', () => {
-    expectDecision(decide(view({ japanese: true })), D({ state: 'SJ', tone: 'settled', status: 'この曲は日本語の歌詞です' }));
+    expectDecision(decide(view({ japanese: true })), D({ state: 'SJ', tone: 'settled', status: 'この曲の歌詞は日本語です' }));
   });
 
   it('needs no key and ignores the other-song and quota states', () => {
@@ -130,7 +130,7 @@ describe('S2b another song is being written', () => {
     expectDecision(decide(view({ otherSong: 'Smoke Signals' })), D({
       state: 'S2b',
       status: '別の曲を訳しています',
-      captions: [{ text: '「Smoke Signals」が終わると、この曲も訳せます' }],
+      captions: [{ text: '「Smoke Signals」を訳し終えると、この曲も訳せます' }],
       actions: [{ id: 'stopOther', label: 'あちらを止める' }],
     }));
   });
@@ -151,7 +151,7 @@ describe('S2q quota known exhausted', () => {
   });
 
   it('says 明日 when the reset is on the next day in Japan', () => {
-    expect(decide(view({ avail: { ok: false, until: TOMORROW } })).captions).toEqual([{ text: '明日 01:00から、また訳せます' }]);
+    expect(decide(view({ avail: { ok: false, until: TOMORROW } })).captions).toEqual([{ text: '明日 1:00から、また訳せます' }]);
   });
 
   it.each([[0], [NOW - 1], [NOW]])('has no time caption for a reset of %i (unknown or already past)', (until) => {
@@ -165,19 +165,19 @@ describe('S2f the first request produced nothing', () => {
   const plain = (extra: Partial<ActionSpec> = {}): ActionSpec => ({ id: 'start', label: 'もう一度訳す', primary: true, disabled: false, ...extra });
 
   const rows: Array<{ name: string; stop: StopInfo; over?: Partial<ViewInput>; reason: string; button?: Partial<ActionSpec> }> = [
-    { name: 'busy', stop: stopOf('busy'), reason: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'busy', stop: stopOf('busy'), reason: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度試せます' },
     { name: 'rate before until (button waits)', stop: stopOf('rate', { until: MINUTE_LATER }), reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
     { name: 'rate one ms before until', stop: stopOf('rate', { until: MINUTE_LATER }), over: { now: MINUTE_LATER - 1 }, reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます', button: { disabled: true } },
     { name: 'rate without a known until', stop: stopOf('rate'), reason: 'AIの回数制限にかかりました。1分ほどおいてから訳せます' },
     { name: 'blocked', stop: stopOf('blocked'), reason: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります' },
     { name: 'network, online', stop: stopOf('network'), over: { online: true }, reason: '接続が切れて、訳し始められませんでした。つながったら訳せます' },
     { name: 'network, offline (button waits)', stop: stopOf('network'), over: { online: false }, reason: '接続が切れて、訳し始められませんでした。つながったら訳せます', button: { disabled: true } },
-    { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, reason: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ' },
+    { name: 'silent (two timeouts): enabled, no word about the connection', stop: stopOf('silent'), over: { online: true }, reason: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度試せます' },
     { name: 'rate for five minutes names the time (button waits)', stop: stopOf('rate', { until: NOW + 5 * 60_000 }), reason: 'AIの回数制限にかかりました。12:05ごろから訳せます', button: { disabled: true } },
     { name: 'unusable benched for ten minutes names the time (button waits)', stop: stopOf('unusable', { until: NOW + 600_000 }), reason: 'AIの返事をうまく読み取れませんでした。12:10ごろからもう一度試せます', button: { disabled: true } },
-    { name: 'rejected', stop: stopOf('rejected'), reason: 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります' },
-    { name: 'no-model', stop: stopOf('no-model'), reason: 'AIをいま使えません。少しおいてからもう一度どうぞ' },
-    { name: 'empty', stop: stopOf('empty'), reason: 'AIから空の返事が返ってきました。もう一度試せます' },
+    { name: 'rejected', stop: stopOf('rejected'), reason: 'AIへの依頼が通らず、訳し始められませんでした。もう一度試すと通ることがあります' },
+    { name: 'no-model', stop: stopOf('no-model'), reason: '今はAIを使えません。少しおいてからもう一度試せます' },
+    { name: 'empty', stop: stopOf('empty'), reason: 'AIの返事が空で、訳し始められませんでした。もう一度試せます' },
     { name: 'unusable', stop: stopOf('unusable'), reason: 'AIの返事をうまく読み取れませんでした。もう一度試せます' },
     { name: 'length', stop: stopOf('length'), reason: '長い曲なので、一度では訳し切れませんでした' },
   ];
@@ -224,7 +224,7 @@ describe('S3 reading the whole song first', () => {
   it('is just 止める, an indeterminate bar and no count', () => {
     expectDecision(decide(view({ running: 'here' })), D({
       state: 'S3',
-      status: '曲全体を読んでいます',
+      status: '歌詞を読んでいます',
       progress: 'indeterminate',
       actions: [STOP],
       lines: WRITING,
@@ -236,13 +236,13 @@ describe('S3 reading the whole song first', () => {
   });
 
   it('says the wait is expected once the first line is 15 s late', () => {
-    expect(decide(view({ running: 'here', waitedMs: 15_000 })).captions).toEqual([{ text: '返事を待っています。混んでいると1分ほどかかることもあります' }]);
+    expect(decide(view({ running: 'here', waitedMs: 15_000 })).captions).toEqual([{ text: 'AIの返事を待っています。混み合っていると1分ほどかかることもあります' }]);
     expect(decide(view({ running: 'here', waitedMs: 14_999 })).captions).toEqual([]);
   });
 
   it('keeps the wait and buffered sentences as two captions, wait first', () => {
     const d = decide(view({ running: 'here', waitedMs: 20_000, streams: false }));
-    expect(d.captions.map((c) => c.text)).toEqual(['返事を待っています。混んでいると1分ほどかかることもあります', 'この環境では訳がまとめて届きます']);
+    expect(d.captions.map((c) => c.text)).toEqual(['AIの返事を待っています。混み合っていると1分ほどかかることもあります', 'この環境では訳がまとめて届きます']);
     expect(d.captions.every((c) => !c.tone)).toBe(true);
   });
 
@@ -260,7 +260,7 @@ describe('S6 a per-minute stop next to a spent daily quota names one limit', () 
   it('rate: ここで途切れました, then the quota; no 回数制限', () => {
     const d = resting('rate');
     expect(d.state).toBe('S6');
-    expect(d.lines.seam!.text.startsWith('ここで途切れました。今日の無料枠は終わりました')).toBe(true);
+    expect(d.lines.seam!.text.startsWith('ここで途切れました。今日の無料枠を使い切りました')).toBe(true);
     expect(d.lines.seam!.text).not.toContain('回数制限');
     expect(d.lines.seam!.button.disabled).toBe(true);
     expect(d.actions[0]).toMatchObject({ disabled: true });
@@ -272,7 +272,7 @@ describe('S6 a per-minute stop next to a spent daily quota names one limit', () 
 
   it('another song running keeps the reason sentence and the lock blocker', () => {
     const d = decide(view({ done: 9, total: 30, stop: { reason: 'rate', at: NOW - 30_000, until: NOW + 30_000 }, otherSong: 'Midnight Static' }));
-    expect(d.lines.seam!.text.startsWith('AIの回数制限にかかりました。別の曲を訳し終えると続きを訳せます')).toBe(true);
+    expect(d.lines.seam!.text.startsWith('AIの回数制限にかかりました。別の曲を訳し終えると、この曲も訳せます')).toBe(true);
   });
 });
 
@@ -281,7 +281,7 @@ describe('captions: only a reason for a blocked button is tone reason', () => {
     const buffered = decide(view({ running: 'here', streams: false, done: 3 }));
     expect(buffered.captions).toEqual([{ text: 'この環境では訳がまとめて届きます' }]);
     expect(decide(view({ done: 20 })).captions[0]).toEqual({ text: '歌詞が更新されました。まだ訳していない行が20行あります' });
-    expect(decide(view({ done: 10, stop: stopOf('busy') })).captions).toEqual([{ text: '40行のうち10行まで訳してあります' }]);
+    expect(decide(view({ done: 10, stop: stopOf('busy') })).captions).toEqual([{ text: '40行のうち10行を訳してあります' }]);
   });
 
   it('the S8f detail is a reason', () => {
@@ -348,7 +348,7 @@ describe('S8 retranslating', () => {
     expectDecision(decide(view({ running: 'here-retranslate', done: 40 })), D({
       state: 'S8',
       status: '訳し直しています',
-      captions: [{ text: '終わるまでは、今の訳をそのまま表示します' }],
+      captions: [{ text: '訳し終えるまでは、今の訳をそのまま表示します' }],
       progress: 'indeterminate',
       actions: [STOP],
     }));
@@ -415,7 +415,7 @@ describe('S5g complete with gaps', () => {
 
   it('a spent quota with an unknown reset says あとで', () => {
     const d = decide(view({ done: 37, stop: gaps, avail: { ok: false, until: 0 } }));
-    expect(d.captions[1]).toEqual({ text: '今日の無料枠は終わりました。あとで訳せます', tone: 'reason' });
+    expect(d.captions[1]).toEqual({ text: '今日の無料枠を使い切りました。あとで訳せます', tone: 'reason' });
   });
 });
 
@@ -477,7 +477,7 @@ describe('S6 interrupted', () => {
     expect(d.state).toBe('S6');
     expect(d.tone).toBe('speaking');
     expect(d.status).toBe('');
-    expect(d.captions).toEqual([{ text: '67行のうち12行まで訳してあります' }]);
+    expect(d.captions).toEqual([{ text: '67行のうち12行を訳してあります' }]);
     expect(d.progress).toEqual({ value: 12, max: 67 });
     expect(d.count).toBeUndefined();
     expect(d.lines).toMatchObject({ slots: true, gaps: false, breathing: false });
@@ -488,7 +488,7 @@ describe('S6 interrupted', () => {
   it('puts the seam button first, then 訳を隠す and 設定', () => {
     expectDecision(decide(view({ ...partial, stop: stopOf('busy') })), D({
       state: 'S6',
-      captions: [{ text: '67行のうち12行まで訳してあります' }],
+      captions: [{ text: '67行のうち12行を訳してあります' }],
       progress: { value: 12, max: 67 },
       actions: [{ id: 'resume', label: '続きを訳す', disabled: false, primary: true }, HIDE, SETTINGS],
       lines: { slots: true, gaps: false, breathing: false, seam: { text: 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます', button: { id: 'resume', label: '続きを訳す', disabled: false } } },
@@ -508,7 +508,7 @@ describe('S6 interrupted', () => {
 
   it('another song running: the seam button is disabled and the blocker is in the seam text', () => {
     const d = decide(view({ ...partial, stop: stopOf('busy'), otherSong: 'X' }));
-    expect(d.lines.seam!.text).toBe('AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます');
+    expect(d.lines.seam!.text).toBe('AIが混み合っていて、ここで途切れました。別の曲を訳し終えると、この曲も訳せます');
     expect(d.lines.seam!.button).toEqual({ id: 'noop', label: '続きを訳す', disabled: true });
     expect(d.actions[0]).toEqual({ id: 'noop', label: '続きを訳す', disabled: true, primary: true });
   });
@@ -517,7 +517,7 @@ describe('S6 interrupted', () => {
     it('stays quiet when the seam button can simply be pressed', () => {
       const d = decide(view({ done: 10, hidden: true, stop: stopOf('busy') }));
       expect(d.state).toBe('S6');
-      expect(d.captions).toEqual([{ text: '40行のうち10行まで訳してあります' }]);
+      expect(d.captions).toEqual([{ text: '40行のうち10行を訳してあります' }]);
       expect(d.actions).toEqual([{ id: 'resume', label: '続きを訳す', disabled: false, primary: true }, SHOW, SETTINGS]);
     });
 
@@ -527,11 +527,13 @@ describe('S6 interrupted', () => {
       }
     });
 
-    it('a blocked button gets the seam sentence as a reason caption, verbatim', () => {
+    it('a blocked button gets the seam sentence as a reason caption, with no ここ to point at', () => {
       const d = decide(view({ done: 10, hidden: true, stop: stopOf('busy'), otherSong: 'X' }));
       expect(d.captions).toHaveLength(2);
-      expect(d.captions[1]).toEqual({ text: 'AIが混み合っていて、ここで途切れました。別の曲を訳し終えると続きを訳せます', tone: 'reason' });
-      expect(d.captions[1]!.text).toBe(d.lines.seam?.text);
+      expect(d.captions[1]).toEqual({ text: 'AIが混み合っていて、途中で途切れました。別の曲を訳し終えると、この曲も訳せます', tone: 'reason' });
+      expect(d.lines.seam?.text).toBe('AIが混み合っていて、ここで途切れました。別の曲を訳し終えると、この曲も訳せます');
+      const closed = decide(view({ done: 10, hidden: true, stop: stopOf('closed'), otherSong: 'X' }));
+      expect(closed.captions[1]!.text).toBe('途中まで訳してあります。別の曲を訳し終えると、この曲も訳せます');
     });
 
     it('auth explains itself too (the seam is hidden with the translation)', () => {
@@ -548,7 +550,7 @@ describe('S6 interrupted', () => {
 /* ---------- S8f ---------- */
 
 describe('S8f retranslation failed', () => {
-  const notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: 'AIの回数制限にかかりました。1分ほどおいてから試せます' };
+  const notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: 'AIの回数制限にかかりました。1分ほどおいてからもう一度試せます' };
 
   it('is settled: the quiet label, the notice as a caption and its detail as a reason', () => {
     expectDecision(decide(view({ done: 25, notice })), D({
@@ -709,9 +711,9 @@ describe('seamText', () => {
     ['rate', 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます'],
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['network', '接続が切れました。つながったら続きを訳せます'],
-    ['rejected', 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります'],
-    ['no-model', 'AIをいま使えません。少しおいてから続きを訳せます'],
-    ['empty', 'AIの返事が空のまま、ここで途切れました。もう一度試せます'],
+    ['rejected', 'AIへの依頼が通らず、ここで途切れました。もう一度試すと通ることがあります'],
+    ['no-model', '今はAIを使えません。少しおいてから続きを訳せます'],
+    ['empty', 'AIの返事が空で、ここで途切れました。もう一度試せます'],
     ['unusable', 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます'],
     ['stopped', 'ここで止めました'],
     ['length', '長い曲なので、ここで一度区切りました'],
@@ -724,8 +726,8 @@ describe('seamText', () => {
   });
 
   it('quota with a future reset names the time', () => {
-    expect(seamText(stopOf('quota', { until: SOON }), i)).toBe(`今日の無料枠が終わりました。${at(SOON)}ごろから続きを訳せます`);
-    expect(seamText(stopOf('quota', { until: TOMORROW }), i)).toBe(`今日の無料枠が終わりました。${at(TOMORROW)}ごろから続きを訳せます`);
+    expect(seamText(stopOf('quota', { until: SOON }), i)).toBe(`今日の無料枠を使い切りました。${at(SOON)}から続きを訳せます`);
+    expect(seamText(stopOf('quota', { until: TOMORROW }), i)).toBe(`今日の無料枠を使い切りました。${at(TOMORROW)}から続きを訳せます`);
   });
 
   it.each([
@@ -734,7 +736,7 @@ describe('seamText', () => {
     ['until in the past', NOW - 1],
     ['until exactly now', NOW],
   ])('quota with %s says あとで', (_name, until) => {
-    expect(seamText(stopOf('quota', until === undefined ? {} : { until }), i)).toBe('今日の無料枠が終わりました。あとで続きを訳せます');
+    expect(seamText(stopOf('quota', until === undefined ? {} : { until }), i)).toBe('今日の無料枠を使い切りました。あとで続きを訳せます');
   });
 
   it('blocked says to try again', () => {
@@ -742,7 +744,7 @@ describe('seamText', () => {
   });
 
   it('measures the reset against the input clock', () => {
-    expect(seamText(stopOf('quota', { until: SOON }), view({ now: SOON }))).toBe('今日の無料枠が終わりました。あとで続きを訳せます');
+    expect(seamText(stopOf('quota', { until: SOON }), view({ now: SOON }))).toBe('今日の無料枠を使い切りました。あとで続きを訳せます');
   });
 });
 
@@ -750,13 +752,13 @@ describe('startFailText', () => {
   const i = view();
 
   it.each<[StopReason, string]>([
-    ['busy', 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度どうぞ'],
+    ['busy', 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度試せます'],
     ['rate', 'AIの回数制限にかかりました。1分ほどおいてから訳せます'],
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['network', '接続が切れて、訳し始められませんでした。つながったら訳せます'],
-    ['rejected', 'AIがこの曲を訳しませんでした。もう一度試すと通ることがあります'],
-    ['no-model', 'AIをいま使えません。少しおいてからもう一度どうぞ'],
-    ['empty', 'AIから空の返事が返ってきました。もう一度試せます'],
+    ['rejected', 'AIへの依頼が通らず、訳し始められませんでした。もう一度試すと通ることがあります'],
+    ['no-model', '今はAIを使えません。少しおいてからもう一度試せます'],
+    ['empty', 'AIの返事が空で、訳し始められませんでした。もう一度試せます'],
     ['unusable', 'AIの返事をうまく読み取れませんでした。もう一度試せます'],
     ['length', '長い曲なので、一度では訳し切れませんでした'],
   ])('%s', (reason, text) => {
@@ -764,10 +766,10 @@ describe('startFailText', () => {
   });
 
   it('quota names the reset time or says あとで', () => {
-    expect(startFailText(stopOf('quota', { until: SOON }), i)).toBe(`今日の無料枠が終わりました。${at(SOON)}ごろから訳せます`);
-    expect(startFailText(stopOf('quota', { until: TOMORROW }), i)).toBe('今日の無料枠が終わりました。明日 01:00ごろから訳せます');
-    expect(startFailText(stopOf('quota'), i)).toBe('今日の無料枠が終わりました。あとで訳せます');
-    expect(startFailText(stopOf('quota', { until: NOW - 1 }), i)).toBe('今日の無料枠が終わりました。あとで訳せます');
+    expect(startFailText(stopOf('quota', { until: SOON }), i)).toBe(`今日の無料枠を使い切りました。${at(SOON)}から訳せます`);
+    expect(startFailText(stopOf('quota', { until: TOMORROW }), i)).toBe('今日の無料枠を使い切りました。明日 1:00から訳せます');
+    expect(startFailText(stopOf('quota'), i)).toBe('今日の無料枠を使い切りました。あとで訳せます');
+    expect(startFailText(stopOf('quota', { until: NOW - 1 }), i)).toBe('今日の無料枠を使い切りました。あとで訳せます');
   });
 
   it('blocked says to try again', () => {
@@ -789,13 +791,13 @@ describe('startFailText', () => {
 
 describe('failureText', () => {
   it.each<[StopReason, string]>([
-    ['busy', '混み合っていました。少しおいてから試せます'],
-    ['rate', 'AIの回数制限にかかりました。1分ほどおいてから試せます'],
+    ['busy', 'AIが混み合っていました。少しおいてからもう一度試せます'],
+    ['rate', 'AIの回数制限にかかりました。1分ほどおいてからもう一度試せます'],
     ['auth', 'APIキーが使えなくなりました。設定でキーを入れ直してください'],
     ['blocked', 'AIの安全フィルタで止められました'],
     ['network', '接続が切れました'],
-    ['rejected', 'AIが訳しませんでした'],
-    ['no-model', 'AIをいま使えませんでした'],
+    ['rejected', 'AIへの依頼が通りませんでした'],
+    ['no-model', 'AIを使えませんでした'],
     ['empty', 'AIの返事が空でした'],
     ['unusable', 'AIの返事をうまく読み取れませんでした'],
     ['stopped', '止めました'],
@@ -806,11 +808,11 @@ describe('failureText', () => {
     expect(failureText(stopOf(reason), NOW)).toBe(text);
   });
 
-  it('quota puts the reset time in parentheses, or nothing', () => {
-    expect(failureText(stopOf('quota', { until: SOON }), NOW)).toBe(`今日の無料枠が終わりました（${at(SOON)}に戻ります）`);
-    expect(failureText(stopOf('quota', { until: TOMORROW }), NOW)).toBe('今日の無料枠が終わりました（明日 01:00に戻ります）');
-    expect(failureText(stopOf('quota'), NOW)).toBe('今日の無料枠が終わりました');
-    expect(failureText(stopOf('quota', { until: NOW - 1 }), NOW)).toBe('今日の無料枠が終わりました');
+  it('quota names the reset time as when to try again, or nothing', () => {
+    expect(failureText(stopOf('quota', { until: SOON }), NOW)).toBe(`今日の無料枠を使い切りました。${at(SOON)}からもう一度試せます`);
+    expect(failureText(stopOf('quota', { until: TOMORROW }), NOW)).toBe('今日の無料枠を使い切りました。明日 1:00からもう一度試せます');
+    expect(failureText(stopOf('quota'), NOW)).toBe('今日の無料枠を使い切りました');
+    expect(failureText(stopOf('quota', { until: NOW - 1 }), NOW)).toBe('今日の無料枠を使い切りました');
   });
 
   it('never promises a 続き (S8f offers none)', () => {
@@ -834,7 +836,7 @@ describe('copy on the reading surface does not talk about models', () => {
 
   it('rejected at the seam (after 6 of 20 lines of "Smoke in the whip, windows up, nobody talk") offers an enabled 続きを訳す', () => {
     expect(seamFor(stopOf('rejected'), i, null)).toEqual({
-      text: 'AIがこの先を訳しませんでした。もう一度試すと通ることがあります',
+      text: 'AIへの依頼が通らず、ここで途切れました。もう一度試すと通ることがあります',
       button: { id: 'resume', label: '続きを訳す', disabled: false },
     });
   });
@@ -842,7 +844,7 @@ describe('copy on the reading surface does not talk about models', () => {
   it('a silent Gemini is told as silence, not as a lost connection, and the start button stays enabled', () => {
     const d = decide(view({ online: true, done: 0, total: 18, stop: stopOf('silent') }));
     expect(d.state).toBe('S2f');
-    expect(d.captions[0]!.text).toBe('AIから返事がなく、訳し始められませんでした。少しおいてからもう一度どうぞ');
+    expect(d.captions[0]!.text).toBe('AIから返事がなく、訳し始められませんでした。少しおいてからもう一度試せます');
     expect(d.captions[0]!.text).not.toMatch(/接続/);
     expect(d.actions[0]).toEqual({ id: 'start', label: 'もう一度訳す', primary: true, disabled: false });
   });
@@ -862,7 +864,7 @@ describe('copy on the reading surface does not talk about models', () => {
   it('no-model before any line is S2f with a plain sentence', () => {
     const d = decide(view({ done: 0, total: 20, stop: stopOf('no-model') }));
     expect(d.state).toBe('S2f');
-    expect(d.captions[0]!.text).toBe('AIをいま使えません。少しおいてからもう一度どうぞ');
+    expect(d.captions[0]!.text).toBe('今はAIを使えません。少しおいてからもう一度試せます');
   });
 });
 
@@ -902,7 +904,7 @@ describe('seamFor', () => {
 
   it('a blocker without a hint on quota: the quota sentence, a disabled resume (not noop)', () => {
     expect(seamFor(stopOf('quota', { until: SOON }), i, 'BLOCK')).toEqual({
-      text: `今日の無料枠が終わりました。${at(SOON)}ごろから続きを訳せます`,
+      text: `今日の無料枠を使い切りました。${at(SOON)}から続きを訳せます`,
       button: { id: 'resume', label: '続きを訳す', disabled: true },
     });
   });

@@ -4,7 +4,7 @@
  * translation stopped, one more node, the seam, sits between the last translated line and the
  * plain English that follows. Rendering is idempotent: nodes are reused in place.
  */
-import { splitAdlibs } from '../core/adlib';
+import { splitAdlibs, visibleJa } from '../core/adlib';
 import { NOTE_LABELS, type SongRecord } from '../core/types';
 import type { PageSong } from '../genius/extract';
 import { h, isolateClicks } from './dom';
@@ -85,20 +85,26 @@ export class LineRenderer {
     // last filled one. Holes before it are lines the model skipped, not the place to resume.
     // Only first occurrences count: a chorus repeat is filled together with its first
     // occurrence, ahead of the unique lines still to be written above it.
+    // A line of sounds is never written, so it is neither filled nor still to come.
     const filled = (i: number) => Boolean(record?.lines[page.source.lines[i]!.key]?.ja);
+    const toWrite = (i: number) => !page.source.lines[i]!.sound && !filled(i);
     let lastFilled = -1;
-    page.source.lines.forEach((line, i) => { if (line.occurrence === 0 && filled(i)) lastFilled = i; });
-    let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && !filled(i));
-    if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => !filled(i));
+    page.source.lines.forEach((line, i) => { if (line.occurrence === 0 && !line.sound && filled(i)) lastFilled = i; });
+    let frontier = page.source.lines.findIndex((_, i) => i > lastFilled && toWrite(i));
+    if (frontier < 0) frontier = page.source.lines.findIndex((_, i) => toWrite(i));
     // With a seam to show, writing stopped at the frontier: from there on the page is plain
     // English, even where a repeat is already translated, until the reader resumes.
     const stopAt = input.seam && frontier >= 0 ? frontier : -1;
     page.source.lines.forEach((line, i) => {
       const anchor = page.anchors[i];
       const result = record?.lines[line.key];
+      // What is left to show once the sounds and an echo of the English are taken out (adlib.ts).
+      const ja = result?.ja ? visibleJa(result.ja, line.text) : '';
       let state: State | null = null;
-      if (stopAt >= 0 && i >= stopAt) state = null;
-      else if (result?.ja) state = 'filled';
+      // Sounds get no row, even where an older edition stored one (ウー、オー).
+      if (line.sound) state = null;
+      else if (stopAt >= 0 && i >= stopAt) state = null;
+      else if (result?.ja) state = ja ? 'filled' : null;
       else if (input.gaps) state = 'gap';
       else if (input.slots) state = i < frontier && lastFilled > i ? 'gap' : input.breathing && i === frontier ? 'next' : 'empty';
 
@@ -129,7 +135,7 @@ export class LineRenderer {
         if (repeat) el.dataset.repeat = ''; else delete el.dataset.repeat;
         // A placeholder bar about as long as the translation will be (styles.css: --ll-n).
         el.style.setProperty('--ll-n', String(Math.min(120, line.text.length)));
-        el.replaceChildren(...this.content(state, i, result?.ja ?? '', notes.length, input));
+        el.replaceChildren(...this.content(state, i, ja, notes.length, input));
         if (state === 'filled' && wasWaiting && input.animate) {
           el.dataset.ink = '';
           setTimeout(() => { if (el) delete el.dataset.ink; }, 260);
@@ -224,8 +230,9 @@ export class LineRenderer {
       const line = input.page.source.lines[index];
       const notes = (line && record?.lines[line.key]?.notes) || [];
       const first = notes[0];
-      const kinds = [...new Set(notes.map((n) => NOTE_LABELS[n.kind]))].join('・');
-      const label = first ? `注を開く：${kinds}` : '注を開く';
+      const kinds = [...new Set(notes.map((n) => NOTE_LABELS[n.kind]))].join('、');
+      // A toggle names what it opens; aria-expanded says whether it is open.
+      const label = first ? `注：${kinds}` : '注';
       const mark: HTMLButtonElement = h('button', {
         class: 'll-mark',
         type: 'button',

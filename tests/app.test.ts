@@ -162,11 +162,11 @@ describe('translate: the finished edition cannot be saved', () => {
     await app.translate('start');
     expect(Object.keys(inside(app).record!.lines)).toHaveLength(3);
     expect(inside(app).run).toBeNull();
-    expect(inside(app).notice?.status).toBe('保存できませんでした');
+    expect(inside(app).notice?.status).toBe('訳を保存できませんでした');
     // A same-song refresh must not replace it with what storage has (nothing).
     expect(inside(app).unsaved).toBe(true);
     expect(headView()).toMatchObject({ state: 'S8f', tone: 'settled', status: 'AIによる日本語訳' });
-    expect(headView().captions[0]).toEqual({ text: '保存できませんでした' });
+    expect(headView().captions[0]).toEqual({ text: '訳を保存できませんでした' });
     expect(log).toHaveBeenCalled();
     failing.on = false;
     expect(await loadSong(identityOf(page))).toBeNull();
@@ -206,7 +206,7 @@ describe('translate: the finished edition cannot be saved', () => {
     const app = appOn(page, old);
     await app.translate('retranslate');
     expect(Object.values(inside(app).record!.lines).every((l) => l.ja === '新しい訳')).toBe(true);
-    expect(inside(app).notice?.status).toBe('保存できませんでした');
+    expect(inside(app).notice?.status).toBe('訳を保存できませんでした');
     failing.on = false;
     expect((await loadSong(identityOf(page)))!.lines[page.source.unique[0]!.key]!.ja).toBe('古い訳');
     log.mockRestore();
@@ -386,7 +386,7 @@ describe('head view mapping', () => {
   it('S3 is indeterminate and has no count', () => {
     const app = runningApp(0);
     inside(app).renderNow();
-    expect(headView()).toMatchObject({ state: 'S3', status: '曲全体を読んでいます', progress: 'indeterminate' });
+    expect(headView()).toMatchObject({ state: 'S3', status: '歌詞を読んでいます', progress: 'indeterminate' });
     expect(headView()).not.toHaveProperty('count');
   });
 

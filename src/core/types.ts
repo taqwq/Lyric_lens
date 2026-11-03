@@ -6,8 +6,8 @@ export const NOTE_KINDS: readonly NoteKind[] = ['slang', 'wordplay', 'reference'
 
 export const NOTE_LABELS: Record<NoteKind, string> = {
   slang: 'スラング',
-  wordplay: '掛詞',
-  reference: '引用・元ネタ',
+  wordplay: '言葉遊び',
+  reference: '元ネタ',
   idiom: '慣用句',
   ambiguous: '二通りに読める',
 };
@@ -68,11 +68,13 @@ export interface LyricLine {
   text: string;
   /** Normalized text; identical keys are exact repeats and share one translation. */
   key: string;
-  /** 1-based id of the distinct line this occurrence belongs to. */
+  /** 1-based id of the distinct line this occurrence belongs to; 0 for a sound line. */
   uid: number;
   /** 0 for the first occurrence of its text, 1 for the next repeat, … */
   occurrence: number;
   section: number;
+  /** Only vocal sounds ("Woah, woah"): never translated, no Japanese row (core/sounds.ts). */
+  sound?: true;
 }
 
 export interface Section {
