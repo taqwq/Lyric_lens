@@ -1,8 +1,8 @@
 /*
  * Pure vocal sounds — oh, woah, yeah, ayy, la la — have no words to translate. A line made only
- * of them gets no Japanese row: the English right above already says all there is, and a
- * katakana echo (ウォー、オー) reads as noise. Inside a line with words, the prompt keeps them in
- * their own spelling (prompt.ts).
+ * of them is not translated: the English right above already says all there is, and a katakana
+ * echo (ウォー、オー) reads as noise. Its row is a quiet ♪ (ui/lines.ts). Inside a line with
+ * words, the prompt keeps them in their own spelling (prompt.ts).
  *
  * The list is closed on purpose and holds only non-words: anything that can mean something
  * (hey, yo, who, nah, ho, ya, uh-oh, a lone "la") still goes to the model.
@@ -36,7 +36,8 @@ export function isSoundOnly(text: string): boolean {
 }
 
 /** A row that only repeats its English line ("Hey, hey" left as written, a Japanese line in an
- *  English song) says nothing the line above does not: it is not drawn. */
+ *  English song) says nothing the line above does not: its text is not drawn (ui/lines.ts shows
+ *  a ♪ instead, or no row for a Japanese line). */
 export function echoesLine(ja: string, text: string): boolean {
   const bare = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   const b = bare(ja);
