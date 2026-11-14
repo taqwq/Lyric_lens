@@ -236,9 +236,9 @@ describe('generateWithFallback: model fallback', () => {
 
   it('falls back to a built-in model list when listing fails for a non-auth reason', async () => {
     listReply = { status: 500, body: 'internal error' };
-    reply('gemini-3.8-flash', ok('L1: え\n'));
+    reply('gemini-4-hydrogen', ok('L1: え\n'));
     const result = await start(gemini()).promise;
-    expect(result.model).toBe('gemini-3.8-flash');
+    expect(result.model).toBe('gemini-4-hydrogen');
   });
 
   it('reports an auth error from the model list without trying any model', async () => {

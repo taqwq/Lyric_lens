@@ -11,7 +11,9 @@ const BLOCKED_REASONS = new Set(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITE
 const EXCLUDED = /(tts|image|imagen|live|transcribe|embedding|robotics|computer-use|customtools|nano-banana|omni|audio|aqa|deep-research|antigravity|lyria|veo|learnlm)/i;
 
 /** Orders models for automatic selection: newest Flash first, then Flash-Lite, then Gemma.
- *  Pro models are paid-only on the free tier, so they are listed but never auto-picked. */
+ *  Gemini 4 Hydrogen is Gemini 4's Flash (free tier; measured 2026-11-15: a whole song in 14 s),
+ *  so it ranks as a Flash of version 4. Pro, Argon and Carbon are paid-only, so they are listed
+ *  but never auto-picked. */
 export function rankGeminiModel(id: string): number {
   if (EXCLUDED.test(id) || /latest/.test(id)) return -1;
   const version = Number(/(?:gemini|gemma)-(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? 0);
@@ -19,7 +21,7 @@ export function rankGeminiModel(id: string): number {
   if (id.startsWith('gemma-')) return 1 + version / 100;
   if (/-pro\b/.test(id) || /argon/.test(id)) return 0;
   if (/flash-lite/.test(id)) return 100 + version * 10 - preview;
-  if (/flash/.test(id)) return 1000 + version * 10 - preview;
+  if (/flash|hydrogen/.test(id)) return 1000 + version * 10 - preview;
   return 0;
 }
 

@@ -478,7 +478,7 @@
     if (id.startsWith("gemma-")) return 1 + version / 100;
     if (/-pro\b/.test(id) || /argon/.test(id)) return 0;
     if (/flash-lite/.test(id)) return 100 + version * 10 - preview;
-    if (/flash/.test(id)) return 1e3 + version * 10 - preview;
+    if (/flash|hydrogen/.test(id)) return 1e3 + version * 10 - preview;
     return 0;
   }
   var FIRST_TEXT_TIMEOUT_MS = 3e4;
@@ -780,6 +780,7 @@ ${req.user}` : req.user }] }],
     return models;
   }
   var FALLBACK_GEMINI = [
+    "gemini-4-hydrogen",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",

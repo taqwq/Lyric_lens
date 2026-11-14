@@ -303,9 +303,10 @@ export async function modelsFor(apiKey: string, opts: { refresh?: boolean; signa
   return models;
 }
 
-/** Only for a first run whose model list cannot be fetched (ids the live list returned on 2026-10-27). */
+/** Only for a first run whose model list cannot be fetched (ids the live list returned on 2026-10-27,
+ *  plus gemini-4-hydrogen from 2026-11-15). */
 const FALLBACK_GEMINI = [
-  'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash',
+  'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash',
   'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemma-4-31b-it',
 ];
 
