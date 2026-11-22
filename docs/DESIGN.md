@@ -20,7 +20,7 @@
 
 **Principles**
 1. **Ink, not interface.** Nearly everything we add is text in the lyric column. The one control row speaks in underlined text, and the only bold thing in it is the next step the reader is asked to take.
-2. **One tap, one request.** A request goes out only from a tap made at that moment. Page loads, re-renders, navigation, annotation clicks, reconnects and retries never send one. There is no auto-translate setting.
+2. **One tap, one translation.** A request goes out only from a tap made at that moment. Within that tap, an answer cut short after giving lines (output-length cut, busy, silent, empty, unreadable, rejected, safety filter, a per-minute limit of up to 75 s, skipped lines) is followed at once by a request for the rest, up to 8 requests, until a request gives no line. The reader's stop, an invalid key, a spent quota and a lost connection end it. Page loads, re-renders, navigation, annotation clicks, reconnects and retries never send one. There is no auto-translate setting.
 3. **Partial is a valid state.** Each line is saved the moment it parses. A half-translated song is a page that is still being written: the lines to come are reserved blank slots, and a stop is marked by one line across the column.
 4. **Genius keeps its layer.** Genius owns its backgrounds, the English tap targets, the annotation panel and the sidebar. We borrow its grammar, and we never wrap Genius' text nodes (the yellow on English words is painted with the CSS Highlight API) or capture its clicks.
 5. **Silence over explanation.** A note exists only where the Japanese alone would mislead or lose something. A song with zero notes is fine.
@@ -73,6 +73,8 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | **S8f Retranslation failed** (or the finished edition could not be stored) | Settled: `AIによる日本語訳` · `訳を隠す` · `設定` | `訳し直せませんでした。今の訳はそのまま残っています`, then the reason in ink (§4); the preface | Old edition intact; the new partial is discarded | Dismiss by any interaction (while the row is on screen) |
 
 **The seam reasons (S6) and their buttons**
+
+A continuable reason reaches the seam only when the automatic follow-up (§1, principle 2) gave no line, or after 8 requests.
 
 | Reason | Seam sentence | Button rule |
 |---|---|---|

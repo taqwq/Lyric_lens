@@ -1,8 +1,10 @@
 /*
  * One tap, one request (docs/DESIGN.md §1, principle 2). The model reads the whole song,
  * writes the song record, then one record per distinct line, streamed. Whatever arrives is
- * applied (and saved by the caller) immediately. If the stream stops early, the song simply
- * stays partial with a reason; continuing is the reader's next tap, never automatic.
+ * applied (and saved by the caller) immediately. If the stream stops early after giving
+ * lines and the reason is one another request can get past, the rest is requested at once:
+ * a half-translated song is of little use, so the reader is not asked to tap 続きを訳す.
+ * Only stops that another request cannot fix (or that gave nothing) reach the seam.
  */
 import { locatePhrase } from '../genius/ranges';
 import { generateWithFallback, nextPacificMidnight } from '../llm/chain';
@@ -234,11 +236,54 @@ function outputBudget(expectedChars: number): number {
   return Math.min(65_536, Math.max(8192, Math.round(expectedChars * 1.6) + 8000));
 }
 
+/** Stops another request right away can get past. Not the reader's stop, a bad key, a
+ *  spent quota or a lost connection; a per-minute limit is waited out when it is short. */
+const CONTINUABLE = new Set(['length', 'closed', 'gaps', 'busy', 'silent', 'empty', 'unusable', 'rejected', 'no-model', 'blocked', 'rate']);
+/** Requests one tap may make in all, so a model that keeps giving a line or two cannot run on. */
+const MAX_PASSES = 8;
+/** Longest per-minute wait taken without the reader. */
+const MAX_RATE_WAIT_MS = 75_000;
+
+function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(true); }, ms);
+    const onAbort = () => { clearTimeout(timer); resolve(false); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function translateSong(source: SongSource, record: SongRecord, options: TranslateOptions): Promise<TranslateOutcome> {
+  let outcome: TranslateOutcome & { added: number } = { ...(await translatePass(source, record, options)) };
+  for (let pass = 1; pass < MAX_PASSES && !outcome.complete && outcome.added > 0; pass++) {
+    const stop = outcome.stop;
+    if (!stop || !CONTINUABLE.has(stop.reason) || options.signal?.aborted) break;
+    if (stop.until) {
+      const wait = stop.until - Date.now();
+      if (stop.reason !== 'rate' || wait > MAX_RATE_WAIT_MS) break;
+      options.onStatus?.('回数制限のため待っています');
+      if (!(await pause(Math.max(0, wait), options.signal))) break;
+    }
+    // Saved progress keeps saying "closed" while the next request runs.
+    record.stop = { reason: 'closed', at: Date.now() };
+    const next = await translatePass(source, record, options);
+    // A follow-up that got nothing and failed the same passing way tells the reader less
+    // than the stop that started it (a long song's 'length', say), so that one stays.
+    if (!next.complete && !next.added && next.stop && CONTINUABLE.has(next.stop.reason) && !next.stop.until) {
+      record.stop = stop;
+      outcome = { ...next, stop, added: 0 };
+      break;
+    }
+    outcome = next;
+  }
+  return { record: outcome.record, complete: outcome.complete, ...(outcome.stop ? { stop: outcome.stop } : {}), model: outcome.model };
+}
+
+async function translatePass(source: SongSource, record: SongRecord, options: TranslateOptions): Promise<TranslateOutcome & { added: number }> {
   const targets = missingLines(source, record);
   if (!targets.length) {
     delete record.stop;
-    return { record, complete: true, model: record.model ?? '' };
+    return { record, complete: true, model: record.model ?? '', added: 0 };
   }
   const prompt = buildPrompt(source, record, targets);
   const builder = new RecordBuilder(source, record, targets.map((t) => t.uid));
@@ -275,7 +320,7 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
   if (model) record.model = model;
   if (!missingLines(source, record).length) {
     delete record.stop;
-    return { record, complete: true, model };
+    return { record, complete: true, model, added: builder.added };
   }
   // Skipped lines ('gaps') only if the answer really ended; a stream that just went quiet
   // was cut, and reads "ここまで訳してあります" with 続きを訳す.
@@ -285,5 +330,5 @@ export async function translateSong(source: SongSource, record: SongRecord, opti
     ? { kind: 'dropped', model, status: 0, text: `dropped=${parser.dropped} ${parser.droppedSamples[0] ?? ''}`.trim().slice(0, 200) }
     : undefined;
   record.stop = stop ?? { reason, at: Date.now(), ...(detail ? { detail } : {}) };
-  return { record, complete: false, stop: record.stop, model };
+  return { record, complete: false, stop: record.stop, model, added: builder.added };
 }

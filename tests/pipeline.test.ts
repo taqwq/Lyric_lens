@@ -97,6 +97,8 @@ const NOW = Date.UTC(2026, 9, 26, 12, 0, 0);
 
 beforeEach(() => {
   chain.mockReset();
+  // A request no script covers (the automatic follow-up after a partial answer) gets nothing back.
+  chain.mockImplementation(async () => { throw new LLMError('empty', 'nothing'); });
   returned = [];
 });
 
@@ -305,17 +307,15 @@ describe('translateSong: head validation', () => {
     expect(jaOf(source, record, 2)).toBeUndefined();
   });
 
-  it('a following request asks only for the gap, shows the rest as done, and completes the song', async () => {
+  it('the automatic follow-up asks only for the gap, shows the rest as done, and completes the song', async () => {
     const source = makeSource();
     const record = newRecord();
     script(
       { text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, 'wrong words here', 'ずれ'), lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!)) },
       { text: jsonl(lineRec(2, HEADS[1]!, JA[1]!), endRec()) },
     );
-    await translateSong(source, record, options);
-    expect(record.stop?.reason).toBe('gaps');
-
     const out = await translateSong(source, record, options);
+    expect(chain).toHaveBeenCalledTimes(2);
     expect(out.complete).toBe(true);
     expect(out.stop).toBeUndefined();
     expect(record.stop).toBeUndefined();
@@ -382,19 +382,37 @@ describe('translateSong: stopping early', () => {
     expect(out.stop).toBeUndefined();
   });
 
-  it('the next request after a "length" stop resumes where it left off', async () => {
+  it('a "length" stop is continued at once, from where it left off, in the same tap', async () => {
     const source = makeSource();
     const record = newRecord();
     script(
       { text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!), lineRec(2, HEADS[1]!, JA[1]!)), finish: 'length' },
       { text: jsonl(lineRec(3, HEADS[2]!, JA[2]!), lineRec(4, HEADS[3]!, JA[3]!), endRec()) },
     );
-    expect((await translateSong(source, record, options)).stop?.reason).toBe('length');
     const out = await translateSong(source, record, options);
+    expect(chain).toHaveBeenCalledTimes(2);
     expect(out.complete).toBe(true);
     expect(record.stop).toBeUndefined();
     expect(userOf(1)).toContain('次の ID だけを訳してください：L3〜L4。');
     expect(Object.values(record.lines).map((l) => l.ja)).toEqual(JA);
+  });
+
+  it('does not continue on its own after the reader stopped, or when a request gave no line', async () => {
+    const source = makeSource();
+    script({ text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!)), throws: new LLMError('aborted', 'stopped') });
+    expect((await translateSong(source, newRecord(), options)).stop?.reason).toBe('stopped');
+    expect(chain).toHaveBeenCalledTimes(1);
+  });
+
+  it('a follow-up stopped by a spent quota shows the quota, not the earlier cut', async () => {
+    const source = makeSource();
+    script(
+      { text: jsonl(songRec(), lineRec(1, HEADS[0]!, JA[0]!)), finish: 'length' },
+      { throws: new LLMError('quota', 'spent', { retryAfterMs: 0 }) },
+    );
+    const out = await translateSong(source, newRecord(), options);
+    expect(chain).toHaveBeenCalledTimes(2);
+    expect(out.stop?.reason).toBe('quota');
   });
 
   // GenerateResult.finish can be 'blocked' (Gemini SAFETY/RECITATION after some text arrived).

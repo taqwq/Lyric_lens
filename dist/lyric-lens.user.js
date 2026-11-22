@@ -1703,11 +1703,50 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   function outputBudget(expectedChars) {
     return Math.min(65536, Math.max(8192, Math.round(expectedChars * 1.6) + 8e3));
   }
+  var CONTINUABLE = /* @__PURE__ */ new Set(["length", "closed", "gaps", "busy", "silent", "empty", "unusable", "rejected", "no-model", "blocked", "rate"]);
+  var MAX_PASSES = 8;
+  var MAX_RATE_WAIT_MS = 75e3;
+  function pause(ms, signal) {
+    return new Promise((resolve) => {
+      if (signal?.aborted) return resolve(false);
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(true);
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
   async function translateSong(source, record, options) {
+    let outcome = { ...await translatePass(source, record, options) };
+    for (let pass = 1; pass < MAX_PASSES && !outcome.complete && outcome.added > 0; pass++) {
+      const stop = outcome.stop;
+      if (!stop || !CONTINUABLE.has(stop.reason) || options.signal?.aborted) break;
+      if (stop.until) {
+        const wait = stop.until - Date.now();
+        if (stop.reason !== "rate" || wait > MAX_RATE_WAIT_MS) break;
+        options.onStatus?.("回数制限のため待っています");
+        if (!await pause(Math.max(0, wait), options.signal)) break;
+      }
+      record.stop = { reason: "closed", at: Date.now() };
+      const next = await translatePass(source, record, options);
+      if (!next.complete && !next.added && next.stop && CONTINUABLE.has(next.stop.reason) && !next.stop.until) {
+        record.stop = stop;
+        outcome = { ...next, stop, added: 0 };
+        break;
+      }
+      outcome = next;
+    }
+    return { record: outcome.record, complete: outcome.complete, ...outcome.stop ? { stop: outcome.stop } : {}, model: outcome.model };
+  }
+  async function translatePass(source, record, options) {
     const targets = missingLines(source, record);
     if (!targets.length) {
       delete record.stop;
-      return { record, complete: true, model: record.model ?? "" };
+      return { record, complete: true, model: record.model ?? "", added: 0 };
     }
     const prompt = buildPrompt(source, record, targets);
     const builder = new RecordBuilder(source, record, targets.map((t) => t.uid));
@@ -1740,12 +1779,12 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (model) record.model = model;
     if (!missingLines(source, record).length) {
       delete record.stop;
-      return { record, complete: true, model };
+      return { record, complete: true, model, added: builder.added };
     }
     const reason = !builder.added ? "unusable" : finished || builder.ended ? "gaps" : "closed";
     const detail = parser.dropped && (reason === "gaps" || reason === "closed") ? { kind: "dropped", model, status: 0, text: `dropped=${parser.dropped} ${parser.droppedSamples[0] ?? ""}`.trim().slice(0, 200) } : void 0;
     record.stop = stop ?? { reason, at: Date.now(), ...detail ? { detail } : {} };
-    return { record, complete: false, stop: record.stop, model };
+    return { record, complete: false, stop: record.stop, model, added: builder.added };
   }
 
   // src/genius/annotations.ts
