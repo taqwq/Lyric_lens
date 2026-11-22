@@ -9,7 +9,7 @@
  */
 import { claudeKeyStatus, keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
 import { ClaudeProvider, clearClaudeBench } from '../llm/claude';
-import { LLMError } from '../llm/errors';
+import { LLMError, errorDetail } from '../llm/errors';
 import { currentSettings, loadSettings, setApiKey, setClaudeKey } from '../store/settings';
 import { deleteAllSongs, exportSongs, importSongs, storageSummary } from '../store/songs';
 import type { StopDetail } from '../core/types';
@@ -519,6 +519,8 @@ function mount(options: OpenSheetOptions): Active {
       return 'ok';
     } catch (error) {
       if (isAborted(error)) return 'aborted';
+      // What failed, for the console (the key is scrubbed): the row only says busy or offline.
+      console.warn('[Lyric Lens] key check', service.id, error instanceof LLMError ? errorDetail(error, 300) : String(error));
       if (isAuthError(error)) return 'auth';
       // Only a failed connection is the reader's to fix; a 503, 429 or timeout is Google's.
       return error instanceof LLMError && error.kind === 'network' ? 'network' : 'busy';
