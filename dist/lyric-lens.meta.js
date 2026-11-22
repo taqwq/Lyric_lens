@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lyric Lens for Genius
 // @namespace    taq.replay.lyrics
-// @version      3.0.0
+// @version      3.0.0.202611221309
 // @description  Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添えます。読み違えやすい語句にだけ短い注を付けます。無料の Gemini API キーで動きます。
 // @author       taq
 // @match        https://genius.com/*
@@ -22,4 +22,6 @@
 // @connect      generativelanguage.googleapis.com
 // @run-at       document-idle
 // @noframes
+// @updateURL    https://raw.githubusercontent.com/taqwq/Lyric_lens/master/dist/lyric-lens.meta.js
+// @downloadURL  https://raw.githubusercontent.com/taqwq/Lyric_lens/master/dist/lyric-lens.user.js
 // ==/UserScript==

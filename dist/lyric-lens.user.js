@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lyric Lens for Genius
 // @namespace    taq.replay.lyrics
-// @version      3.0.0
+// @version      3.0.0.202611221309
 // @description  Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添えます。読み違えやすい語句にだけ短い注を付けます。無料の Gemini API キーで動きます。
 // @author       taq
 // @match        https://genius.com/*
@@ -22,6 +22,8 @@
 // @connect      generativelanguage.googleapis.com
 // @run-at       document-idle
 // @noframes
+// @updateURL    https://raw.githubusercontent.com/taqwq/Lyric_lens/master/dist/lyric-lens.meta.js
+// @downloadURL  https://raw.githubusercontent.com/taqwq/Lyric_lens/master/dist/lyric-lens.user.js
 // ==/UserScript==
 
 "use strict";
@@ -5523,7 +5525,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
     if (false) window.__ll = app;
     registerMenu("Lyric Lensの設定", () => app.openSettings(null));
     app.start().catch((error) => console.error("[Lyric Lens] failed to start", error));
-    console.info(`[Lyric Lens] v${"3.0.0"}`);
+    console.info(`[Lyric Lens] v${"3.0.0.202611221309"}`);
   }
   if (document.body) boot();
   else document.addEventListener("DOMContentLoaded", boot, { once: true });
