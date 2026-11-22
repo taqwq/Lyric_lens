@@ -67,7 +67,7 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
 .ll-icon::before { content: "あ"; }
 .ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-black) !important; font-size: 15px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ll-head-row[data-tone="settled"] .ll-status { font-size: 13px; letter-spacing: .02em; }
-/* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
+/* a parking spot for focus when 停止 replaces the pressed button (head.ts), not a control */
 .ll-status:focus { outline: none; }
 /* An empty live region stays in the accessibility tree (never `hidden`) so its next text is
    announced; it takes no room. */
@@ -90,7 +90,7 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   text-decoration: underline 1px !important;
   text-underline-offset: 3px;
 }
-/* The one next step (日本語で読む, 続きを訳す…): bold, a heavier underline, first in the row. */
+/* The one next step (日本語に翻訳, 続きを翻訳…): bold, a heavier underline, first in the row. */
 .ll-btn[data-primary] {
   flex: 0 0 auto;
   padding: 0;

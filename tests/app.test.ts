@@ -379,14 +379,14 @@ describe('head view mapping', () => {
   it('S4 carries the count text and the progress of the lines in', () => {
     const app = runningApp(2);
     inside(app).renderNow();
-    expect(headView()).toMatchObject({ state: 'S4', tone: 'speaking', status: '訳しています', count: '（2/3行）', progress: { value: 2, max: 3 } });
+    expect(headView()).toMatchObject({ state: 'S4', tone: 'speaking', status: '翻訳しています', count: '（2/3行）', progress: { value: 2, max: 3 } });
     expect(headView().settle).toBeUndefined();
   });
 
   it('S3 is indeterminate and has no count', () => {
     const app = runningApp(0);
     inside(app).renderNow();
-    expect(headView()).toMatchObject({ state: 'S3', status: '歌詞を読んでいます', progress: 'indeterminate' });
+    expect(headView()).toMatchObject({ state: 'S3', status: '歌詞を読み込んでいます', progress: 'indeterminate' });
     expect(headView()).not.toHaveProperty('count');
   });
 
@@ -427,7 +427,7 @@ describe('opening flag for the line renderer', () => {
     return app;
   };
 
-  it('日本語で読む and 続きを訳す raise it', () => {
+  it('日本語に翻訳 and 続きを翻訳 raise it', () => {
     for (const id of ['start', 'resume']) {
       const app = new App();
       vi.spyOn(app, 'translate').mockResolvedValue();

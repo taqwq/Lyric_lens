@@ -37,17 +37,17 @@ export interface HeadView {
 
 let prefaceSeq = 0;
 
-/** 止める appears in the slot of the button just pressed (日本語で読む → 止める): a double tap or
+/** 停止 appears in the slot of the button just pressed (日本語に翻訳 → 停止): a double tap or
  *  key auto-repeat must not land on it. */
 const isStop = (id?: string): boolean => id === 'stop' || id === 'stopMirror';
 const STOP_GRACE_MS = 600;
 const SETTLE_MS = 600;
 
 /** The links in their places, left to right. A link that is absent in a view still holds its
- *  slot (an invisible, inert placeholder with the usual label), so 止める never jumps left when
+ *  slot (an invisible, inert placeholder with the usual label), so 停止 never jumps left when
  *  訳を隠す and 設定 arrive or leave. Any other link follows the last slot. */
 const SLOTS: { slot: string; label: string; takes: (id?: string) => boolean }[] = [
-  { slot: 'stop', label: '止める', takes: (id) => id === 'stop' || id === 'stopMirror' || id === 'stopOther' },
+  { slot: 'stop', label: '停止', takes: (id) => id === 'stop' || id === 'stopMirror' || id === 'stopOther' },
   { slot: 'hide', label: '訳を隠す', takes: (id) => id === 'hide' },
   { slot: 'settings', label: '設定', takes: (id) => id === 'settings' },
 ];
@@ -252,8 +252,8 @@ export class HeadRow {
       view.count ? h('span', { class: 'll-count', 'aria-hidden': 'true' }, view.count) : null,
       links.length ? h('span', { class: 'll-links' }, links) : null,
       p === 'indeterminate'
-        ? h('span', { class: 'll-progress', role: 'progressbar', 'aria-label': '翻訳の進み具合', 'data-indeterminate': '' })
-        : p ? h('span', { class: 'll-progress', role: 'progressbar', 'aria-label': '翻訳の進み具合', 'aria-valuemin': '0', 'aria-valuemax': String(p.max), 'aria-valuenow': String(p.value) }) : null,
+        ? h('span', { class: 'll-progress', role: 'progressbar', 'aria-label': '翻訳の進捗', 'data-indeterminate': '' })
+        : p ? h('span', { class: 'll-progress', role: 'progressbar', 'aria-label': '翻訳の進捗', 'aria-valuemin': '0', 'aria-valuemax': String(p.max), 'aria-valuenow': String(p.value) }) : null,
     );
     if (this.settleTimer !== null) row.setAttribute('data-settle', '');
     const out: Node[] = [row];

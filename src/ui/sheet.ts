@@ -26,11 +26,11 @@ export interface OpenSheetOptions {
   anchor?: HTMLElement | null;
   /** Shows the 「この曲」 section (settings mode) when given. */
   song?: SheetSong | null;
-  /** Id of the song a request is writing right now (here or in another tab). 読み込む leaves it alone. */
+  /** Id of the song a request is writing right now (here or in another tab). インポート leaves it alone. */
   busySongId?: string | null;
-  /** Called after the reader confirms 訳し直す. */
+  /** Called after the reader confirms 再翻訳. */
   onRetranslate?: () => void;
-  /** After the reader confirms 消す for this song. */
+  /** After the reader confirms 削除 for this song. */
   onDeleteSong?: () => Promise<void> | void;
   /** First-run primary button, after the key is saved and verified. */
   onSaveAndTranslate?: () => void;
@@ -41,54 +41,54 @@ export interface OpenSheetOptions {
 /* ---------- copy (docs/DESIGN.md §4, verbatim) ---------- */
 
 const COPY = {
-  firstTitle: '日本語訳をはじめる',
-  step1: 'Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります',
+  firstTitle: 'APIキーの設定',
+  step1: 'Google AI Studioを開き、Googleアカウントでログインして、無料のAPIキーを作成します',
   step1Link: 'Google AI Studioを開く',
-  step2: 'キーをコピーして、下に貼り付けます',
-  placeholder: 'ここに貼り付け',
-  pasteKey: 'キーを貼り付けてください',
-  keyNote: 'キーはこのブラウザにだけ保存され、Google以外には送られません。無料枠では、送った歌詞などがGoogleのサービス改善に使われることがあります',
-  primary: '保存してこの曲を訳す',
-  secondary: '保存だけする',
-  checking: '確かめています…',
-  badKey: 'このキーは使えませんでした。コピーし直してください',
-  network: 'Googleにつながりませんでした。接続を確認してください',
-  busyCheck: 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください',
-  badKeyRow: 'コピーし直して、貼り付けてください',
-  keySaveFailed: 'キーを保存できませんでした。もう一度試してください',
+  step2: 'キーをコピーして、下の欄に貼り付けます',
+  placeholder: 'APIキーを貼り付け',
+  pasteKey: 'APIキーを入力してください',
+  keyNote: 'キーはこのブラウザにのみ保存され、Google以外には送信されません。無料枠では、送信した歌詞などがGoogleのサービス改善に使用される場合があります',
+  primary: '保存してこの曲を翻訳',
+  secondary: '保存のみ',
+  checking: '確認しています…',
+  badKey: 'このキーは使用できません。もう一度コピーしてください',
+  network: 'Googleに接続できませんでした。ネットワーク接続を確認してください',
+  busyCheck: 'Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください',
+  badKeyRow: 'もう一度コピーして貼り付けてください',
+  keySaveFailed: 'キーを保存できませんでした。再試行してください',
   settingsTitle: 'Lyric Lensの設定',
   close: '閉じる',
-  services: '翻訳に使うAI',
+  services: '翻訳に使用するAI',
   save: '保存',
-  makeKey: 'Google AI Studioでキーを作る',
-  removeKey: 'キーを消す',
-  reenterKey: 'キーを入れ直す',
+  makeKey: 'Google AI Studioでキーを作成',
+  removeKey: 'キーを削除',
+  reenterKey: 'キーを再入力',
   statusMissing: '未設定',
-  statusOk: '使えます',
-  statusBad: 'キーが使えません',
+  statusOk: '使用できます',
+  statusBad: 'キーが無効です',
   song: 'この曲',
   lastError: '直近のエラー',
-  retranslate: 'この曲を訳し直す',
-  retranslateConfirm: '今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます',
-  retranslateOk: '訳し直す',
-  deleteSong: 'この曲の訳を消す',
-  deleteSongConfirm: 'この曲の保存した訳を消します。元に戻せません',
-  deleteAllOk: 'すべて消す',
+  retranslate: 'この曲を再翻訳',
+  retranslateConfirm: '現在の訳を残したまま再翻訳し、完了後に新しい訳に置き換えます',
+  retranslateOk: '再翻訳',
+  deleteSong: 'この曲の訳を削除',
+  deleteSongConfirm: 'この曲の保存済みの訳を削除します。この操作は取り消せません',
+  deleteAllOk: 'すべて削除',
   data: '保存データ',
-  dataLead: '書き出したファイルは、別の端末でも読み込めます',
-  exportData: '書き出す',
-  importData: '読み込む',
-  exportFailed: '書き出せませんでした',
-  importNothing: '新しく読み込める曲はありませんでした',
-  importFailed: '読み込めませんでした。Lyric Lensで書き出したファイルを選んでください',
-  deleteAll: 'すべて消す',
-  deleteFailed: '消せませんでした',
-  nothingSaved: '保存した曲はありません',
-  claudeMakeKey: 'Claude Consoleでキーを作る',
-  claudeNetwork: 'Anthropicにつながりませんでした。接続を確認してください',
-  claudeBusy: 'Anthropicが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください',
-  ok: '消す',
-  cancel: 'やめる',
+  dataLead: 'エクスポートしたファイルは、別の端末でインポートできます',
+  exportData: 'エクスポート',
+  importData: 'インポート',
+  exportFailed: 'エクスポートできませんでした',
+  importNothing: 'インポートできる新しい曲はありませんでした',
+  importFailed: 'インポートできませんでした。Lyric Lensでエクスポートしたファイルを選択してください',
+  deleteAll: 'すべて削除',
+  deleteFailed: '削除できませんでした',
+  nothingSaved: '保存済みの曲はありません',
+  claudeMakeKey: 'Claude Consoleでキーを作成',
+  claudeNetwork: 'Anthropicに接続できませんでした。ネットワーク接続を確認してください',
+  claudeBusy: 'Anthropicが混雑しているため、確認できませんでした。しばらくしてから再試行してください',
+  ok: '削除',
+  cancel: 'キャンセル',
 } as const;
 
 const AI_STUDIO_URL = 'https://aistudio.google.com/app/apikey';
@@ -197,7 +197,7 @@ export function modelLabel(id: string): string {
 /** What a screen reader says for the masked key. */
 function maskLabel(key: string): string {
   const k = key.trim();
-  return k.length >= 8 ? `保存したキー（末尾${k.slice(-4)}）` : '保存したキー';
+  return k.length >= 8 ? `保存済みのキー（末尾${k.slice(-4)}）` : '保存済みのキー';
 }
 
 /** ••••abcd. A short key shows no tail at all. */
@@ -276,8 +276,8 @@ function statusText(row: Row): string {
     case 'resting': {
       if (row.until <= 0) return COPY.statusOk;
       const when = formatWhen(row.until);
-      if (row.service.id === 'claude') return `APIの残高がありません（${when}にもう一度試します）`;
-      return `今日の無料枠を使い切りました（${when}から使えます）`;
+      if (row.service.id === 'claude') return `APIの残高がありません（${when}に再試行します）`;
+      return `本日の無料枠を使い切りました（${when}から使用できます）`;
     }
     default: return '';
   }
@@ -527,7 +527,7 @@ function mount(options: OpenSheetOptions): Active {
     }
   }
 
-  /** Replaces a button row with a question and two answers; やめる puts the buttons back. */
+  /** Replaces a button row with a question and two answers; キャンセル puts the buttons back. */
   function askInline(zone: HTMLElement, trigger: HTMLElement, spec: { message: string; ok: string; focusCancel: boolean; onOk: (done: () => void) => void }): void {
     const original = Array.from(zone.childNodes);
     const restore = (): void => { zone.replaceChildren(...original); };
@@ -723,8 +723,8 @@ function mount(options: OpenSheetOptions): Active {
       row.until = 0;
       row.message = '';
       paintRow(row);
-      // The button that had focus is gone. After キーを入れ直す the reader is here to paste a new
-      // key, so the field gets focus even on a phone. After キーを消す on a phone, focusing the
+      // The button that had focus is gone. After キーを再入力 the reader is here to paste a new
+      // key, so the field gets focus even on a phone. After キーを削除 on a phone, focusing the
       // input would raise the keyboard for nothing.
       if (isDesktop() || wasBad) focusEl(row.input);
       else { row.el.tabIndex = -1; focusEl(row.el); }
@@ -803,7 +803,7 @@ function mount(options: OpenSheetOptions): Active {
       const edition = song.edition !== false;
       body.append(h('section', { class: 'section' },
         h('h3', { class: 'section-title' }, COPY.song),
-        edition && parts.length ? h('p', { class: 'line' }, `${parts.join('')}訳しました`) : null,
+        edition && parts.length ? h('p', { class: 'line' }, `${parts.join('')}翻訳しました`) : null,
         song.lastError
           ? h('details', { class: 'error-detail' },
             h('summary', {}, COPY.lastError),
@@ -827,7 +827,7 @@ function mount(options: OpenSheetOptions): Active {
     };
     const zone = h('div', { class: 'zone' });
 
-    /* 書き出す: one JSON file with every saved song. Nothing is sent anywhere. */
+    /* エクスポート: one JSON file with every saved song. Nothing is sent anywhere. */
     const exportButton: HTMLButtonElement = button(COPY.exportData, 'text', () => { void exportData(); });
 
     async function exportData(): Promise<void> {
@@ -851,11 +851,11 @@ function mount(options: OpenSheetOptions): Active {
       transferring = false;
       if (closed) return;
       paintSummary();
-      if (failed) sayData(COPY.exportFailed, 'error'); else sayData(`${count}曲を書き出しました`);
+      if (failed) sayData(COPY.exportFailed, 'error'); else sayData(`${count}曲をエクスポートしました`);
       focusEl(exportButton);
     }
 
-    /* 読み込む: a hidden file input inside the shadow root; the visible button opens it. */
+    /* インポート: a hidden file input inside the shadow root; the visible button opens it. */
     const importButton: HTMLButtonElement = button(COPY.importData, 'text', () => { fileInput.click(); });
     const fileInput = h('input', {
       type: 'file',
@@ -885,7 +885,7 @@ function mount(options: OpenSheetOptions): Active {
       await refreshSummary();
       if (closed) return;
       if (written < 0) sayData(COPY.importFailed, 'error');
-      else sayData(written === 0 ? COPY.importNothing : `${written}曲を読み込みました`);
+      else sayData(written === 0 ? COPY.importNothing : `${written}曲をインポートしました`);
       focusEl(importButton);
     }
 
@@ -893,7 +893,7 @@ function mount(options: OpenSheetOptions): Active {
       if (!summary) return;
       const count = summary.count;
       askInline(zone, deleteAll, {
-        message: `保存した${count}曲の訳をすべて消します。元に戻せません`,
+        message: `保存済みの${count}曲の訳をすべて削除します。この操作は取り消せません`,
         ok: COPY.deleteAllOk,
         focusCancel: true,
         onOk: (done) => {
@@ -925,7 +925,7 @@ function mount(options: OpenSheetOptions): Active {
     zone.append(dataActions);
 
     function paintSummary(): void {
-      summaryEl.textContent = !summary ? '保存した曲：…' : summary.count ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : COPY.nothingSaved;
+      summaryEl.textContent = !summary ? '保存済みの曲：…' : summary.count ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : COPY.nothingSaved;
       const none = !summary || summary.count === 0;
       exportButton.disabled = none || dataBusy();
       importButton.disabled = dataBusy();

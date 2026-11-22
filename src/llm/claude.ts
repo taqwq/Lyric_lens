@@ -35,7 +35,7 @@ export function classifyClaudeError(status: number, bodyText: string, rawHeaders
   const type = String(body?.error?.type ?? '');
   const message = String(body?.error?.message ?? (bodyText.slice(0, 300) || `HTTP ${status}`));
   const opts = { status, retryAfterMs: retryAfterMs(null, rawHeaders), detail: bodyText.slice(0, 4000) };
-  if (CREDIT.test(message) || type === 'billing_error' || status === 402) return new LLMError('quota', 'Claude の API の残高がありません', opts);
+  if (CREDIT.test(message) || type === 'billing_error' || status === 402) return new LLMError('quota', 'ClaudeのAPIの残高がありません', opts);
   if (status === 401 || status === 403 || type === 'authentication_error' || type === 'permission_error') return new LLMError('auth', message, opts);
   if (status === 429 || type === 'rate_limit_error') return new LLMError('rate', message, opts);
   if (status === 404 || type === 'not_found_error') return new LLMError('not-found', message, opts);
@@ -123,8 +123,8 @@ export class ClaudeProvider {
 
     if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
     if (streamError) throw streamError;
-    if (!text && stopReason === 'refusal') throw new LLMError('blocked', 'Claude がこの依頼を断りました', { status: 200 });
-    if (!text) throw new LLMError('empty', 'Claude の返事が空でした', { status: 200, detail: res.text.slice(0, 2000) });
+    if (!text && stopReason === 'refusal') throw new LLMError('blocked', 'Claudeがこのリクエストを拒否しました', { status: 200 });
+    if (!text) throw new LLMError('empty', 'Claudeの応答が空でした', { status: 200, detail: res.text.slice(0, 2000) });
     const finish = stopReason === 'end_turn' ? 'stop' : stopReason === 'max_tokens' ? 'length' : stopReason === 'refusal' ? 'blocked' : 'unknown';
     return { finish, finishDetail: stopReason, text };
   }

@@ -49,7 +49,7 @@ function input(p: PageSong, over: Partial<LinesInput> = {}): LinesInput {
 
 const states = (r: LineRenderer, p: PageSong) => p.source.lines.map((_, i) => r.nodeFor(i)?.dataset.state ?? null);
 const llLines = () => Array.from(document.querySelectorAll<HTMLElement>('.ll-line'));
-const seamOf = (over: Partial<SeamView['button']> = {}, text = 'ここで止めました'): SeamView => ({ text, button: { label: '続きを訳す', onClick: vi.fn(), ...over } });
+const seamOf = (over: Partial<SeamView['button']> = {}, text = 'ここで停止しました'): SeamView => ({ text, button: { label: '続きを翻訳', onClick: vi.fn(), ...over } });
 
 const slangNote: Note = { kind: 'slang', phrase: 'Dream on', text: 'ほげ' };
 const idiomNote: Note = { kind: 'idiom', phrase: 'Wake up', text: 'ふが' };
@@ -117,7 +117,7 @@ describe('states', () => {
     expect(states(r, page)).toEqual(['filled', 'gap', 'filled', 'gap', 'filled', 'gap']);
     const gap = r.nodeFor(1)!.querySelector('.ll-ja')!;
     expect(gap.textContent).toBe('――');
-    expect(gap.getAttribute('aria-label')).toBe('この行は訳せていません');
+    expect(gap.getAttribute('aria-label')).toBe('この行は未翻訳です');
     // aria-label on a generic span is ignored by VoiceOver/TalkBack: the span is an image.
     expect(gap.getAttribute('role')).toBe('img');
     // A translated line's text is plain text, not an image.
@@ -144,8 +144,8 @@ describe('states', () => {
     expect(r.nodeFor(2)!.nextSibling).toBe(seamEl);
     expect(seamEl.nextSibling!.textContent).toBe('Hold on tight (Hold on, hold on)');
     const seam = seamEl.querySelector('.ll-seam')!;
-    expect(seam.querySelector('.ll-seam-text')!.textContent).toBe('ここで止めました');
-    expect(seam.querySelector('button.ll-btn')!.textContent).toBe('続きを訳す');
+    expect(seam.querySelector('.ll-seam-text')!.textContent).toBe('ここで停止しました');
+    expect(seam.querySelector('button.ll-btn')!.textContent).toBe('続きを翻訳');
     // reason first, then the button
     expect(seam.firstElementChild!.className).toBe('ll-seam-text');
     expect(seam.lastElementChild!.tagName).toBe('BUTTON');

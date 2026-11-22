@@ -7,9 +7,9 @@ export const NOTE_KINDS: readonly NoteKind[] = ['slang', 'wordplay', 'reference'
 export const NOTE_LABELS: Record<NoteKind, string> = {
   slang: 'スラング',
   wordplay: '言葉遊び',
-  reference: '元ネタ',
+  reference: '引用',
   idiom: '慣用句',
-  ambiguous: '二通りに読める',
+  ambiguous: '二重の意味',
 };
 
 export interface Note {

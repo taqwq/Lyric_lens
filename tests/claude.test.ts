@@ -66,7 +66,7 @@ describe('ClaudeProvider.verify', () => {
       modes.push(req.textMode);
       if (req.url.includes('/v1/models') && !req.textMode) {
         const { LLMError } = await import('../src/llm/errors');
-        throw new LLMError('timeout', '返事がないため打ち切りました');
+        throw new LLMError('timeout', '応答がないため中断しました');
       }
       if (req.url.includes('/v1/models')) return { status: 200, text: '{"data":[]}', headers: '' };
       return base(req);

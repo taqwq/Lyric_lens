@@ -230,7 +230,7 @@ export class LineRenderer {
   private content(state: State, index: number, ja: string, noteCount: number, input: LinesInput): Node[] {
     if (state === 'empty') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' })];
     if (state === 'next') return [h('span', { class: 'll-ja', 'aria-hidden': 'true' }, h('span', { class: 'll-pen' }))];
-    if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'この行は訳せていません' }, '――')];
+    if (state === 'gap') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': 'この行は未翻訳です' }, '――')];
     if (state === 'voice') return [h('span', { class: 'll-ja', role: 'img', 'aria-label': '声だけの行' }, '♪')];
     // Trailing ad-lib groups in a quieter ink, so the eye lands on the line itself.
     const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? '');

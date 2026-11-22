@@ -62,7 +62,7 @@ export function latinFamilies(family: string): string {
 }
 
 /** Head-row notice when the finished edition could not be stored. */
-const SAVE_FAILED = { status: '訳を保存できませんでした', detail: '今は読めますが、このページを閉じると消えます' };
+const SAVE_FAILED = { status: '訳を保存できませんでした', detail: 'このページを閉じると、この訳は失われます' };
 
 export class App {
   private page: PageSong | null = null;
@@ -168,7 +168,7 @@ export class App {
     const title = page.source.meta.title;
     if (stored && identity.startsWith('path:') && stored.title && title && stored.title !== title) return null;
     // A first request that produced nothing leaves no edition behind (an invalid key is
-    // the exception: it explains why 日本語で読む needs a new key first).
+    // the exception: it explains why 日本語に翻訳 needs a new key first).
     if (stored && !hasLines(stored) && stored.stop?.reason !== 'auth') return null;
     return stored;
   }
@@ -410,7 +410,7 @@ export class App {
     return any ? 'none' : null;
   }
 
-  /** Re-render when a disabled "続きを訳す" becomes possible again. */
+  /** Re-render when a disabled "続きを翻訳" becomes possible again. */
   private scheduleWake(): void {
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
     const times = [this.record?.stop?.until, this.avail.ok ? 0 : this.avail.until].filter((t): t is number => Boolean(t && t > Date.now()));
@@ -578,7 +578,7 @@ export class App {
     // A retranslation is confirmed in the settings sheet, away from the page: if it cannot
     // start, say so in the head row instead of silently doing nothing.
     const cannotRetranslate = (detail: string) => {
-      if (kind === 'retranslate' && this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail };
+      if (kind === 'retranslate' && this.identity === id) this.notice = { status: '再翻訳できませんでした。現在の訳はそのまま残っています', detail };
     };
     try {
       const settings = await loadSettings();
@@ -588,7 +588,7 @@ export class App {
       }
       await this.refreshKeys();
       if (!this.avail.ok) {
-        cannotRetranslate(`今日の無料枠を使い切りました${this.avail.until > Date.now() ? `。${formatWhen(this.avail.until)}からもう一度試せます` : ''}`);
+        cannotRetranslate(`本日の無料枠を使い切りました${this.avail.until > Date.now() ? `。${formatWhen(this.avail.until)}から再試行できます` : ''}`);
         this.renderNow();
         return;
       }
@@ -596,7 +596,7 @@ export class App {
       lock = await acquireLock(id, source.meta.title || '前の曲');
       if (!lock) {
         this.foreignLock = await this.otherLock();
-        cannotRetranslate('別の曲を訳しています。訳し終えてからもう一度試せます');
+        cannotRetranslate('別の曲を翻訳中です。完了後に再試行できます');
         this.renderNow();
         return;
       }
@@ -635,7 +635,7 @@ export class App {
       const current = run;
       current.lock.start(() => current.controller.abort());
       // A reload or closed tab should not leave a live-looking lock for 10 s, and what it
-      // leaves behind reads "ここまで訳してあります", not "ここで止めました".
+      // leaves behind reads "ここまで翻訳済みです", not "ここで停止しました".
       let leaving = false;
       // Write the newest lines at once: after pagehide the async save chain may never run,
       // and a backgrounded phone tab may be discarded without one.
@@ -701,8 +701,8 @@ export class App {
             const stop = outcome.stop ?? { reason: 'unusable', at: Date.now() };
             // A stop the reader chose reads as their own action, not as a failure with a reason.
             this.notice = stop.reason === 'stopped'
-              ? { status: '訳し直しを止めました。今の訳はそのまま残っています', detail: '' }
-              : { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText(stop, Date.now()) };
+              ? { status: '再翻訳を停止しました。現在の訳はそのまま残っています', detail: '' }
+              : { status: '再翻訳できませんでした。現在の訳はそのまま残っています', detail: failureText(stop, Date.now()) };
           }
         } else {
           if (leaving && record.stop?.reason === 'stopped') record.stop = { reason: 'closed', at: Date.now() };
@@ -711,7 +711,7 @@ export class App {
       } catch (error) {
         console.error('[Lyric Lens]', error);
         if (retranslate) {
-          if (this.identity === id) this.notice = { status: '訳し直せませんでした。今の訳はそのまま残っています', detail: failureText({ reason: 'unusable', at: Date.now() }, Date.now()) };
+          if (this.identity === id) this.notice = { status: '再翻訳できませんでした。現在の訳はそのまま残っています', detail: failureText({ reason: 'unusable', at: Date.now() }, Date.now()) };
         } else {
           record.stop = { reason: 'unusable', at: Date.now() };
           await this.persist(current, record);
@@ -747,7 +747,7 @@ export class App {
 
   /** Saves a finished request. A request that produced nothing is not an edition: it stays
    *  on this page (to say why) but is not stored — except an invalid key, which explains
-   *  on later visits why 日本語で読む needs a new key. */
+   *  on later visits why 日本語に翻訳 needs a new key. */
   private async persist(run: Run, record: SongRecord): Promise<void> {
     // Shown first: a storage failure (quota) must not erase what the reader already has.
     if (this.identity === record.id) this.record = record;
@@ -789,7 +789,7 @@ export class App {
   }
 
   /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
-   *  offer 続きを訳す / 日本語で読む again. */
+   *  offer 続きを翻訳 / 日本語に翻訳 again. */
   /** An invalid-key stop needs no rewrite here: it stops applying (liveStop) as soon as a
    *  configured key is believed to work, on this page or any other. */
   private async afterSheet(): Promise<void> {

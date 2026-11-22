@@ -266,7 +266,7 @@
 
 .btn[data-v="close"] { flex: none; margin: 0; padding: 0 10px; min-height: 44px; }
 
-/* The one black button: the thing this sheet is for (保存してこの曲を訳す, 保存, the confirm). */
+/* The one black button: the thing this sheet is for (保存してこの曲を翻訳, 保存, the confirm). */
 .btn[data-v="solid"] {
   justify-content: center;
   min-height: 44px;

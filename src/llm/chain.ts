@@ -400,7 +400,7 @@ async function tryClaude(
         if (useful === undefined || useful) produced = true;
       },
     });
-    if (!produced) throw new LLMError('unusable', 'Claude の返事から訳を読み取れませんでした', { status: 200, detail: result.text.slice(0, 2000) });
+    if (!produced) throw new LLMError('unusable', 'Claudeの応答から訳を読み取れませんでした', { status: 200, detail: result.text.slice(0, 2000) });
     await clearClaudeBench(claudeKey);
     return { ...result, model: CLAUDE_MODEL };
   } catch (raw) {
@@ -481,10 +481,10 @@ export async function generateWithFallback(
       const cd = cooldowns[cooldownId(apiKey, m)];
       if (cd && cd.reason !== 'not-found' && cd.reason !== 'bad-request' && cd.until > now && (!best || cd.until < best.until)) best = cd;
     }
-    const spent = 'どのモデルも今日の無料枠を使い切っています';
+    const spent = 'すべてのモデルが本日の無料枠を使い切りました';
     if (!best) return base ?? new LLMError('quota', spent, { status: 429 });
     const kind: LLMErrorKind = best.reason === 'quota' ? 'quota' : 'rate';
-    const message = base?.message ?? (kind === 'quota' ? spent : 'どのモデルも回数制限にかかっています');
+    const message = base?.message ?? (kind === 'quota' ? spent : 'すべてのモデルが利用回数の上限に達しています');
     const wait = best.until - now;
     const error = new LLMError(kind, message, {
       status: 429,
@@ -508,9 +508,9 @@ export async function generateWithFallback(
     if (!soonest) return fromCooldown(null);
     const { reason, until } = soonest.cooldown;
     let error: LLMError;
-    if (reason === 'bad-request') error = new LLMError('bad-request', 'Geminiがこの依頼を受け付けませんでした', { status: 400 });
-    else if (reason === 'unusable') error = new LLMError('unusable', 'Geminiの返事から訳を読み取れませんでした', { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
-    else error = new LLMError('rate', 'どのモデルも一時的に使えないため、送りませんでした', { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
+    if (reason === 'bad-request') error = new LLMError('bad-request', 'Geminiがこのリクエストを拒否しました', { status: 400 });
+    else if (reason === 'unusable') error = new LLMError('unusable', 'Geminiの応答から訳を読み取れませんでした', { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
+    else error = new LLMError('rate', 'すべてのモデルが一時的に利用できないため、送信しませんでした', { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
     error.model = soonest.model;
     return error;
   };
@@ -616,9 +616,9 @@ export async function generateWithFallback(
             },
           });
           // HTTP 200 is not success: a reply the consumer accepted no line from counts as a failure.
-          if (!produced) throw new LLMError('unusable', 'Geminiの返事から訳を読み取れませんでした', { status: 200, detail: result.text.slice(0, 2000) });
+          if (!produced) throw new LLMError('unusable', 'Geminiの応答から訳を読み取れませんでした', { status: 200, detail: result.text.slice(0, 2000) });
           // A model that answered is no longer benched: write that back, or the next tap
-          // (often 続きを訳す within minutes) would still try it last or skip it.
+          // (often 続きを翻訳 within minutes) would still try it last or skip it.
           const id = cooldownId(apiKey, model);
           if (cooldowns[id]) { delete cooldowns[id]; await setJSON(COOLDOWN_KEY, cooldowns); }
           // A body that only arrived whole (some managers) has no earlier first text than its end.
@@ -633,7 +633,7 @@ export async function generateWithFallback(
           error.model = model;
           if (produced) {
             // Keep what arrived; the pipeline asks for the rest in a follow-up round. Bench the
-            // model first, so 続きを訳す does not go straight back to the one that just broke.
+            // model first, so 続きを翻訳 does not go straight back to the one that just broke.
             await remember(model, error);
             return { finish: 'unknown', finishDetail: error.kind, text: '', model, error };
           }
@@ -684,7 +684,7 @@ export async function generateWithFallback(
 
   // Every candidate was skipped: say why and when the first one is back (a minute or a day), not always "today".
   if (!errors.length && skipped.length) throw fromSkipped();
-  if (!errors.length) throw new LLMError('not-found', '使えるモデルが見つかりませんでした');
+  if (!errors.length) throw new LLMError('not-found', '利用できるモデルが見つかりませんでした');
   // Only a model's latest error counts: a 503 from pass 0 is no longer true once the same model
   // answered quota in pass 1. Errors without a model (the model list) keep their own place.
   const latest = new Map<string, LLMError>();

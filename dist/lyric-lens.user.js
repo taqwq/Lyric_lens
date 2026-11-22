@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lyric Lens for Genius
 // @namespace    taq.replay.lyrics
-// @version      3.0.0.202611221359
+// @version      3.0.0.202611221416
 // @description  Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添えます。読み違えやすい語句にだけ短い注を付けます。無料の Gemini API キーで動きます。
 // @author       taq
 // @match        https://genius.com/*
@@ -318,7 +318,7 @@
         }
         reject(error);
       };
-      const watchdog = new Watchdog(req, () => fail(new LLMError("timeout", "返事がないため打ち切りました")));
+      const watchdog = new Watchdog(req, () => fail(new LLMError("timeout", "応答がないため中断しました")));
       const onAbort = () => fail(new LLMError("aborted", "中止しました"));
       if (req.signal?.aborted) {
         onAbort();
@@ -388,7 +388,7 @@
         },
         // Keep the manager's own reason (e.g. a refused @connect) for the error details.
         onerror: (r) => fail(new LLMError("network", "ネットワークに接続できませんでした", { detail: String(r?.error || r?.statusText || "") })),
-        ontimeout: () => fail(new LLMError("timeout", "時間内に返事がありませんでした")),
+        ontimeout: () => fail(new LLMError("timeout", "時間内に応答がありませんでした")),
         onabort: () => fail(new LLMError("aborted", "中止しました"))
       };
       const ret = fn(details);
@@ -402,7 +402,7 @@
       reason ?? (reason = error);
       controller.abort();
     };
-    const watchdog = new Watchdog(req, () => stop(new LLMError("timeout", "返事がないため打ち切りました")));
+    const watchdog = new Watchdog(req, () => stop(new LLMError("timeout", "応答がないため中断しました")));
     const onAbort = () => stop(new LLMError("aborted", "中止しました"));
     if (req.signal?.aborted) throw new LLMError("aborted", "中止しました");
     req.signal?.addEventListener("abort", onAbort, { once: true });
@@ -488,7 +488,7 @@
     const type = String(body?.error?.type ?? "");
     const message = String(body?.error?.message ?? (bodyText.slice(0, 300) || `HTTP ${status}`));
     const opts = { status, retryAfterMs: retryAfterMs(null, rawHeaders), detail: bodyText.slice(0, 4e3) };
-    if (CREDIT.test(message) || type === "billing_error" || status === 402) return new LLMError("quota", "Claude の API の残高がありません", opts);
+    if (CREDIT.test(message) || type === "billing_error" || status === 402) return new LLMError("quota", "ClaudeのAPIの残高がありません", opts);
     if (status === 401 || status === 403 || type === "authentication_error" || type === "permission_error") return new LLMError("auth", message, opts);
     if (status === 429 || type === "rate_limit_error") return new LLMError("rate", message, opts);
     if (status === 404 || type === "not_found_error") return new LLMError("not-found", message, opts);
@@ -575,8 +575,8 @@
       for (const payload of sse.flush()) handle(payload);
       if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
       if (streamError) throw streamError;
-      if (!text2 && stopReason === "refusal") throw new LLMError("blocked", "Claude がこの依頼を断りました", { status: 200 });
-      if (!text2) throw new LLMError("empty", "Claude の返事が空でした", { status: 200, detail: res.text.slice(0, 2e3) });
+      if (!text2 && stopReason === "refusal") throw new LLMError("blocked", "Claudeがこのリクエストを拒否しました", { status: 200 });
+      if (!text2) throw new LLMError("empty", "Claudeの応答が空でした", { status: 200, detail: res.text.slice(0, 2e3) });
       const finish = stopReason === "end_turn" ? "stop" : stopReason === "max_tokens" ? "length" : stopReason === "refusal" ? "blocked" : "unknown";
       return { finish, finishDetail: stopReason, text: text2 };
     }
@@ -765,9 +765,9 @@ ${req.user}` : req.user }] }],
       if (streamError) throw streamError;
       if (blockReason) throw new LLMError("blocked", `Geminiが入力をブロックしました（${blockReason}）`, { status: 200 });
       if (!text2 && BLOCKED_REASONS.has(finishReason)) {
-        throw new LLMError("blocked", `Geminiが生成を止めました（${finishReason}）`, { status: 200 });
+        throw new LLMError("blocked", `Geminiが生成を停止しました（${finishReason}）`, { status: 200 });
       }
-      if (!text2) throw new LLMError("empty", "Geminiの返事が空でした", { status: 200, detail: res.text.slice(0, 2e3) });
+      if (!text2) throw new LLMError("empty", "Geminiの応答が空でした", { status: 200, detail: res.text.slice(0, 2e3) });
       const finish = finishReason === "STOP" ? "stop" : finishReason === "MAX_TOKENS" ? "length" : BLOCKED_REASONS.has(finishReason) ? "blocked" : "unknown";
       return { finish, finishDetail: finishReason, text: text2 };
     }
@@ -1037,7 +1037,7 @@ ${req.user}` : req.user }] }],
           if (useful === void 0 || useful) produced = true;
         }
       });
-      if (!produced) throw new LLMError("unusable", "Claude の返事から訳を読み取れませんでした", { status: 200, detail: result.text.slice(0, 2e3) });
+      if (!produced) throw new LLMError("unusable", "Claudeの応答から訳を読み取れませんでした", { status: 200, detail: result.text.slice(0, 2e3) });
       await clearClaudeBench(claudeKey);
       return { ...result, model: CLAUDE_MODEL };
     } catch (raw) {
@@ -1106,10 +1106,10 @@ ${req.user}` : req.user }] }],
         const cd = cooldowns[cooldownId(apiKey, m)];
         if (cd && cd.reason !== "not-found" && cd.reason !== "bad-request" && cd.until > now && (!best || cd.until < best.until)) best = cd;
       }
-      const spent = "どのモデルも今日の無料枠を使い切っています";
+      const spent = "すべてのモデルが本日の無料枠を使い切りました";
       if (!best) return base ?? new LLMError("quota", spent, { status: 429 });
       const kind = best.reason === "quota" ? "quota" : "rate";
-      const message = base?.message ?? (kind === "quota" ? spent : "どのモデルも回数制限にかかっています");
+      const message = base?.message ?? (kind === "quota" ? spent : "すべてのモデルが利用回数の上限に達しています");
       const wait = best.until - now;
       const error = new LLMError(kind, message, {
         status: 429,
@@ -1130,9 +1130,9 @@ ${req.user}` : req.user }] }],
       if (!soonest) return fromCooldown(null);
       const { reason, until } = soonest.cooldown;
       let error;
-      if (reason === "bad-request") error = new LLMError("bad-request", "Geminiがこの依頼を受け付けませんでした", { status: 400 });
-      else if (reason === "unusable") error = new LLMError("unusable", "Geminiの返事から訳を読み取れませんでした", { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
-      else error = new LLMError("rate", "どのモデルも一時的に使えないため、送りませんでした", { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
+      if (reason === "bad-request") error = new LLMError("bad-request", "Geminiがこのリクエストを拒否しました", { status: 400 });
+      else if (reason === "unusable") error = new LLMError("unusable", "Geminiの応答から訳を読み取れませんでした", { status: 200, retryAfterMs: Math.max(0, until - Date.now()) });
+      else error = new LLMError("rate", "すべてのモデルが一時的に利用できないため、送信しませんでした", { status: 429, retryAfterMs: Math.max(0, until - Date.now()) });
       error.model = soonest.model;
       return error;
     };
@@ -1219,7 +1219,7 @@ ${req.user}` : req.user }] }],
                 if (useful === void 0 || useful) produced = true;
               }
             });
-            if (!produced) throw new LLMError("unusable", "Geminiの返事から訳を読み取れませんでした", { status: 200, detail: result.text.slice(0, 2e3) });
+            if (!produced) throw new LLMError("unusable", "Geminiの応答から訳を読み取れませんでした", { status: 200, detail: result.text.slice(0, 2e3) });
             const id = cooldownId(apiKey, model);
             if (cooldowns[id]) {
               delete cooldowns[id];
@@ -1275,7 +1275,7 @@ ${req.user}` : req.user }] }],
       if (!busy) break;
     }
     if (!errors.length && skipped.length) throw fromSkipped();
-    if (!errors.length) throw new LLMError("not-found", "使えるモデルが見つかりませんでした");
+    if (!errors.length) throw new LLMError("not-found", "利用できるモデルが見つかりませんでした");
     const latest = /* @__PURE__ */ new Map();
     errors.forEach((e, i) => latest.set(e.model ? e.model : `#${i}`, e));
     const reported = pickReportedError([...latest.values()]);
@@ -1406,9 +1406,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var NOTE_LABELS = {
     slang: "スラング",
     wordplay: "言葉遊び",
-    reference: "元ネタ",
+    reference: "引用",
     idiom: "慣用句",
-    ambiguous: "二通りに読める"
+    ambiguous: "二重の意味"
   };
   var KEY_VERSION = 1;
 
@@ -2569,7 +2569,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var STOP_GRACE_MS = 600;
   var SETTLE_MS = 600;
   var SLOTS = [
-    { slot: "stop", label: "止める", takes: (id) => id === "stop" || id === "stopMirror" || id === "stopOther" },
+    { slot: "stop", label: "停止", takes: (id) => id === "stop" || id === "stopMirror" || id === "stopOther" },
     { slot: "hide", label: "訳を隠す", takes: (id) => id === "hide" },
     { slot: "settings", label: "設定", takes: (id) => id === "settings" }
   ];
@@ -2741,7 +2741,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         this.statusNode(view),
         view.count ? h("span", { class: "ll-count", "aria-hidden": "true" }, view.count) : null,
         links.length ? h("span", { class: "ll-links" }, links) : null,
-        p === "indeterminate" ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進み具合", "data-indeterminate": "" }) : p ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進み具合", "aria-valuemin": "0", "aria-valuemax": String(p.max), "aria-valuenow": String(p.value) }) : null
+        p === "indeterminate" ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進捗", "data-indeterminate": "" }) : p ? h("span", { class: "ll-progress", role: "progressbar", "aria-label": "翻訳の進捗", "aria-valuemin": "0", "aria-valuemax": String(p.max), "aria-valuenow": String(p.value) }) : null
       );
       if (this.settleTimer !== null) row.setAttribute("data-settle", "");
       const out = [row];
@@ -2974,7 +2974,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     content(state, index, ja, noteCount, input) {
       if (state === "empty") return [h("span", { class: "ll-ja", "aria-hidden": "true" })];
       if (state === "next") return [h("span", { class: "ll-ja", "aria-hidden": "true" }, h("span", { class: "ll-pen" }))];
-      if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "この行は訳せていません" }, "――")];
+      if (state === "gap") return [h("span", { class: "ll-ja", role: "img", "aria-label": "この行は未翻訳です" }, "――")];
       if (state === "voice") return [h("span", { class: "ll-ja", role: "img", "aria-label": "声だけの行" }, "♪")];
       const { main, tail } = splitAdlibs(ja, input.page.source.lines[index]?.text ?? "");
       const out = [h("span", { class: "ll-ja" }, main, tail ? h("span", { class: "ll-adlib" }, tail) : null)];
@@ -3032,7 +3032,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
   // src/ui/notes.ts
   var GENIUS_CLIP = 400;
-  var GN_LABEL = "Geniusの注釈を英語で読む ▾";
+  var GN_LABEL = "Geniusの注釈（英語） ▾";
   function registry() {
     const css = globalThis.CSS;
     return css?.highlights && typeof Highlight !== "undefined" ? css.highlights : null;
@@ -3138,7 +3138,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           note.conjecture ? h("span", { class: "ll-note-conj" }, "〔推測〕") : null
         ),
         h("p", { class: "ll-note-text" }, note.text),
-        cited ? h("p", { class: "ll-note-src" }, "Geniusの注釈を参考にしました") : null,
+        cited ? h("p", { class: "ll-note-src" }, "参考：Geniusの注釈") : null,
         genius ? this.geniusBlock(genius, onToggle) : null
       );
     }
@@ -3160,7 +3160,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           const show = body.hidden;
           body.hidden = !show;
           toggle.setAttribute("aria-expanded", String(show));
-          toggle.textContent = show ? "たたむ ▴" : GN_LABEL;
+          toggle.textContent = show ? "閉じる ▴" : GN_LABEL;
           onToggle();
         }
       }, GN_LABEL);
@@ -3437,7 +3437,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
 .btn[data-v="close"] { flex: none; margin: 0; padding: 0 10px; min-height: 44px; }
 
-/* The one black button: the thing this sheet is for (保存してこの曲を訳す, 保存, the confirm). */
+/* The one black button: the thing this sheet is for (保存してこの曲を翻訳, 保存, the confirm). */
 .btn[data-v="solid"] {
   justify-content: center;
   min-height: 44px;
@@ -3618,54 +3618,54 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
   // src/ui/sheet.ts
   var COPY = {
-    firstTitle: "日本語訳をはじめる",
-    step1: "Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります",
+    firstTitle: "APIキーの設定",
+    step1: "Google AI Studioを開き、Googleアカウントでログインして、無料のAPIキーを作成します",
     step1Link: "Google AI Studioを開く",
-    step2: "キーをコピーして、下に貼り付けます",
-    placeholder: "ここに貼り付け",
-    pasteKey: "キーを貼り付けてください",
-    keyNote: "キーはこのブラウザにだけ保存され、Google以外には送られません。無料枠では、送った歌詞などがGoogleのサービス改善に使われることがあります",
-    primary: "保存してこの曲を訳す",
-    secondary: "保存だけする",
-    checking: "確かめています…",
-    badKey: "このキーは使えませんでした。コピーし直してください",
-    network: "Googleにつながりませんでした。接続を確認してください",
-    busyCheck: "Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください",
-    badKeyRow: "コピーし直して、貼り付けてください",
-    keySaveFailed: "キーを保存できませんでした。もう一度試してください",
+    step2: "キーをコピーして、下の欄に貼り付けます",
+    placeholder: "APIキーを貼り付け",
+    pasteKey: "APIキーを入力してください",
+    keyNote: "キーはこのブラウザにのみ保存され、Google以外には送信されません。無料枠では、送信した歌詞などがGoogleのサービス改善に使用される場合があります",
+    primary: "保存してこの曲を翻訳",
+    secondary: "保存のみ",
+    checking: "確認しています…",
+    badKey: "このキーは使用できません。もう一度コピーしてください",
+    network: "Googleに接続できませんでした。ネットワーク接続を確認してください",
+    busyCheck: "Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください",
+    badKeyRow: "もう一度コピーして貼り付けてください",
+    keySaveFailed: "キーを保存できませんでした。再試行してください",
     settingsTitle: "Lyric Lensの設定",
     close: "閉じる",
-    services: "翻訳に使うAI",
+    services: "翻訳に使用するAI",
     save: "保存",
-    makeKey: "Google AI Studioでキーを作る",
-    removeKey: "キーを消す",
-    reenterKey: "キーを入れ直す",
+    makeKey: "Google AI Studioでキーを作成",
+    removeKey: "キーを削除",
+    reenterKey: "キーを再入力",
     statusMissing: "未設定",
-    statusOk: "使えます",
-    statusBad: "キーが使えません",
+    statusOk: "使用できます",
+    statusBad: "キーが無効です",
     song: "この曲",
     lastError: "直近のエラー",
-    retranslate: "この曲を訳し直す",
-    retranslateConfirm: "今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます",
-    retranslateOk: "訳し直す",
-    deleteSong: "この曲の訳を消す",
-    deleteSongConfirm: "この曲の保存した訳を消します。元に戻せません",
-    deleteAllOk: "すべて消す",
+    retranslate: "この曲を再翻訳",
+    retranslateConfirm: "現在の訳を残したまま再翻訳し、完了後に新しい訳に置き換えます",
+    retranslateOk: "再翻訳",
+    deleteSong: "この曲の訳を削除",
+    deleteSongConfirm: "この曲の保存済みの訳を削除します。この操作は取り消せません",
+    deleteAllOk: "すべて削除",
     data: "保存データ",
-    dataLead: "書き出したファイルは、別の端末でも読み込めます",
-    exportData: "書き出す",
-    importData: "読み込む",
-    exportFailed: "書き出せませんでした",
-    importNothing: "新しく読み込める曲はありませんでした",
-    importFailed: "読み込めませんでした。Lyric Lensで書き出したファイルを選んでください",
-    deleteAll: "すべて消す",
-    deleteFailed: "消せませんでした",
-    nothingSaved: "保存した曲はありません",
-    claudeMakeKey: "Claude Consoleでキーを作る",
-    claudeNetwork: "Anthropicにつながりませんでした。接続を確認してください",
-    claudeBusy: "Anthropicが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください",
-    ok: "消す",
-    cancel: "やめる"
+    dataLead: "エクスポートしたファイルは、別の端末でインポートできます",
+    exportData: "エクスポート",
+    importData: "インポート",
+    exportFailed: "エクスポートできませんでした",
+    importNothing: "インポートできる新しい曲はありませんでした",
+    importFailed: "インポートできませんでした。Lyric Lensでエクスポートしたファイルを選択してください",
+    deleteAll: "すべて削除",
+    deleteFailed: "削除できませんでした",
+    nothingSaved: "保存済みの曲はありません",
+    claudeMakeKey: "Claude Consoleでキーを作成",
+    claudeNetwork: "Anthropicに接続できませんでした。ネットワーク接続を確認してください",
+    claudeBusy: "Anthropicが混雑しているため、確認できませんでした。しばらくしてから再試行してください",
+    ok: "削除",
+    cancel: "キャンセル"
   };
   var AI_STUDIO_URL = "https://aistudio.google.com/app/apikey";
   var GEMINI = {
@@ -3756,7 +3756,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
   function maskLabel(key) {
     const k = key.trim();
-    return k.length >= 8 ? `保存したキー（末尾${k.slice(-4)}）` : "保存したキー";
+    return k.length >= 8 ? `保存済みのキー（末尾${k.slice(-4)}）` : "保存済みのキー";
   }
   function maskKey(key) {
     const k = key.trim();
@@ -3810,8 +3810,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       case "resting": {
         if (row.until <= 0) return COPY.statusOk;
         const when2 = formatWhen(row.until);
-        if (row.service.id === "claude") return `APIの残高がありません（${when2}にもう一度試します）`;
-        return `今日の無料枠を使い切りました（${when2}から使えます）`;
+        if (row.service.id === "claude") return `APIの残高がありません（${when2}に再試行します）`;
+        return `本日の無料枠を使い切りました（${when2}から使用できます）`;
       }
       default:
         return "";
@@ -4353,7 +4353,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           "section",
           { class: "section" },
           h("h3", { class: "section-title" }, COPY.song),
-          edition && parts.length ? h("p", { class: "line" }, `${parts.join("")}訳しました`) : null,
+          edition && parts.length ? h("p", { class: "line" }, `${parts.join("")}翻訳しました`) : null,
           song.lastError ? h(
             "details",
             { class: "error-detail" },
@@ -4401,7 +4401,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         if (closed) return;
         paintSummary();
         if (failed) sayData(COPY.exportFailed, "error");
-        else sayData(`${count}曲を書き出しました`);
+        else sayData(`${count}曲をエクスポートしました`);
         focusEl(exportButton);
       }
       const importButton = button(COPY.importData, "text", () => {
@@ -4435,14 +4435,14 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         await refreshSummary();
         if (closed) return;
         if (written < 0) sayData(COPY.importFailed, "error");
-        else sayData(written === 0 ? COPY.importNothing : `${written}曲を読み込みました`);
+        else sayData(written === 0 ? COPY.importNothing : `${written}曲をインポートしました`);
         focusEl(importButton);
       }
       const deleteAll = button(COPY.deleteAll, "text", () => {
         if (!summary) return;
         const count = summary.count;
         askInline(zone, deleteAll, {
-          message: `保存した${count}曲の訳をすべて消します。元に戻せません`,
+          message: `保存済みの${count}曲の訳をすべて削除します。この操作は取り消せません`,
           ok: COPY.deleteAllOk,
           focusCancel: true,
           onOk: (done) => {
@@ -4473,7 +4473,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       const dataActions = h("div", { class: "actions" }, exportButton, importButton, deleteAll);
       zone.append(dataActions);
       function paintSummary() {
-        summaryEl.textContent = !summary ? "保存した曲：…" : summary.count ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : COPY.nothingSaved;
+        summaryEl.textContent = !summary ? "保存済みの曲：…" : summary.count ? `${summary.count}曲を保存しています（${formatSize(summary.bytes)}）` : COPY.nothingSaved;
         const none = !summary || summary.count === 0;
         exportButton.disabled = none || dataBusy();
         importButton.disabled = dataBusy();
@@ -4539,7 +4539,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
 
   // src/ui/state.ts
   var SETTINGS = { id: "settings", label: "設定" };
-  var STOP = { id: "stop", label: "止める" };
+  var STOP = { id: "stop", label: "停止" };
   function hideAction(i) {
     return { id: "hide", label: i.hidden ? "訳を表示" : "訳を隠す" };
   }
@@ -4557,21 +4557,21 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const at = when(stop.until, i.now);
     const long = stop.until !== void 0 && stop.until - i.now > 9e4 && at !== "";
     const text2 = {
-      busy: "AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます",
-      rate: long ? `AIの回数制限にかかりました。${at}ごろから続きを訳せます` : "AIの回数制限にかかりました。1分ほどおいてから続きを訳せます",
-      quota: `今日の無料枠を使い切りました。${at ? `${at}から` : "あとで"}続きを訳せます`,
-      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
-      blocked: "この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
-      network: "接続が切れました。つながったら続きを訳せます",
-      silent: "AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます",
-      rejected: "AIへの依頼が通らず、ここで途切れました。もう一度試すと通ることがあります",
-      "no-model": "今はAIを使えません。少しおいてから続きを訳せます",
-      empty: "AIの返事が空で、ここで途切れました。もう一度試せます",
-      unusable: long ? `AIの返事をうまく読み取れず、ここで途切れました。${at}ごろからもう一度試せます` : "AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます",
-      stopped: "ここで止めました",
-      length: "長い曲なので、ここで一度区切りました",
-      closed: "ここまで訳してあります",
-      gaps: "ここまで訳してあります"
+      busy: "AIが混雑しているため、ここで中断しました。しばらくしてから続きを翻訳できます",
+      rate: long ? `AIの利用回数の上限に達しました。${at}頃から続きを翻訳できます` : "AIの利用回数の上限に達しました。1分ほど待ってから続きを翻訳できます",
+      quota: `本日の無料枠を使い切りました。${at ? `${at}から` : "後ほど"}続きを翻訳できます`,
+      auth: "APIキーが無効になりました。設定でキーを入力し直してください",
+      blocked: "この先はAIの安全フィルタにより停止されました。再試行すると翻訳できる場合があります",
+      network: "接続が切れました。接続が回復すると続きを翻訳できます",
+      silent: "AIから応答がなく、ここで中断しました。しばらくしてから続きを翻訳できます",
+      rejected: "AIへのリクエストが拒否され、ここで中断しました。再試行すると翻訳できる場合があります",
+      "no-model": "現在AIを利用できません。しばらくしてから続きを翻訳できます",
+      empty: "AIの応答が空だったため、ここで中断しました。再試行できます",
+      unusable: long ? `AIの応答を読み取れず、ここで中断しました。${at}頃から再試行できます` : "AIの応答を読み取れず、ここで中断しました。再試行できます",
+      stopped: "ここで停止しました",
+      length: "曲が長いため、ここで一度区切りました",
+      closed: "ここまで翻訳済みです",
+      gaps: "ここまで翻訳済みです"
     };
     return text2[stop.reason];
   }
@@ -4579,39 +4579,39 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const at = when(stop.until, i.now);
     const long = stop.until !== void 0 && stop.until - i.now > 9e4 && at !== "";
     const text2 = {
-      busy: "AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度試せます",
-      rate: long ? `AIの回数制限にかかりました。${at}ごろから訳せます` : "AIの回数制限にかかりました。1分ほどおいてから訳せます",
-      quota: `今日の無料枠を使い切りました。${at ? `${at}から` : "あとで"}訳せます`,
-      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
-      blocked: "この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります",
-      network: "接続が切れて、訳し始められませんでした。つながったら訳せます",
-      silent: "AIから返事がなく、訳し始められませんでした。少しおいてからもう一度試せます",
-      rejected: "AIへの依頼が通らず、訳し始められませんでした。もう一度試すと通ることがあります",
-      "no-model": "今はAIを使えません。少しおいてからもう一度試せます",
-      empty: "AIの返事が空で、訳し始められませんでした。もう一度試せます",
-      unusable: long ? `AIの返事をうまく読み取れませんでした。${at}ごろからもう一度試せます` : "AIの返事をうまく読み取れませんでした。もう一度試せます",
-      length: "長い曲なので、一度では訳し切れませんでした"
+      busy: "AIが混雑しているため、翻訳を開始できませんでした。しばらくしてから再試行できます",
+      rate: long ? `AIの利用回数の上限に達しました。${at}頃から翻訳できます` : "AIの利用回数の上限に達しました。1分ほど待ってから翻訳できます",
+      quota: `本日の無料枠を使い切りました。${at ? `${at}から` : "後ほど"}翻訳できます`,
+      auth: "APIキーが無効になりました。設定でキーを入力し直してください",
+      blocked: "この曲はAIの安全フィルタにより停止されました。再試行すると翻訳できる場合があります",
+      network: "接続が切れたため、翻訳を開始できませんでした。接続が回復すると翻訳できます",
+      silent: "AIから応答がなく、翻訳を開始できませんでした。しばらくしてから再試行できます",
+      rejected: "AIへのリクエストが拒否され、翻訳を開始できませんでした。再試行すると翻訳できる場合があります",
+      "no-model": "現在AIを利用できません。しばらくしてから再試行できます",
+      empty: "AIの応答が空だったため、翻訳を開始できませんでした。再試行できます",
+      unusable: long ? `AIの応答を読み取れませんでした。${at}頃から再試行できます` : "AIの応答を読み取れませんでした。再試行できます",
+      length: "曲が長いため、一度で翻訳しきれませんでした"
     };
     return text2[stop.reason] ?? "";
   }
   function failureText(stop, now) {
     const at = when(stop.until, now);
     const text2 = {
-      busy: "AIが混み合っていました。少しおいてからもう一度試せます",
-      rate: "AIの回数制限にかかりました。1分ほどおいてからもう一度試せます",
-      quota: `今日の無料枠を使い切りました${at ? `。${at}からもう一度試せます` : ""}`,
-      auth: "APIキーが使えなくなりました。設定でキーを入れ直してください",
-      blocked: "AIの安全フィルタで止められました",
+      busy: "AIが混雑していました。しばらくしてから再試行できます",
+      rate: "AIの利用回数の上限に達しました。1分ほど待ってから再試行できます",
+      quota: `本日の無料枠を使い切りました${at ? `。${at}から再試行できます` : ""}`,
+      auth: "APIキーが無効になりました。設定でキーを入力し直してください",
+      blocked: "AIの安全フィルタにより停止されました",
       network: "接続が切れました",
-      silent: "AIから返事がありませんでした",
-      rejected: "AIへの依頼が通りませんでした",
-      "no-model": "AIを使えませんでした",
-      empty: "AIの返事が空でした",
-      unusable: "AIの返事をうまく読み取れませんでした",
-      stopped: "止めました",
-      length: "長い曲なので、一度では訳し切れませんでした",
-      closed: "返事が途中で途切れました",
-      gaps: "訳せない行が残りました"
+      silent: "AIから応答がありませんでした",
+      rejected: "AIへのリクエストが拒否されました",
+      "no-model": "AIを利用できませんでした",
+      empty: "AIの応答が空でした",
+      unusable: "AIの応答を読み取れませんでした",
+      stopped: "停止しました",
+      length: "曲が長いため、一度で翻訳しきれませんでした",
+      closed: "応答が途中で途切れました",
+      gaps: "翻訳できない行が残りました"
     };
     return text2[stop.reason];
   }
@@ -4624,37 +4624,37 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (blocker && stop.reason !== "quota") {
       const transient = stop.reason === "rate" || stop.reason === "busy" || stop.reason === "no-model" || stop.reason === "silent";
       const quotaBlocker = !i.otherSong;
-      const head = transient && quotaBlocker ? "ここで途切れました" : text2.split("。")[0];
-      return { text: `${head}。${blocker}`, button: { id: "noop", label: "続きを訳す", disabled: true } };
+      const head = transient && quotaBlocker ? "ここで中断しました" : text2.split("。")[0];
+      return { text: `${head}。${blocker}`, button: { id: "noop", label: "続きを翻訳", disabled: true } };
     }
     let disabled = Boolean(blocker);
     if (stop.reason === "rate" && stop.until && i.now < stop.until) disabled = true;
     if (stop.reason === "unusable" && stop.until && i.now < stop.until) disabled = true;
     if (stop.reason === "network" && !i.online) disabled = true;
-    return { text: text2, button: { id: "resume", label: "続きを訳す", disabled } };
+    return { text: text2, button: { id: "resume", label: "続きを翻訳", disabled } };
   }
   function decide(i) {
     const missing = i.total - i.done;
     const quotaUntil = i.avail.ok ? null : i.avail.until;
-    const blocker = i.otherSong ? "別の曲を訳し終えると、この曲も訳せます" : quotaUntil != null ? `今日の無料枠を使い切りました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から訳せます` : "あとで訳せます"}` : null;
+    const blocker = i.otherSong ? "別の曲の翻訳が終わると、この曲を翻訳できます" : quotaUntil != null ? `本日の無料枠を使い切りました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から翻訳できます` : "後ほど翻訳できます"}` : null;
     const none = { slots: false, gaps: false, breathing: false, seam: null };
     const writing = { slots: true, gaps: false, breathing: true, seam: null };
     const hide = hideAction(i);
     const reason = (text2) => ({ text: text2, tone: "reason" });
     const plain = { captions: [], progress: null };
     if (i.running === "here-retranslate") {
-      return { state: "S8", tone: "speaking", status: "訳し直しています", captions: [{ text: "訳し終えるまでは、今の訳をそのまま表示します" }], progress: "indeterminate", actions: [STOP], preface: i.hasPreface, lines: none };
+      return { state: "S8", tone: "speaking", status: "再翻訳しています", captions: [{ text: "完了するまで、現在の訳を表示します" }], progress: "indeterminate", actions: [STOP], preface: i.hasPreface, lines: none };
     }
     if (i.running === "here") {
       const arriving = i.hasPreface || i.done > 0;
       const slow = !arriving && (i.waitedMs ?? 0) >= 15e3;
       const captions = [];
-      if (slow) captions.push({ text: "AIの返事を待っています。混み合っていると1分ほどかかることもあります" });
-      if (!i.streams) captions.push({ text: "この環境では訳がまとめて届きます" });
+      if (slow) captions.push({ text: "AIの応答を待っています。混雑時は1分ほどかかる場合があります" });
+      if (!i.streams) captions.push({ text: "この環境では、訳はまとめて表示されます" });
       return {
         state: arriving ? "S4" : "S3",
         tone: "speaking",
-        status: arriving ? "訳しています" : "歌詞を読んでいます",
+        status: arriving ? "翻訳しています" : "歌詞を読み込んでいます",
         captions,
         ...arriving ? { count: { done: i.done, total: i.total } } : {},
         progress: arriving ? { value: i.done, max: i.total } : "indeterminate",
@@ -4664,7 +4664,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       };
     }
     if (i.mirrored) {
-      return { state: "S4m", tone: "speaking", status: "別のタブで訳しています", ...plain, actions: [{ id: "stopMirror", label: "止める" }, hide], preface: i.hasPreface, lines: writing };
+      return { state: "S4m", tone: "speaking", status: "別のタブで翻訳しています", ...plain, actions: [{ id: "stopMirror", label: "停止" }, hide], preface: i.hasPreface, lines: writing };
     }
     if (i.notice && i.done) {
       const captions = [{ text: i.notice.status }];
@@ -4675,16 +4675,16 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     if (!i.done) {
       if (i.japanese) return { state: "SJ", tone: "settled", status: "この曲の歌詞は日本語です", ...plain, actions: [], preface: false, lines: none };
       if (!i.hasKey) {
-        return { state: "S1", tone: "speaking", status: "", captions: [{ text: "最初に一度だけ、無料のAPIキーを設定します" }], progress: null, actions: [{ id: "firstRun", label: "日本語で読む", primary: true }], preface: false, lines: none };
+        return { state: "S1", tone: "speaking", status: "", captions: [{ text: "初回のみ、無料のAPIキーの設定が必要です" }], progress: null, actions: [{ id: "firstRun", label: "日本語に翻訳", primary: true }], preface: false, lines: none };
       }
       if (i.otherSong) {
         return {
           state: "S2b",
           tone: "speaking",
-          status: "別の曲を訳しています",
-          captions: [{ text: `「${i.otherSong}」を訳し終えると、この曲も訳せます` }],
+          status: "別の曲を翻訳しています",
+          captions: [{ text: `「${i.otherSong}」の翻訳が終わると、この曲を翻訳できます` }],
           progress: null,
-          actions: [{ id: "stopOther", label: "あちらを止める" }],
+          actions: [{ id: "stopOther", label: "その曲を停止" }],
           preface: false,
           lines: none
         };
@@ -4693,8 +4693,8 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         return {
           state: "S2q",
           tone: "speaking",
-          status: "今日の無料枠を使い切りました",
-          captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から、また訳せます` }] : [],
+          status: "本日の無料枠を使い切りました",
+          captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から再び翻訳できます` }] : [],
           progress: null,
           actions: [SETTINGS],
           preface: false,
@@ -4704,7 +4704,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       if (stop && stop.reason !== "closed" && stop.reason !== "stopped") {
         const seam2 = seamFor(stop, i, null);
         const auth = stop.reason === "auth";
-        const button = auth ? { id: "settings", label: "設定を開く", primary: true } : { ...seam2.button, id: seam2.button.id === "resume" ? "start" : seam2.button.id, label: "もう一度訳す", primary: true };
+        const button = auth ? { id: "settings", label: "設定を開く", primary: true } : { ...seam2.button, id: seam2.button.id === "resume" ? "start" : seam2.button.id, label: "再試行", primary: true };
         return {
           state: "S2f",
           tone: "speaking",
@@ -4716,7 +4716,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           lines: none
         };
       }
-      return { state: "S2", tone: "speaking", status: "", ...plain, actions: [{ id: "start", label: "日本語で読む", primary: true }, SETTINGS], preface: false, lines: none };
+      return { state: "S2", tone: "speaking", status: "", ...plain, actions: [{ id: "start", label: "日本語に翻訳", primary: true }, SETTINGS], preface: false, lines: none };
     }
     if (!missing) {
       return { state: "S5", tone: "settled", status: i.hidden ? "訳を隠しています" : "AIによる日本語訳", ...plain, actions: [hide, SETTINGS], preface: i.hasPreface, lines: none };
@@ -4727,9 +4727,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         state: "S5g",
         tone: "speaking",
         status: "",
-        captions: [{ text: `${missing}行が訳せていません。下の「――」の行です` }, ...blocker ? [reason(blocker)] : []],
+        captions: [{ text: `${missing}行を翻訳できませんでした（「――」の行）` }, ...blocker ? [reason(blocker)] : []],
         progress: null,
-        actions: [resume("抜けた行を訳す"), hide, SETTINGS],
+        actions: [resume("未翻訳の行を翻訳"), hide, SETTINGS],
         preface: i.hasPreface,
         lines: { slots: false, gaps: true, breathing: false, seam: null }
       };
@@ -4739,9 +4739,9 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         state: "S7",
         tone: "speaking",
         status: "",
-        captions: [{ text: `歌詞が更新されました。まだ訳していない行が${missing}行あります` }, ...blocker ? [reason(blocker)] : []],
+        captions: [{ text: `歌詞が更新されました。未翻訳の行が${missing}行あります` }, ...blocker ? [reason(blocker)] : []],
         progress: null,
-        actions: [resume("新しい行を訳す"), hide, SETTINGS],
+        actions: [resume("追加された行を翻訳"), hide, SETTINGS],
         preface: i.hasPreface,
         lines: { slots: true, gaps: false, breathing: false, seam: null }
       };
@@ -4752,7 +4752,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       state: "S6",
       tone: "speaking",
       status: "",
-      captions: [{ text: `${i.total}行のうち${i.done}行を訳してあります` }, ...explain ? [reason(inHead(seam.text))] : []],
+      captions: [{ text: `${i.total}行中${i.done}行を翻訳済みです` }, ...explain ? [reason(inHead(seam.text))] : []],
       progress: { value: i.done, max: i.total },
       actions: [{ ...seam.button, primary: true }, hide, ...seam.button.id === "settings" ? [] : [SETTINGS]],
       preface: i.hasPreface,
@@ -4780,7 +4780,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     const GENERIC2 = /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|math|emoji|fangsong|-apple-system|blinkmacsystemfont)$/i;
     return family.split(",").map((f) => f.trim()).filter((f) => f && !GENERIC2.test(f.replace(/^["']|["']$/g, ""))).join(", ");
   }
-  var SAVE_FAILED = { status: "訳を保存できませんでした", detail: "今は読めますが、このページを閉じると消えます" };
+  var SAVE_FAILED = { status: "訳を保存できませんでした", detail: "このページを閉じると、この訳は失われます" };
   var App = class {
     constructor() {
       __publicField(this, "page", null);
@@ -5094,7 +5094,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
       return any ? "none" : null;
     }
-    /** Re-render when a disabled "続きを訳す" becomes possible again. */
+    /** Re-render when a disabled "続きを翻訳" becomes possible again. */
     scheduleWake() {
       if (this.wakeTimer) clearTimeout(this.wakeTimer);
       const times = [this.record?.stop?.until, this.avail.ok ? 0 : this.avail.until].filter((t) => Boolean(t && t > Date.now()));
@@ -5268,7 +5268,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       let wakeSlow;
       const id = this.identity;
       const cannotRetranslate = (detail) => {
-        if (kind === "retranslate" && this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのまま残っています", detail };
+        if (kind === "retranslate" && this.identity === id) this.notice = { status: "再翻訳できませんでした。現在の訳はそのまま残っています", detail };
       };
       try {
         const settings = await loadSettings();
@@ -5278,7 +5278,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         }
         await this.refreshKeys();
         if (!this.avail.ok) {
-          cannotRetranslate(`今日の無料枠を使い切りました${this.avail.until > Date.now() ? `。${formatWhen(this.avail.until)}からもう一度試せます` : ""}`);
+          cannotRetranslate(`本日の無料枠を使い切りました${this.avail.until > Date.now() ? `。${formatWhen(this.avail.until)}から再試行できます` : ""}`);
           this.renderNow();
           return;
         }
@@ -5286,7 +5286,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         lock = await acquireLock(id, source.meta.title || "前の曲");
         if (!lock) {
           this.foreignLock = await this.otherLock();
-          cannotRetranslate("別の曲を訳しています。訳し終えてからもう一度試せます");
+          cannotRetranslate("別の曲を翻訳中です。完了後に再試行できます");
           this.renderNow();
           return;
         }
@@ -5378,7 +5378,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
               }
             } else if (this.identity === id) {
               const stop = outcome.stop ?? { reason: "unusable", at: Date.now() };
-              this.notice = stop.reason === "stopped" ? { status: "訳し直しを止めました。今の訳はそのまま残っています", detail: "" } : { status: "訳し直せませんでした。今の訳はそのまま残っています", detail: failureText(stop, Date.now()) };
+              this.notice = stop.reason === "stopped" ? { status: "再翻訳を停止しました。現在の訳はそのまま残っています", detail: "" } : { status: "再翻訳できませんでした。現在の訳はそのまま残っています", detail: failureText(stop, Date.now()) };
             }
           } else {
             if (leaving && record.stop?.reason === "stopped") record.stop = { reason: "closed", at: Date.now() };
@@ -5387,7 +5387,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         } catch (error) {
           console.error("[Lyric Lens]", error);
           if (retranslate) {
-            if (this.identity === id) this.notice = { status: "訳し直せませんでした。今の訳はそのまま残っています", detail: failureText({ reason: "unusable", at: Date.now() }, Date.now()) };
+            if (this.identity === id) this.notice = { status: "再翻訳できませんでした。現在の訳はそのまま残っています", detail: failureText({ reason: "unusable", at: Date.now() }, Date.now()) };
           } else {
             record.stop = { reason: "unusable", at: Date.now() };
             await this.persist(current, record);
@@ -5419,7 +5419,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     /** Saves a finished request. A request that produced nothing is not an edition: it stays
      *  on this page (to say why) but is not stored — except an invalid key, which explains
-     *  on later visits why 日本語で読む needs a new key. */
+     *  on later visits why 日本語に翻訳 needs a new key. */
     async persist(run, record) {
       if (this.identity === record.id) this.record = record;
       try {
@@ -5456,7 +5456,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       }
     }
     /** After the reader changed keys, an "invalid key" stop no longer applies: let the song
-     *  offer 続きを訳す / 日本語で読む again. */
+     *  offer 続きを翻訳 / 日本語に翻訳 again. */
     /** An invalid-key stop needs no rewrite here: it stops applying (liveStop) as soon as a
      *  configured key is believed to work, on this page or any other. */
     async afterSheet() {
@@ -5565,7 +5565,7 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
 .ll-icon::before { content: "あ"; }
 .ll-status { flex: 0 1 auto; min-width: 0; color: var(--ll-black) !important; font-size: 15px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ll-head-row[data-tone="settled"] .ll-status { font-size: 13px; letter-spacing: .02em; }
-/* a parking spot for focus when 止める replaces the pressed button (head.ts), not a control */
+/* a parking spot for focus when 停止 replaces the pressed button (head.ts), not a control */
 .ll-status:focus { outline: none; }
 /* An empty live region stays in the accessibility tree (never \`hidden\`) so its next text is
    announced; it takes no room. */
@@ -5588,7 +5588,7 @@ html.ll-dark .ll-head, html.ll-dark .ll-line, html.ll-dark .ll-note {
   text-decoration: underline 1px !important;
   text-underline-offset: 3px;
 }
-/* The one next step (日本語で読む, 続きを訳す…): bold, a heavier underline, first in the row. */
+/* The one next step (日本語に翻訳, 続きを翻訳…): bold, a heavier underline, first in the row. */
 .ll-btn[data-primary] {
   flex: 0 0 auto;
   padding: 0;
@@ -5764,7 +5764,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
     if (false) window.__ll = app;
     registerMenu("Lyric Lensの設定", () => app.openSettings(null));
     app.start().catch((error) => console.error("[Lyric Lens] failed to start", error));
-    console.info(`[Lyric Lens] v${"3.0.0.202611221359"}`);
+    console.info(`[Lyric Lens] v${"3.0.0.202611221416"}`);
   }
   if (document.body) boot();
   else document.addEventListener("DOMContentLoaded", boot, { once: true });

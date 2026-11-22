@@ -25,7 +25,7 @@ const view = (over: Partial<HeadView> = {}): HeadView => ({
   tone: 'speaking',
   status: '',
   captions: [],
-  actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }],
+  actions: [{ id: 'start', label: '日本語に翻訳', onClick: vi.fn(), primary: true }],
   ...over,
 });
 const statusOf = () => head.element!.querySelector<HTMLElement>('[role=status]')!;
@@ -36,16 +36,16 @@ describe('status live region', () => {
     const first = statusOf();
     expect(first).not.toBeNull();
 
-    head.render(page, view({ status: '歌詞を読んでいます' }));
+    head.render(page, view({ status: '歌詞を読み込んでいます' }));
     const second = statusOf();
     expect(second).toBe(first);
-    expect(second.textContent).toBe('歌詞を読んでいます');
+    expect(second.textContent).toBe('歌詞を読み込んでいます');
     expect(second.getAttribute('aria-live')).toBe('polite');
 
     // Same view again: no rebuild, same node, same text.
-    head.render(page, view({ status: '歌詞を読んでいます' }));
+    head.render(page, view({ status: '歌詞を読み込んでいます' }));
     expect(statusOf()).toBe(first);
-    expect(statusOf().textContent).toBe('歌詞を読んでいます');
+    expect(statusOf().textContent).toBe('歌詞を読み込んでいます');
 
     // Back to empty: still in the DOM (never `hidden`), flagged for the CSS to collapse it.
     head.render(page, view({ status: '' }));
@@ -94,15 +94,15 @@ describe('止める right after the button just pressed', () => {
     captions: [],
     status: '',
     state: 'S2',
-    actions: [{ id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true }, { id: 'settings', label: '設定', onClick: vi.fn() }],
+    actions: [{ id: 'start', label: '日本語に翻訳', onClick: vi.fn(), primary: true }, { id: 'settings', label: '設定', onClick: vi.fn() }],
   });
-  const s3 = (onClick = vi.fn()): HeadView => ({ tone: 'speaking', captions: [], status: '歌詞を読んでいます', state: 'S3', actions: [{ id: 'stop', label: '止める', onClick }] });
+  const s3 = (onClick = vi.fn()): HeadView => ({ tone: 'speaking', captions: [], status: '歌詞を読み込んでいます', state: 'S3', actions: [{ id: 'stop', label: '停止', onClick }] });
   const s4 = (onClick = vi.fn()): HeadView => ({
     tone: 'speaking',
     captions: [],
-    status: '訳しています',
+    status: '翻訳しています',
     state: 'S4',
-    actions: [{ id: 'stop', label: '止める', onClick }, { id: 'hide', label: '訳を隠す', onClick: vi.fn() }, { id: 'settings', label: '設定', onClick: vi.fn() }],
+    actions: [{ id: 'stop', label: '停止', onClick }, { id: 'hide', label: '訳を隠す', onClick: vi.fn() }, { id: 'settings', label: '設定', onClick: vi.fn() }],
   });
   const stopButton = () => head.element!.querySelector<HTMLButtonElement>('.ll-head-row .ll-btn')!;
 
@@ -159,7 +159,7 @@ describe('止める right after the button just pressed', () => {
 });
 
 describe('row content', () => {
-  const stopA = { id: 'stop', label: '止める', onClick: vi.fn() };
+  const stopA = { id: 'stop', label: '停止', onClick: vi.fn() };
   const hideA = { id: 'hide', label: '訳を隠す', onClick: vi.fn() };
   const setA = { id: 'settings', label: '設定', onClick: vi.fn() };
   const bar = () => head.element!.querySelector<HTMLElement>('.ll-progress');
@@ -191,19 +191,19 @@ describe('row content', () => {
     expect(Array.from(row.children).map((c) => c.className)).toEqual(['ll-icon', 'll-btn', 'll-status']);
     const primary = row.querySelector<HTMLButtonElement>('.ll-btn')!;
     expect(primary.hasAttribute('data-primary')).toBe(true);
-    expect(primary.textContent).toBe('日本語で読む');
+    expect(primary.textContent).toBe('日本語に翻訳');
     expect(statusOf().hasAttribute('data-empty')).toBe(true);
     expect(statusOf().textContent).toBe('');
   });
 
   it('the count is aria-hidden and only present with a count; links keep their order inside .ll-links', () => {
-    head.render(page, view({ status: '訳しています', actions: [stopA, hideA, setA], count: '（12/67行）', progress: { value: 12, max: 67 } }));
+    head.render(page, view({ status: '翻訳しています', actions: [stopA, hideA, setA], count: '（12/67行）', progress: { value: 12, max: 67 } }));
     const row = head.element!.querySelector<HTMLElement>('.ll-head-row')!;
     expect(Array.from(row.children).map((c) => c.className)).toEqual(['ll-icon', 'll-status', 'll-count', 'll-links', 'll-progress']);
     const count = row.querySelector('.ll-count')!;
     expect(count.textContent).toBe('（12/67行）');
     expect(count.getAttribute('aria-hidden')).toBe('true');
-    expect(Array.from(row.querySelectorAll('.ll-links .ll-btn')).map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定']);
+    expect(Array.from(row.querySelectorAll('.ll-links .ll-btn')).map((b) => b.textContent)).toEqual(['停止', '訳を隠す', '設定']);
     expect(row.querySelector('.ll-links [data-primary]')).toBeNull();
     head.render(page, view({ status: 'AIによる日本語訳', actions: [hideA, setA] }));
     expect(head.element!.querySelector('.ll-count')).toBeNull();
@@ -211,27 +211,27 @@ describe('row content', () => {
   });
 
   it('progress is a progressbar with value, max and --p, updated in place without a rebuild', () => {
-    head.render(page, view({ status: '訳しています', actions: [stopA], progress: { value: 12, max: 67 } }));
+    head.render(page, view({ status: '翻訳しています', actions: [stopA], progress: { value: 12, max: 67 } }));
     const first = bar()!;
     expect(first.getAttribute('role')).toBe('progressbar');
-    expect(first.getAttribute('aria-label')).toBe('翻訳の進み具合');
+    expect(first.getAttribute('aria-label')).toBe('翻訳の進捗');
     expect(first.getAttribute('aria-valuemin')).toBe('0');
     expect(first.getAttribute('aria-valuemax')).toBe('67');
     expect(first.getAttribute('aria-valuenow')).toBe('12');
     expect(first.style.getPropertyValue('--p')).toBe('0.179');
     expect(first.hasAttribute('data-indeterminate')).toBe(false);
-    head.render(page, view({ status: '訳しています', actions: [stopA], progress: { value: 40, max: 67 } }));
+    head.render(page, view({ status: '翻訳しています', actions: [stopA], progress: { value: 40, max: 67 } }));
     expect(bar()).toBe(first);
     expect(first.getAttribute('aria-valuenow')).toBe('40');
     expect(first.style.getPropertyValue('--p')).toBe('0.597');
   });
 
   it('an indeterminate bar has no values; null removes the bar', () => {
-    head.render(page, view({ status: '歌詞を読んでいます', actions: [stopA], progress: 'indeterminate' }));
+    head.render(page, view({ status: '歌詞を読み込んでいます', actions: [stopA], progress: 'indeterminate' }));
     const b = bar()!;
     expect(b.hasAttribute('data-indeterminate')).toBe(true);
     expect(b.getAttribute('role')).toBe('progressbar');
-    expect(b.getAttribute('aria-label')).toBe('翻訳の進み具合');
+    expect(b.getAttribute('aria-label')).toBe('翻訳の進捗');
     expect(b.hasAttribute('aria-valuenow')).toBe(false);
     expect(b.hasAttribute('aria-valuemax')).toBe(false);
     head.render(page, view({ status: 'x', actions: [stopA], progress: null }));
@@ -239,17 +239,17 @@ describe('row content', () => {
   });
 
   it('the count text changes in place', () => {
-    head.render(page, view({ status: '訳しています', actions: [stopA], count: '（1/9行）' }));
+    head.render(page, view({ status: '翻訳しています', actions: [stopA], count: '（1/9行）' }));
     const count = head.element!.querySelector('.ll-count')!;
-    head.render(page, view({ status: '訳しています', actions: [stopA], count: '（2/9行）' }));
+    head.render(page, view({ status: '翻訳しています', actions: [stopA], count: '（2/9行）' }));
     expect(head.element!.querySelector('.ll-count')).toBe(count);
     expect(count.textContent).toBe('（2/9行）');
   });
 
   it('captions follow the row in order, with data-tone only for a reason', () => {
-    head.render(page, view({ captions: [{ text: '67行のうち31行を訳してあります' }, { text: '別の曲を訳し終えると、この曲も訳せます', tone: 'reason' }] }));
+    head.render(page, view({ captions: [{ text: '67行中31行を翻訳済みです' }, { text: '別の曲の翻訳が終わると、この曲を翻訳できます', tone: 'reason' }] }));
     const caps = Array.from(head.element!.querySelectorAll<HTMLElement>('.ll-caption'));
-    expect(caps.map((c) => c.textContent)).toEqual(['67行のうち31行を訳してあります', '別の曲を訳し終えると、この曲も訳せます']);
+    expect(caps.map((c) => c.textContent)).toEqual(['67行中31行を翻訳済みです', '別の曲の翻訳が終わると、この曲を翻訳できます']);
     expect(caps[0]!.hasAttribute('data-tone')).toBe(false);
     expect(caps[1]!.dataset.tone).toBe('reason');
     expect(head.element!.children[1]).toBe(caps[0]);
@@ -267,11 +267,11 @@ describe('row content', () => {
 });
 
 describe('link slots: the links never move', () => {
-  const stop = (onClick = vi.fn()): HeadAction => ({ id: 'stop', label: '止める', onClick });
+  const stop = (onClick = vi.fn()): HeadAction => ({ id: 'stop', label: '停止', onClick });
   const hide = (onClick = vi.fn()): HeadAction => ({ id: 'hide', label: '訳を隠す', onClick });
   const settings = (onClick = vi.fn()): HeadAction => ({ id: 'settings', label: '設定', onClick });
-  const start: HeadAction = { id: 'start', label: '日本語で読む', onClick: vi.fn(), primary: true };
-  const resume: HeadAction = { id: 'resume', label: '続きを訳す', onClick: vi.fn(), primary: true };
+  const start: HeadAction = { id: 'start', label: '日本語に翻訳', onClick: vi.fn(), primary: true };
+  const resume: HeadAction = { id: 'resume', label: '続きを翻訳', onClick: vi.fn(), primary: true };
   const links = () => Array.from(head.element!.querySelectorAll<HTMLButtonElement>('.ll-links .ll-btn'));
   /** Where each live link stands in the row, by its label (absent slots are not counted). */
   const places = () => Object.fromEntries(links().flatMap((b, i) => (b.hasAttribute('data-absent') ? [] : [[b.textContent!, i]])));
@@ -285,23 +285,23 @@ describe('link slots: the links never move', () => {
     for (const [state, actions] of [['S3', S3], ['S4', S4], ['S5', S5], ['S2', S2]] as const) {
       head.render(page, view({ state, actions: [...actions] }));
       expect(links().map((b) => b.dataset.slot)).toEqual(['stop', 'hide', 'settings']);
-      expect(links().map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定']);
+      expect(links().map((b) => b.textContent)).toEqual(['停止', '訳を隠す', '設定']);
       expect(head.element!.querySelectorAll('.ll-links')).toHaveLength(1);
     }
   });
 
   it('a link stands in the same place whichever of the others are there', () => {
     head.render(page, view({ actions: S3 }));
-    expect(places()).toEqual({ 止める: 0 });
+    expect(places()).toEqual({ 停止: 0 });
     head.render(page, view({ actions: S4 }));
-    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1, 設定: 2 });
+    expect(places()).toEqual({ 停止: 0, 訳を隠す: 1, 設定: 2 });
     head.render(page, view({ actions: S5 }));
     expect(places()).toEqual({ 訳を隠す: 1, 設定: 2 });
     head.render(page, view({ actions: S2 }));
     expect(places()).toEqual({ 設定: 2 });
     // The order the view lists them in does not matter either.
     head.render(page, view({ actions: [settings(), hide(), stop()] }));
-    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1, 設定: 2 });
+    expect(places()).toEqual({ 停止: 0, 訳を隠す: 1, 設定: 2 });
     // 訳を表示 (hidden) is the same slot as 訳を隠す.
     head.render(page, view({ actions: [{ id: 'hide', label: '訳を表示', onClick: vi.fn() }, settings()] }));
     expect(places()).toEqual({ 訳を表示: 1, 設定: 2 });
@@ -315,7 +315,7 @@ describe('link slots: the links never move', () => {
     // The primary button stays in front of all of them.
     head.render(page, view({ actions: [resume, hide(), settings()] }));
     const row = head.element!.querySelector('.ll-head-row')!;
-    expect(Array.from(row.querySelectorAll('.ll-btn')).map((x) => x.textContent)).toEqual(['続きを訳す', '止める', '訳を隠す', '設定']);
+    expect(Array.from(row.querySelectorAll('.ll-btn')).map((x) => x.textContent)).toEqual(['続きを翻訳', '停止', '訳を隠す', '設定']);
   });
 
   it('an absent slot is an inert, hidden placeholder with the usual label, so it keeps its width', () => {
@@ -365,12 +365,12 @@ describe('link slots: the links never move', () => {
   });
 
   it('止める for another tab or another song takes the same first slot', () => {
-    head.render(page, view({ actions: [{ id: 'stopMirror', label: '止める', onClick: vi.fn() }, hide()] }));
-    expect(places()).toEqual({ 止める: 0, 訳を隠す: 1 });
+    head.render(page, view({ actions: [{ id: 'stopMirror', label: '停止', onClick: vi.fn() }, hide()] }));
+    expect(places()).toEqual({ 停止: 0, 訳を隠す: 1 });
     expect(links()[2]!.hasAttribute('data-absent')).toBe(true);
-    head.render(page, view({ actions: [{ id: 'stopOther', label: 'あちらを止める', onClick: vi.fn() }] }));
-    expect(places()).toEqual({ あちらを止める: 0 });
-    expect(links().map((b) => b.textContent)).toEqual(['あちらを止める', '訳を隠す', '設定']);
+    head.render(page, view({ actions: [{ id: 'stopOther', label: 'その曲を停止', onClick: vi.fn() }] }));
+    expect(places()).toEqual({ その曲を停止: 0 });
+    expect(links().map((b) => b.textContent)).toEqual(['その曲を停止', '訳を隠す', '設定']);
   });
 
   it('a settings button that is the primary leaves the 設定 slot empty', () => {
@@ -384,7 +384,7 @@ describe('link slots: the links never move', () => {
   it('any other link follows the three slots', () => {
     const other: HeadAction = { id: 'noop', label: 'ほか', onClick: vi.fn() };
     head.render(page, view({ actions: [other, hide()] }));
-    expect(links().map((b) => b.textContent)).toEqual(['止める', '訳を隠す', '設定', 'ほか']);
+    expect(links().map((b) => b.textContent)).toEqual(['停止', '訳を隠す', '設定', 'ほか']);
     expect(links().map((b) => b.hasAttribute('data-absent'))).toEqual([true, false, true, false]);
   });
 

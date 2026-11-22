@@ -59,10 +59,10 @@ describe('NoteView DOM', () => {
     const head = el.querySelector('p.ll-note-head')!;
     // The phrase is plain, as the highlight on the lyric line above it is: no quotation marks.
     expect(head.querySelector('.ll-note-phrase')!.textContent).toBe('Sandman');
-    expect(head.querySelector('.ll-note-kind')!.textContent).toBe('〔元ネタ〕');
+    expect(head.querySelector('.ll-note-kind')!.textContent).toBe('〔引用〕');
     expect(head.querySelector('.ll-note-conj')!.textContent).toBe('〔推測〕');
     expect(el.querySelector('p.ll-note-text')!.textContent).toBe('説明です');
-    expect(el.querySelector('p.ll-note-src')!.textContent).toBe('Geniusの注釈を参考にしました');
+    expect(el.querySelector('p.ll-note-src')!.textContent).toBe('参考：Geniusの注釈');
     expect(el.querySelector('.ll-note-body')).toBeNull();
   });
 
@@ -72,22 +72,22 @@ describe('NoteView DOM', () => {
     expect(el.querySelector('.ll-note-src')).toBeNull();
   });
 
-  it('Genius disclosure: label, votes span, たたむ ▴ when open', () => {
+  it('Genius disclosure: label, votes span, 閉じる ▴ when open', () => {
     const { el } = openNote([n], [long]);
     const toggle = el.querySelector<HTMLButtonElement>('.ll-gn-toggle')!;
     const body = el.querySelector<HTMLElement>('.ll-gn-text')!;
-    expect(toggle.textContent).toBe('Geniusの注釈を英語で読む ▾');
+    expect(toggle.textContent).toBe('Geniusの注釈（英語） ▾');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(el.querySelector('.ll-gn-votes')!.textContent).toBe('312票');
     expect(body.hidden).toBe(true);
     toggle.click();
-    expect(toggle.textContent).toBe('たたむ ▴');
+    expect(toggle.textContent).toBe('閉じる ▴');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(body.hidden).toBe(false);
     body.querySelector<HTMLButtonElement>('.ll-gn-more')!.click();
     expect(body.querySelector('.ll-gn-more')).toBeNull();
     toggle.click();
-    expect(toggle.textContent).toBe('Geniusの注釈を英語で読む ▾');
+    expect(toggle.textContent).toBe('Geniusの注釈（英語） ▾');
     expect(body.hidden).toBe(true);
   });
 

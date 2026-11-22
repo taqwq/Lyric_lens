@@ -68,14 +68,14 @@ export interface Decision {
   captions: Caption[];
   count?: { done: number; total: number };
   progress: { value: number; max: number } | 'indeterminate' | null;
-  /** Primary actions first, then the links in the fixed order 止める → 隠す/表示 → 設定. */
+  /** Primary actions first, then the links in the fixed order 停止 → 隠す/表示 → 設定. */
   actions: ActionSpec[];
   preface: boolean;
   lines: { slots: boolean; gaps: boolean; breathing: boolean; seam: SeamSpec | null };
 }
 
 const SETTINGS: ActionSpec = { id: 'settings', label: '設定' };
-const STOP: ActionSpec = { id: 'stop', label: '止める' };
+const STOP: ActionSpec = { id: 'stop', label: '停止' };
 
 function hideAction(i: ViewInput): ActionSpec {
   return { id: 'hide', label: i.hidden ? '訳を表示' : '訳を隠す' };
@@ -85,7 +85,7 @@ function when(until: number | undefined, now: number): string {
   return until && until > now ? formatWhen(until, now) : '';
 }
 
-/** A stored stop that no longer applies reads as plain "ここまで訳してあります". */
+/** A stored stop that no longer applies reads as plain "ここまで翻訳済みです". */
 export function liveStop(stop: StopInfo | undefined, i: ViewInput): StopInfo | undefined {
   if (!stop) return stop;
   if (stop.reason === 'auth' && !i.keyBad) return { reason: 'closed', at: stop.at };
@@ -101,21 +101,21 @@ export function seamText(stop: StopInfo, i: ViewInput): string {
   // named by its end, not promised as "1分ほど".
   const long = stop.until !== undefined && stop.until - i.now > 90_000 && at !== '';
   const text: Record<StopInfo['reason'], string> = {
-    busy: 'AIが混み合っていて、ここで途切れました。少しおいてから続きを訳せます',
-    rate: long ? `AIの回数制限にかかりました。${at}ごろから続きを訳せます` : 'AIの回数制限にかかりました。1分ほどおいてから続きを訳せます',
-    quota: `今日の無料枠を使い切りました。${at ? `${at}から` : 'あとで'}続きを訳せます`,
-    auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
-    blocked: 'この先はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
-    network: '接続が切れました。つながったら続きを訳せます',
-    silent: 'AIから返事がなく、ここで途切れました。少しおいてから続きを訳せます',
-    rejected: 'AIへの依頼が通らず、ここで途切れました。もう一度試すと通ることがあります',
-    'no-model': '今はAIを使えません。少しおいてから続きを訳せます',
-    empty: 'AIの返事が空で、ここで途切れました。もう一度試せます',
-    unusable: long ? `AIの返事をうまく読み取れず、ここで途切れました。${at}ごろからもう一度試せます` : 'AIの返事をうまく読み取れず、ここで途切れました。もう一度試せます',
-    stopped: 'ここで止めました',
-    length: '長い曲なので、ここで一度区切りました',
-    closed: 'ここまで訳してあります',
-    gaps: 'ここまで訳してあります',
+    busy: 'AIが混雑しているため、ここで中断しました。しばらくしてから続きを翻訳できます',
+    rate: long ? `AIの利用回数の上限に達しました。${at}頃から続きを翻訳できます` : 'AIの利用回数の上限に達しました。1分ほど待ってから続きを翻訳できます',
+    quota: `本日の無料枠を使い切りました。${at ? `${at}から` : '後ほど'}続きを翻訳できます`,
+    auth: 'APIキーが無効になりました。設定でキーを入力し直してください',
+    blocked: 'この先はAIの安全フィルタにより停止されました。再試行すると翻訳できる場合があります',
+    network: '接続が切れました。接続が回復すると続きを翻訳できます',
+    silent: 'AIから応答がなく、ここで中断しました。しばらくしてから続きを翻訳できます',
+    rejected: 'AIへのリクエストが拒否され、ここで中断しました。再試行すると翻訳できる場合があります',
+    'no-model': '現在AIを利用できません。しばらくしてから続きを翻訳できます',
+    empty: 'AIの応答が空だったため、ここで中断しました。再試行できます',
+    unusable: long ? `AIの応答を読み取れず、ここで中断しました。${at}頃から再試行できます` : 'AIの応答を読み取れず、ここで中断しました。再試行できます',
+    stopped: 'ここで停止しました',
+    length: '曲が長いため、ここで一度区切りました',
+    closed: 'ここまで翻訳済みです',
+    gaps: 'ここまで翻訳済みです',
   };
   return text[stop.reason];
 }
@@ -126,18 +126,18 @@ export function startFailText(stop: StopInfo, i: ViewInput): string {
   const at = when(stop.until, i.now);
   const long = stop.until !== undefined && stop.until - i.now > 90_000 && at !== '';
   const text: Partial<Record<StopInfo['reason'], string>> = {
-    busy: 'AIが混み合っていて、訳し始められませんでした。少しおいてからもう一度試せます',
-    rate: long ? `AIの回数制限にかかりました。${at}ごろから訳せます` : 'AIの回数制限にかかりました。1分ほどおいてから訳せます',
-    quota: `今日の無料枠を使い切りました。${at ? `${at}から` : 'あとで'}訳せます`,
-    auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
-    blocked: 'この曲はAIの安全フィルタで止められました。もう一度試すと通ることがあります',
-    network: '接続が切れて、訳し始められませんでした。つながったら訳せます',
-    silent: 'AIから返事がなく、訳し始められませんでした。少しおいてからもう一度試せます',
-    rejected: 'AIへの依頼が通らず、訳し始められませんでした。もう一度試すと通ることがあります',
-    'no-model': '今はAIを使えません。少しおいてからもう一度試せます',
-    empty: 'AIの返事が空で、訳し始められませんでした。もう一度試せます',
-    unusable: long ? `AIの返事をうまく読み取れませんでした。${at}ごろからもう一度試せます` : 'AIの返事をうまく読み取れませんでした。もう一度試せます',
-    length: '長い曲なので、一度では訳し切れませんでした',
+    busy: 'AIが混雑しているため、翻訳を開始できませんでした。しばらくしてから再試行できます',
+    rate: long ? `AIの利用回数の上限に達しました。${at}頃から翻訳できます` : 'AIの利用回数の上限に達しました。1分ほど待ってから翻訳できます',
+    quota: `本日の無料枠を使い切りました。${at ? `${at}から` : '後ほど'}翻訳できます`,
+    auth: 'APIキーが無効になりました。設定でキーを入力し直してください',
+    blocked: 'この曲はAIの安全フィルタにより停止されました。再試行すると翻訳できる場合があります',
+    network: '接続が切れたため、翻訳を開始できませんでした。接続が回復すると翻訳できます',
+    silent: 'AIから応答がなく、翻訳を開始できませんでした。しばらくしてから再試行できます',
+    rejected: 'AIへのリクエストが拒否され、翻訳を開始できませんでした。再試行すると翻訳できる場合があります',
+    'no-model': '現在AIを利用できません。しばらくしてから再試行できます',
+    empty: 'AIの応答が空だったため、翻訳を開始できませんでした。再試行できます',
+    unusable: long ? `AIの応答を読み取れませんでした。${at}頃から再試行できます` : 'AIの応答を読み取れませんでした。再試行できます',
+    length: '曲が長いため、一度で翻訳しきれませんでした',
   };
   return text[stop.reason] ?? '';
 }
@@ -146,21 +146,21 @@ export function startFailText(stop: StopInfo, i: ViewInput): string {
 export function failureText(stop: StopInfo, now: number): string {
   const at = when(stop.until, now);
   const text: Record<StopInfo['reason'], string> = {
-    busy: 'AIが混み合っていました。少しおいてからもう一度試せます',
-    rate: 'AIの回数制限にかかりました。1分ほどおいてからもう一度試せます',
-    quota: `今日の無料枠を使い切りました${at ? `。${at}からもう一度試せます` : ''}`,
-    auth: 'APIキーが使えなくなりました。設定でキーを入れ直してください',
-    blocked: 'AIの安全フィルタで止められました',
+    busy: 'AIが混雑していました。しばらくしてから再試行できます',
+    rate: 'AIの利用回数の上限に達しました。1分ほど待ってから再試行できます',
+    quota: `本日の無料枠を使い切りました${at ? `。${at}から再試行できます` : ''}`,
+    auth: 'APIキーが無効になりました。設定でキーを入力し直してください',
+    blocked: 'AIの安全フィルタにより停止されました',
     network: '接続が切れました',
-    silent: 'AIから返事がありませんでした',
-    rejected: 'AIへの依頼が通りませんでした',
-    'no-model': 'AIを使えませんでした',
-    empty: 'AIの返事が空でした',
-    unusable: 'AIの返事をうまく読み取れませんでした',
-    stopped: '止めました',
-    length: '長い曲なので、一度では訳し切れませんでした',
-    closed: '返事が途中で途切れました',
-    gaps: '訳せない行が残りました',
+    silent: 'AIから応答がありませんでした',
+    rejected: 'AIへのリクエストが拒否されました',
+    'no-model': 'AIを利用できませんでした',
+    empty: 'AIの応答が空でした',
+    unusable: 'AIの応答を読み取れませんでした',
+    stopped: '停止しました',
+    length: '曲が長いため、一度で翻訳しきれませんでした',
+    closed: '応答が途中で途切れました',
+    gaps: '翻訳できない行が残りました',
   };
   return text[stop.reason];
 }
@@ -181,22 +181,22 @@ export function seamFor(stop: StopInfo, i: ViewInput, blocker: string | null): S
     // is the one that matters, so the first sentence only says where it stopped.
     const transient = stop.reason === 'rate' || stop.reason === 'busy' || stop.reason === 'no-model' || stop.reason === 'silent';
     const quotaBlocker = !i.otherSong;
-    const head = transient && quotaBlocker ? 'ここで途切れました' : text.split('。')[0];
-    return { text: `${head}。${blocker}`, button: { id: 'noop', label: '続きを訳す', disabled: true } };
+    const head = transient && quotaBlocker ? 'ここで中断しました' : text.split('。')[0];
+    return { text: `${head}。${blocker}`, button: { id: 'noop', label: '続きを翻訳', disabled: true } };
   }
   let disabled = Boolean(blocker);
   if (stop.reason === 'rate' && stop.until && i.now < stop.until) disabled = true;
   if (stop.reason === 'unusable' && stop.until && i.now < stop.until) disabled = true;
   if (stop.reason === 'network' && !i.online) disabled = true;
-  return { text, button: { id: 'resume', label: '続きを訳す', disabled } };
+  return { text, button: { id: 'resume', label: '続きを翻訳', disabled } };
 }
 
 export function decide(i: ViewInput): Decision {
   const missing = i.total - i.done;
   const quotaUntil = i.avail.ok ? null : i.avail.until;
   const blocker = i.otherSong
-    ? '別の曲を訳し終えると、この曲も訳せます'
-    : quotaUntil != null ? `今日の無料枠を使い切りました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から訳せます` : 'あとで訳せます'}` : null;
+    ? '別の曲の翻訳が終わると、この曲を翻訳できます'
+    : quotaUntil != null ? `本日の無料枠を使い切りました。${quotaUntil > i.now ? `${formatWhen(quotaUntil, i.now)}から翻訳できます` : '後ほど翻訳できます'}` : null;
   const none = { slots: false, gaps: false, breathing: false, seam: null };
   const writing = { slots: true, gaps: false, breathing: true, seam: null };
   const hide = hideAction(i);
@@ -205,7 +205,7 @@ export function decide(i: ViewInput): Decision {
 
   // S8: retranslating — the old edition stays readable until the new one is complete.
   if (i.running === 'here-retranslate') {
-    return { state: 'S8', tone: 'speaking', status: '訳し直しています', captions: [{ text: '訳し終えるまでは、今の訳をそのまま表示します' }], progress: 'indeterminate', actions: [STOP], preface: i.hasPreface, lines: none };
+    return { state: 'S8', tone: 'speaking', status: '再翻訳しています', captions: [{ text: '完了するまで、現在の訳を表示します' }], progress: 'indeterminate', actions: [STOP], preface: i.hasPreface, lines: none };
   }
   // S3 / S4: this tab is writing this song. Arriving once the preface or any line is in.
   if (i.running === 'here') {
@@ -213,12 +213,12 @@ export function decide(i: ViewInput): Decision {
     // A slow first line reads the same as a hung one: say the wait is expected (no model, quota or switching).
     const slow = !arriving && (i.waitedMs ?? 0) >= 15_000;
     const captions: Caption[] = [];
-    if (slow) captions.push({ text: 'AIの返事を待っています。混み合っていると1分ほどかかることもあります' });
-    if (!i.streams) captions.push({ text: 'この環境では訳がまとめて届きます' });
+    if (slow) captions.push({ text: 'AIの応答を待っています。混雑時は1分ほどかかる場合があります' });
+    if (!i.streams) captions.push({ text: 'この環境では、訳はまとめて表示されます' });
     return {
       state: arriving ? 'S4' : 'S3',
       tone: 'speaking',
-      status: arriving ? '訳しています' : '歌詞を読んでいます',
+      status: arriving ? '翻訳しています' : '歌詞を読み込んでいます',
       captions,
       ...(arriving ? { count: { done: i.done, total: i.total } } : {}),
       progress: arriving ? { value: i.done, max: i.total } : 'indeterminate',
@@ -229,7 +229,7 @@ export function decide(i: ViewInput): Decision {
   }
   // S4m: another tab is writing this song; follow it from storage.
   if (i.mirrored) {
-    return { state: 'S4m', tone: 'speaking', status: '別のタブで訳しています', ...plain, actions: [{ id: 'stopMirror', label: '止める' }, hide], preface: i.hasPreface, lines: writing };
+    return { state: 'S4m', tone: 'speaking', status: '別のタブで翻訳しています', ...plain, actions: [{ id: 'stopMirror', label: '停止' }, hide], preface: i.hasPreface, lines: writing };
   }
   // S8f: a retranslation failed or could not start; the old edition is untouched.
   if (i.notice && i.done) {
@@ -243,19 +243,19 @@ export function decide(i: ViewInput): Decision {
     // SJ: Japanese lyrics need no translation; say so quietly instead of offering the start button.
     if (i.japanese) return { state: 'SJ', tone: 'settled', status: 'この曲の歌詞は日本語です', ...plain, actions: [], preface: false, lines: none };
     if (!i.hasKey) {
-      return { state: 'S1', tone: 'speaking', status: '', captions: [{ text: '最初に一度だけ、無料のAPIキーを設定します' }], progress: null, actions: [{ id: 'firstRun', label: '日本語で読む', primary: true }], preface: false, lines: none };
+      return { state: 'S1', tone: 'speaking', status: '', captions: [{ text: '初回のみ、無料のAPIキーの設定が必要です' }], progress: null, actions: [{ id: 'firstRun', label: '日本語に翻訳', primary: true }], preface: false, lines: none };
     }
     if (i.otherSong) {
       return {
-        state: 'S2b', tone: 'speaking', status: '別の曲を訳しています',
-        captions: [{ text: `「${i.otherSong}」を訳し終えると、この曲も訳せます` }], progress: null,
-        actions: [{ id: 'stopOther', label: 'あちらを止める' }], preface: false, lines: none,
+        state: 'S2b', tone: 'speaking', status: '別の曲を翻訳しています',
+        captions: [{ text: `「${i.otherSong}」の翻訳が終わると、この曲を翻訳できます` }], progress: null,
+        actions: [{ id: 'stopOther', label: 'その曲を停止' }], preface: false, lines: none,
       };
     }
     if (quotaUntil != null) {
       return {
-        state: 'S2q', tone: 'speaking', status: '今日の無料枠を使い切りました',
-        captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から、また訳せます` }] : [], progress: null,
+        state: 'S2q', tone: 'speaking', status: '本日の無料枠を使い切りました',
+        captions: quotaUntil > i.now ? [{ text: `${formatWhen(quotaUntil, i.now)}から再び翻訳できます` }] : [], progress: null,
         actions: [SETTINGS], preface: false, lines: none,
       };
     }
@@ -265,14 +265,14 @@ export function decide(i: ViewInput): Decision {
       const auth = stop.reason === 'auth';
       const button: ActionSpec = auth
         ? { id: 'settings', label: '設定を開く', primary: true }
-        : { ...seam.button, id: seam.button.id === 'resume' ? 'start' : seam.button.id, label: 'もう一度訳す', primary: true };
+        : { ...seam.button, id: seam.button.id === 'resume' ? 'start' : seam.button.id, label: '再試行', primary: true };
       return {
         state: 'S2f', tone: 'speaking', status: '',
         captions: [{ text: startFailText(stop, i) || seam.text }], progress: null,
         actions: auth ? [button] : [button, SETTINGS], preface: false, lines: none,
       };
     }
-    return { state: 'S2', tone: 'speaking', status: '', ...plain, actions: [{ id: 'start', label: '日本語で読む', primary: true }, SETTINGS], preface: false, lines: none };
+    return { state: 'S2', tone: 'speaking', status: '', ...plain, actions: [{ id: 'start', label: '日本語に翻訳', primary: true }, SETTINGS], preface: false, lines: none };
   }
 
   // S5: complete.
@@ -285,8 +285,8 @@ export function decide(i: ViewInput): Decision {
   if (stop?.reason === 'gaps') {
     return {
       state: 'S5g', tone: 'speaking', status: '',
-      captions: [{ text: `${missing}行が訳せていません。下の「――」の行です` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
-      actions: [resume('抜けた行を訳す'), hide, SETTINGS],
+      captions: [{ text: `${missing}行を翻訳できませんでした（「――」の行）` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
+      actions: [resume('未翻訳の行を翻訳'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: false, gaps: true, breathing: false, seam: null },
     };
@@ -295,8 +295,8 @@ export function decide(i: ViewInput): Decision {
   if (!stop) {
     return {
       state: 'S7', tone: 'speaking', status: '',
-      captions: [{ text: `歌詞が更新されました。まだ訳していない行が${missing}行あります` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
-      actions: [resume('新しい行を訳す'), hide, SETTINGS],
+      captions: [{ text: `歌詞が更新されました。未翻訳の行が${missing}行あります` }, ...(blocker ? [reason(blocker)] : [])], progress: null,
+      actions: [resume('追加された行を翻訳'), hide, SETTINGS],
       preface: i.hasPreface,
       lines: { slots: true, gaps: false, breathing: false, seam: null },
     };
@@ -308,7 +308,7 @@ export function decide(i: ViewInput): Decision {
   const explain = i.hidden && (Boolean(seam.button.disabled) || stop.reason === 'auth');
   return {
     state: 'S6', tone: 'speaking', status: '',
-    captions: [{ text: `${i.total}行のうち${i.done}行を訳してあります` }, ...(explain ? [reason(inHead(seam.text))] : [])],
+    captions: [{ text: `${i.total}行中${i.done}行を翻訳済みです` }, ...(explain ? [reason(inHead(seam.text))] : [])],
     progress: { value: i.done, max: i.total },
     actions: [{ ...seam.button, primary: true }, hide, ...(seam.button.id === 'settings' ? [] : [SETTINGS])],
     preface: i.hasPreface,

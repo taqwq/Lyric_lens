@@ -279,12 +279,12 @@ describe('first-run sheet', () => {
     openSheet({ mode: 'first-run' });
     const t = text();
     for (const line of [
-      '日本語訳をはじめる',
-      'Google AI Studioを開き、Googleアカウントでログインして無料のAPIキーを作ります',
-      'キーをコピーして、下に貼り付けます',
-      'キーはこのブラウザにだけ保存され、Google以外には送られません',
-      '保存してこの曲を訳す',
-      '保存だけする',
+      'APIキーの設定',
+      'Google AI Studioを開き、Googleアカウントでログインして、無料のAPIキーを作成します',
+      'キーをコピーして、下の欄に貼り付けます',
+      'キーはこのブラウザにのみ保存され、Google以外には送信されません',
+      '保存してこの曲を翻訳',
+      '保存のみ',
     ]) expect(t).toContain(line);
     const link = Array.from(shadow().querySelectorAll('a')).find((a) => a.textContent === 'Google AI Studioを開く')!;
     expect(link.getAttribute('href')).toBe('https://aistudio.google.com/app/apikey');
@@ -292,7 +292,7 @@ describe('first-run sheet', () => {
     expect(link.getAttribute('rel')).toContain('noopener');
     const input = shadow().querySelector('input')!;
     expect(input.type).toBe('password');
-    expect(input.getAttribute('placeholder')).toBe('ここに貼り付け');
+    expect(input.getAttribute('placeholder')).toBe('APIキーを貼り付け');
     expect(input.getAttribute('autocomplete')).toBe('off');
     expect(input.spellcheck).toBe(false);
   });
@@ -304,8 +304,8 @@ describe('first-run sheet', () => {
     openSheet({ mode: 'first-run', onClose, onSaveAndTranslate });
 
     type(shadow().querySelector('input')!, `  ${GEMINI_KEY}  `);
-    buttonNamed('保存してこの曲を訳す').click();
-    expect(text()).toContain('確かめています…');
+    buttonNamed('保存してこの曲を翻訳').click();
+    expect(text()).toContain('確認しています…');
 
     await vi.waitFor(() => expect(onSaveAndTranslate).toHaveBeenCalledTimes(1));
     expect(modelsForMock).toHaveBeenCalledTimes(1);
@@ -319,12 +319,12 @@ describe('first-run sheet', () => {
     expect(calls).toEqual(['close:true', 'translate']);
   });
 
-  it('保存だけする saves and closes without translating', async () => {
+  it('保存のみ saves and closes without translating', async () => {
     const onClose = vi.fn();
     const onSaveAndTranslate = vi.fn();
     openSheet({ mode: 'first-run', onClose, onSaveAndTranslate });
     type(shadow().querySelector('input')!, GEMINI_KEY);
-    buttonNamed('保存だけする').click();
+    buttonNamed('保存のみ').click();
     await vi.waitFor(() => expect(onClose).toHaveBeenCalledWith(true));
     expect(onSaveAndTranslate).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe(GEMINI_KEY);
@@ -334,13 +334,13 @@ describe('first-run sheet', () => {
     openSheet({ mode: 'first-run' });
     const input = shadow().querySelector('input')!;
     (document.activeElement as HTMLElement | null)?.blur();
-    buttonNamed('保存だけする').focus();
+    buttonNamed('保存のみ').focus();
     type(input, '   ');
-    buttonNamed('保存だけする').click();
+    buttonNamed('保存のみ').click();
     expect(modelsForMock).not.toHaveBeenCalled();
     expect(shadow().activeElement).toBe(input);
-    expect(shadow().querySelector('.msg')!.textContent).toBe('キーを貼り付けてください');
-    expect(buttonNamed('保存してこの曲を訳す').disabled).toBe(false);
+    expect(shadow().querySelector('.msg')!.textContent).toBe('APIキーを入力してください');
+    expect(buttonNamed('保存してこの曲を翻訳').disabled).toBe(false);
   });
 
   it('a rejected key shows the bad-key copy, stays open and saves nothing', async () => {
@@ -350,9 +350,9 @@ describe('first-run sheet', () => {
     openSheet({ mode: 'first-run', onClose, onSaveAndTranslate });
     const input = shadow().querySelector('input')!;
     type(input, 'not-a-real-key');
-    buttonNamed('保存してこの曲を訳す').click();
+    buttonNamed('保存してこの曲を翻訳').click();
 
-    await vi.waitFor(() => expect(text()).toContain('このキーは使えませんでした。コピーし直してください'));
+    await vi.waitFor(() => expect(text()).toContain('このキーは使用できません。もう一度コピーしてください'));
     expect(host()).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
     expect(onSaveAndTranslate).not.toHaveBeenCalled();
@@ -360,7 +360,7 @@ describe('first-run sheet', () => {
     expect((await loadSettings()).apiKey).toBe('');
     expect(input.value).toBe('not-a-real-key'); // kept for editing
     expect(input.disabled).toBe(false);
-    expect(buttonNamed('保存してこの曲を訳す').disabled).toBe(false);
+    expect(buttonNamed('保存してこの曲を翻訳').disabled).toBe(false);
 
     type(input, 'not-a-real-key2'); // editing clears the complaint
     expect(text()).not.toContain('このキーは使えませんでした');
@@ -371,17 +371,17 @@ describe('first-run sheet', () => {
     const onClose = vi.fn();
     openSheet({ mode: 'first-run', onClose });
     type(shadow().querySelector('input')!, GEMINI_KEY);
-    buttonNamed('保存だけする').click();
-    await vi.waitFor(() => expect(text()).toContain('Googleにつながりませんでした。接続を確認してください'));
+    buttonNamed('保存のみ').click();
+    await vi.waitFor(() => expect(text()).toContain('Googleに接続できませんでした。ネットワーク接続を確認してください'));
     expect(host()).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe('');
 
     modelsForMock.mockRejectedValue(new LLMError('timeout', 'slow'));
-    buttonNamed('保存だけする').click();
+    buttonNamed('保存のみ').click();
     await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
-    expect(text()).toContain('Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
+    await vi.waitFor(() => expect(buttonNamed('保存のみ').disabled).toBe(false));
+    expect(text()).toContain('Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください');
     expect(text()).not.toContain('接続を確認してください');
   });
 
@@ -393,23 +393,23 @@ describe('first-run sheet', () => {
     const check = async (error: unknown, expected: string): Promise<void> => {
       modelsForMock.mockReset();
       modelsForMock.mockRejectedValue(error);
-      buttonNamed('保存だけする').click();
+      buttonNamed('保存のみ').click();
       await vi.waitFor(() => expect(modelsForMock).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(buttonNamed('保存だけする').disabled).toBe(false));
+      await vi.waitFor(() => expect(buttonNamed('保存のみ').disabled).toBe(false));
       expect(message()).toBe(expected);
     };
 
     type(input, 'AIzaTESTKEY0000000000000000000');
-    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
+    await check(new LLMError('overloaded', 'x', { status: 503 }), 'Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください');
     expect(markKeyMock).not.toHaveBeenCalled();
     expect((await loadSettings()).apiKey).toBe('');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect(onClose).not.toHaveBeenCalled();
 
-    await check(new LLMError('rate', 'x', { status: 429 }), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
-    await check(new Error('boom'), 'Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください');
-    await check(new LLMError('network', 'x'), 'Googleにつながりませんでした。接続を確認してください');
-    await check(new LLMError('auth', 'x', { status: 400 }), 'このキーは使えませんでした。コピーし直してください');
+    await check(new LLMError('rate', 'x', { status: 429 }), 'Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください');
+    await check(new Error('boom'), 'Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください');
+    await check(new LLMError('network', 'x'), 'Googleに接続できませんでした。ネットワーク接続を確認してください');
+    await check(new LLMError('auth', 'x', { status: 400 }), 'このキーは使用できません。もう一度コピーしてください');
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
     expect((await loadSettings()).apiKey).toBe('');
   });
@@ -420,7 +420,7 @@ describe('first-run sheet', () => {
     const onSaveAndTranslate = vi.fn();
     openSheet({ mode: 'first-run', onSaveAndTranslate });
     type(shadow().querySelector('input')!, GEMINI_KEY);
-    buttonNamed('保存してこの曲を訳す').click();
+    buttonNamed('保存してこの曲を翻訳').click();
     closeSheet();
     release([]);
     await new Promise((r) => setTimeout(r, 10));
@@ -441,7 +441,7 @@ describe('settings sheet', () => {
     await settingsReady();
 
     expect(shadow().querySelector('.title')!.textContent).toBe('Lyric Lensの設定');
-    expect(text()).toContain('翻訳に使うAI');
+    expect(text()).toContain('翻訳に使用するAI');
     expect(text()).not.toMatch(/Groq|OpenRouter|上から順に/);
 
     const rows = Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]'));
@@ -450,12 +450,12 @@ describe('settings sheet', () => {
     expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google Gemini');
     const when = formatWhen(until);
     const status = rows[0]!.querySelector<HTMLElement>('.status')!;
-    expect(status.textContent).toBe(`今日の無料枠を使い切りました（${when}から使えます）`);
+    expect(status.textContent).toBe(`本日の無料枠を使い切りました（${when}から使用できます）`);
     expect(status.dataset.s).toBe('resting');
 
-    // the saved key is masked, with キーを消す and no field
+    // the saved key is masked, with キーを削除 and no field
     expect(rowFor('gemini').querySelector('.mask')!.textContent).toBe('••••1234');
-    expect(rowFor('gemini').textContent).toContain('キーを消す');
+    expect(rowFor('gemini').textContent).toContain('キーを削除');
     expect(rowFor('gemini').querySelector('input')).toBeNull();
     expect(text()).not.toContain(GEMINI_KEY);
   });
@@ -467,7 +467,7 @@ describe('settings sheet', () => {
     expect(rowFor('gemini').querySelector('input')).not.toBeNull();
     expect(rowFor('gemini').textContent).toContain('保存');
     const make = rowFor('gemini').querySelector('a')!;
-    expect(make.textContent).toBe('Google AI Studioでキーを作る');
+    expect(make.textContent).toBe('Google AI Studioでキーを作成');
     expect(make.getAttribute('href')).toBe('https://aistudio.google.com/app/apikey');
     expect(make.getAttribute('target')).toBe('_blank');
     expect(text()).not.toContain('キーを足す');
@@ -478,16 +478,16 @@ describe('settings sheet', () => {
     keyStatusMock.mockImplementation(async () => ({ kind: 'bad' }));
     openSheet({ mode: 'settings' });
     await settingsReady();
-    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが使えません');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが無効です');
   });
 
-  it('キーを消す clears the stored key and brings back the field', async () => {
+  it('キーを削除 clears the stored key and brings back the field', async () => {
     await setApiKey(GEMINI_KEY);
     const onClose = vi.fn();
     openSheet({ mode: 'settings', onClose });
     await settingsReady();
 
-    const remove = Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === 'キーを消す')!;
+    const remove = Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === 'キーを削除')!;
     remove.click();
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
     expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('未設定');
@@ -502,11 +502,11 @@ describe('settings sheet', () => {
     await settingsReady();
     type(rowFor('gemini').querySelector('input')!, GEMINI_KEY);
     Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
-    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('確かめています…');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('確認しています…');
 
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('.mask')).not.toBeNull());
     expect(rowFor('gemini').querySelector('.mask')!.textContent).toBe('••••1234');
-    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('使えます');
+    expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('使用できます');
     expect(markKeyMock).toHaveBeenCalledWith(GEMINI_KEY, false);
     expect((await loadSettings()).apiKey).toBe(GEMINI_KEY);
     expect(text()).not.toContain(GEMINI_KEY);
@@ -521,14 +521,14 @@ describe('settings sheet', () => {
     modelsForMock.mockRejectedValue(new LLMError('auth', 'bad', { status: 401 }));
     type(input, 'wrong-key');
     save();
-    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが使えません'));
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.status')!.textContent).toBe('キーが無効です'));
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect(input.value).toBe('wrong-key');
     expect((await loadSettings()).apiKey).toBe('');
 
     modelsForMock.mockRejectedValue(new LLMError('network', 'offline'));
     save();
-    await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('Googleにつながりませんでした。接続を確認してください'));
+    await vi.waitFor(() => expect(rowFor('gemini').textContent).toContain('Googleに接続できませんでした。ネットワーク接続を確認してください'));
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect((await loadSettings()).apiKey).toBe('');
   });
@@ -540,7 +540,7 @@ describe('settings sheet', () => {
     modelsForMock.mockRejectedValue(new LLMError('overloaded', 'x', { status: 503 }));
     type(input, 'AIzaTESTKEY0000000000000000000');
     Array.from(rowFor('gemini').querySelectorAll('button')).find((b) => b.textContent === '保存')!.click();
-    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Googleが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください'));
+    await vi.waitFor(() => expect(rowFor('gemini').querySelector('.msg')!.textContent).toBe('Googleが混雑しているため、確認できませんでした。しばらくしてから再試行してください'));
     expect(rowFor('gemini').textContent).not.toContain('接続を確認してください');
     expect(rowFor('gemini').querySelector('input')).toBe(input);
     expect(input.value).toBe('AIzaTESTKEY0000000000000000000');
@@ -550,7 +550,7 @@ describe('settings sheet', () => {
   it('has no 「この曲」 section without a song', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    expect(text()).not.toContain('この曲を訳し直す');
+    expect(text()).not.toContain('この曲を再翻訳');
     expect(text()).toContain('保存データ');
   });
 
@@ -570,9 +570,9 @@ describe('settings sheet', () => {
     await settingsReady();
     expect(text()).toContain('この曲');
     expect(shadow().querySelector('details summary')!.textContent).toBe('直近のエラー');
-    expect(text()).not.toContain('訳しました');
-    expect(text()).not.toContain('この曲を訳し直す');
-    expect(text()).not.toContain('この曲の訳を消す');
+    expect(text()).not.toContain('翻訳しました');
+    expect(text()).not.toContain('この曲を再翻訳');
+    expect(text()).not.toContain('この曲の訳を削除');
   });
 
   it('has no error disclosure without a stored error', async () => {
@@ -589,21 +589,21 @@ describe('settings sheet', () => {
     await settingsReady();
 
     // The model reads as a name, not as an id.
-    expect(text()).toContain('2026年3月5日にGemini 3.5 Flashで訳しました');
+    expect(text()).toContain('2026年3月5日にGemini 3.5 Flashで翻訳しました');
     expect(text()).not.toContain('gemini-3.5-flash');
 
-    buttonNamed('この曲を訳し直す').click();
-    expect(text()).toContain('今の訳を残したまま訳し直し、訳し終えたら新しい訳に入れ替えます');
-    expect(hasButton('この曲を訳し直す')).toBe(false); // the confirm replaced the button row in place
+    buttonNamed('この曲を再翻訳').click();
+    expect(text()).toContain('現在の訳を残したまま再翻訳し、完了後に新しい訳に置き換えます');
+    expect(hasButton('この曲を再翻訳')).toBe(false); // the confirm replaced the button row in place
     expect(onRetranslate).not.toHaveBeenCalled();
 
-    buttonNamed('やめる').click();
-    expect(hasButton('この曲を訳し直す')).toBe(true);
+    buttonNamed('キャンセル').click();
+    expect(hasButton('この曲を再翻訳')).toBe(true);
     expect(text()).not.toContain('無料枠を1回使います');
     expect(onRetranslate).not.toHaveBeenCalled();
 
-    buttonNamed('この曲を訳し直す').click();
-    buttonNamed('訳し直す').click();
+    buttonNamed('この曲を再翻訳').click();
+    buttonNamed('再翻訳').click();
     expect(host()).toBeNull();
     expect(onRetranslate).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledWith(false);
@@ -612,18 +612,18 @@ describe('settings sheet', () => {
   it('omits the unknown part of the song line', async () => {
     openSheet({ mode: 'settings', song: { title: 'x', model: 'gemma-4' } });
     await settingsReady();
-    expect(text()).toContain('Gemma 4で訳しました');
-    expect(text()).not.toContain('に訳しました');
+    expect(text()).toContain('Gemma 4で翻訳しました');
+    expect(text()).not.toContain('に翻訳しました');
     closeSheet();
 
     openSheet({ mode: 'settings', song: { title: 'x', translatedAt: Date.UTC(2026, 11, 31, 3) } });
     await settingsReady();
-    expect(text()).toContain('2026年12月31日に訳しました');
+    expect(text()).toContain('2026年12月31日に翻訳しました');
     closeSheet();
 
     openSheet({ mode: 'settings', song: { title: 'x' } });
     await settingsReady();
-    expect(text()).not.toContain('訳しました');
+    expect(text()).not.toContain('翻訳しました');
   });
 
   it('deletes this song only after confirming, then closes as changed', async () => {
@@ -632,10 +632,10 @@ describe('settings sheet', () => {
     openSheet({ mode: 'settings', song: { title: 'x', model: 'm' }, onDeleteSong, onClose });
     await settingsReady();
 
-    buttonNamed('この曲の訳を消す').click();
-    expect(text()).toContain('この曲の保存した訳を消します。元に戻せません');
+    buttonNamed('この曲の訳を削除').click();
+    expect(text()).toContain('この曲の保存済みの訳を削除します。この操作は取り消せません');
     expect(onDeleteSong).not.toHaveBeenCalled();
-    buttonNamed('消す').click();
+    buttonNamed('削除').click();
     await vi.waitFor(() => expect(host()).toBeNull());
     expect(onDeleteSong).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledWith(true);
@@ -652,17 +652,17 @@ describe('settings sheet', () => {
     await settingsReady();
     await vi.waitFor(() => expect(text()).toMatch(/2曲を保存しています（\d+ KB）/));
 
-    buttonNamed('すべて消す').click();
+    buttonNamed('すべて削除').click();
     expect(shadow().querySelector('[data-danger]')).toBeNull();
-    expect(buttonNamed('すべて消す').dataset.v).toBe('solid'); // the confirm button
-    expect(text()).toContain('保存した2曲の訳をすべて消します。元に戻せません');
+    expect(buttonNamed('すべて削除').dataset.v).toBe('solid'); // the confirm button
+    expect(text()).toContain('保存済みの2曲の訳をすべて削除します。この操作は取り消せません');
     expect((await storageSummary()).count).toBe(2); // nothing yet
-    buttonNamed('すべて消す').click();
+    buttonNamed('すべて削除').click();
 
-    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
+    await vi.waitFor(() => expect(text()).toContain('保存済みの曲はありません'));
     expect((await storageSummary()).count).toBe(0);
     expect(host()).not.toBeNull(); // the sheet stays open
-    expect(buttonNamed('すべて消す').disabled).toBe(true);
+    expect(buttonNamed('すべて削除').disabled).toBe(true);
 
     buttonNamed('閉じる').click();
     expect(onClose).toHaveBeenCalledWith(true);
@@ -672,8 +672,8 @@ describe('settings sheet', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     openSheet({ mode: 'settings', song: { title: 'x', model: 'm' } });
     await settingsReady();
-    buttonNamed('この曲の訳を消す').click();
-    buttonNamed('やめる').click();
+    buttonNamed('この曲の訳を削除').click();
+    buttonNamed('キャンセル').click();
     expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
   });
@@ -687,12 +687,12 @@ describe('a rejected key', () => {
     keyStatusMock.mockImplementation(async () => ({ kind: 'bad' }));
   }
 
-  it('offers キーを入れ直す instead of キーを消す', async () => {
+  it('offers キーを再入力 instead of キーを削除', async () => {
     await badKey();
     openSheet({ mode: 'settings' });
     await settingsReady();
     const labels = Array.from(rowFor('gemini').querySelectorAll('button')).map((b) => b.textContent ?? '');
-    expect(labels).toEqual(['キーを入れ直す']);
+    expect(labels).toEqual(['キーを再入力']);
   });
 
   it('removing it puts the cursor in the new field, even on a phone', async () => {
@@ -700,7 +700,7 @@ describe('a rejected key', () => {
     await badKey();
     openSheet({ mode: 'settings' });
     await settingsReady();
-    buttonNamed('キーを入れ直す').click();
+    buttonNamed('キーを再入力').click();
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
     expect(shadow().activeElement).toBe(rowFor('gemini').querySelector('input'));
     expect((await loadSettings()).apiKey).toBe('');
@@ -712,7 +712,7 @@ describe('a rejected key', () => {
     await setApiKey(GEMINI_KEY);
     openSheet({ mode: 'settings' });
     await settingsReady();
-    buttonNamed('キーを消す').click();
+    buttonNamed('キーを削除').click();
     await vi.waitFor(() => expect(rowFor('gemini').querySelector('input')).not.toBeNull());
     expect(shadow().activeElement).toBe(rowFor('gemini'));
   });
@@ -721,7 +721,7 @@ describe('a rejected key', () => {
 /* ---------- saved data: 書き出す / 読み込む ---------- */
 
 describe('saved data export and import', () => {
-  const NOT_AN_EXPORT = '読み込めませんでした。Lyric Lensで書き出したファイルを選んでください';
+  const NOT_AN_EXPORT = 'インポートできませんでした。Lyric Lensでエクスポートしたファイルを選択してください';
 
   function song(id: string, lines = 2): SongRecord {
     const map: SongRecord['lines'] = {};
@@ -777,19 +777,19 @@ describe('saved data export and import', () => {
     expect(Array.from(section.children).map((c) => c.className || c.tagName.toLowerCase())).toEqual(['section-title', 'line', 'zone', 'section-lead', 'msg', 'input']);
     const [, status, actions, lead, message] = Array.from(section.children);
     expect(status!.textContent).toMatch(/^1曲を保存しています（\d+ KB）$/);
-    expect(Array.from(actions!.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['書き出す', '読み込む', 'すべて消す']);
-    expect(lead!.textContent).toBe('書き出したファイルは、別の端末でも読み込めます');
+    expect(Array.from(actions!.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['エクスポート', 'インポート', 'すべて削除']);
+    expect(lead!.textContent).toBe('エクスポートしたファイルは、別の端末でインポートできます');
     expect(message!.textContent).toBe('');
   });
 
-  it('shows 書き出す, 読み込む and すべて消す, with only 読み込む available when nothing is saved', async () => {
+  it('shows 書き出す, 読み込む and すべて削除, with only 読み込む available when nothing is saved', async () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
-    expect(text()).toContain('書き出したファイルは、別の端末でも読み込めます');
-    expect(buttonNamed('書き出す').disabled).toBe(true);
-    expect(buttonNamed('読み込む').disabled).toBe(false);
-    expect(buttonNamed('すべて消す').disabled).toBe(true);
+    await vi.waitFor(() => expect(text()).toContain('保存済みの曲はありません'));
+    expect(text()).toContain('エクスポートしたファイルは、別の端末でインポートできます');
+    expect(buttonNamed('エクスポート').disabled).toBe(true);
+    expect(buttonNamed('インポート').disabled).toBe(false);
+    expect(buttonNamed('すべて削除').disabled).toBe(true);
     const input = fileInput();
     expect(input.getAttribute('accept')).toBe('application/json');
     expect(input.hidden).toBe(true);
@@ -802,9 +802,9 @@ describe('saved data export and import', () => {
     await saveSong({ ...song('2'), stop: { reason: 'length', at: 5 } });
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(buttonNamed('書き出す').disabled).toBe(false));
-    buttonNamed('書き出す').click();
-    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲を書き出しました'));
+    await vi.waitFor(() => expect(buttonNamed('エクスポート').disabled).toBe(false));
+    buttonNamed('エクスポート').click();
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲をエクスポートしました'));
 
     expect(clicked.length).toBe(1);
     expect(clicked[0]!.getAttribute('download')).toMatch(/^lyric-lens-\d{8}\.json$/);
@@ -816,7 +816,7 @@ describe('saved data export and import', () => {
     expect(file.app).toBe('lyric-lens');
     expect(file.songs.map((s) => s.id).sort()).toEqual(['1', '2']);
     expect(file.songs.find((s) => s.id === '2')!.stop?.reason).toBe('length');
-    expect(buttonNamed('書き出す').disabled).toBe(false); // ready again
+    expect(buttonNamed('エクスポート').disabled).toBe(false); // ready again
   });
 
   it('says so when the file could not be made', async () => {
@@ -825,9 +825,9 @@ describe('saved data export and import', () => {
     await saveSong(song('1'));
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(buttonNamed('書き出す').disabled).toBe(false));
-    buttonNamed('書き出す').click();
-    await vi.waitFor(() => expect(dataMessage().textContent).toBe('書き出せませんでした'));
+    await vi.waitFor(() => expect(buttonNamed('エクスポート').disabled).toBe(false));
+    buttonNamed('エクスポート').click();
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('エクスポートできませんでした'));
     expect(dataMessage().dataset.kind).toBe('error');
     error.mockRestore();
   });
@@ -836,7 +836,7 @@ describe('saved data export and import', () => {
     openSheet({ mode: 'settings' });
     await settingsReady();
     const picker = vi.spyOn(fileInput(), 'click').mockImplementation(() => {});
-    buttonNamed('読み込む').click();
+    buttonNamed('インポート').click();
     expect(picker).toHaveBeenCalledTimes(1);
   });
 
@@ -850,15 +850,15 @@ describe('saved data export and import', () => {
     const onClose = vi.fn();
     openSheet({ mode: 'settings', onClose });
     await settingsReady();
-    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
+    await vi.waitFor(() => expect(text()).toContain('保存済みの曲はありません'));
     choose(fileInput(), exported);
-    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲を読み込みました'));
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('2曲をインポートしました'));
     expect(dataMessage().dataset.kind).toBeUndefined();
     expect(text()).toContain('2曲を保存しています');
     expect((await loadSong('1'))!.title).toBe('Song 1');
     expect((await loadSong('2'))!.stop?.reason).toBe('busy');
-    expect(buttonNamed('書き出す').disabled).toBe(false);
-    expect(buttonNamed('すべて消す').disabled).toBe(false);
+    expect(buttonNamed('エクスポート').disabled).toBe(false);
+    expect(buttonNamed('すべて削除').disabled).toBe(false);
     buttonNamed('閉じる').click();
     expect(onClose).toHaveBeenCalledWith(true);
   });
@@ -875,7 +875,7 @@ describe('saved data export and import', () => {
     expect(dataMessage().dataset.kind).toBe('error');
 
     choose(fileInput(), 'this is not json');
-    await vi.waitFor(() => expect(buttonNamed('読み込む').disabled).toBe(false));
+    await vi.waitFor(() => expect(buttonNamed('インポート').disabled).toBe(false));
     expect(dataMessage().textContent).toBe(NOT_AN_EXPORT);
     expect((await storageSummary()).count).toBe(1);
     expect(host()).not.toBeNull(); // the sheet stays open
@@ -891,7 +891,7 @@ describe('saved data export and import', () => {
     await settingsReady();
     await vi.waitFor(() => expect(text()).toContain('1曲を保存しています'));
     choose(fileInput(), exported);
-    await vi.waitFor(() => expect(dataMessage().textContent).toBe('新しく読み込める曲はありませんでした'));
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('インポートできる新しい曲はありませんでした'));
     buttonNamed('閉じる').click();
     expect(onClose).toHaveBeenCalledWith(false);
   });
@@ -906,7 +906,7 @@ describe('saved data export and import', () => {
     openSheet({ mode: 'settings', busySongId: '2' });
     await settingsReady();
     choose(fileInput(), exported);
-    await vi.waitFor(() => expect(dataMessage().textContent).toBe('1曲を読み込みました'));
+    await vi.waitFor(() => expect(dataMessage().textContent).toBe('1曲をインポートしました'));
     expect(await loadSong('1')).not.toBeNull();
     expect(await loadSong('2')).toBeNull();
   });
@@ -915,8 +915,8 @@ describe('saved data export and import', () => {
     await saveSong(song('1'));
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(buttonNamed('すべて消す').disabled).toBe(false));
-    const last = buttonNamed('すべて消す');
+    await vi.waitFor(() => expect(buttonNamed('すべて削除').disabled).toBe(false));
+    const last = buttonNamed('すべて削除');
     last.focus();
     const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, composed: true });
     last.dispatchEvent(tab);
@@ -928,15 +928,15 @@ describe('saved data export and import', () => {
     await saveSong(song('1'));
     openSheet({ mode: 'settings' });
     await settingsReady();
-    await vi.waitFor(() => expect(buttonNamed('すべて消す').disabled).toBe(false));
-    buttonNamed('すべて消す').click();
-    expect(hasButton('書き出す')).toBe(false); // the confirm replaced the row
-    buttonNamed('すべて消す').click();
-    await vi.waitFor(() => expect(text()).toContain('保存した曲はありません'));
-    expect(hasButton('書き出す')).toBe(true);
-    expect(hasButton('読み込む')).toBe(true);
-    expect(buttonNamed('書き出す').disabled).toBe(true);
-    expect(buttonNamed('読み込む').disabled).toBe(false);
+    await vi.waitFor(() => expect(buttonNamed('すべて削除').disabled).toBe(false));
+    buttonNamed('すべて削除').click();
+    expect(hasButton('エクスポート')).toBe(false); // the confirm replaced the row
+    buttonNamed('すべて削除').click();
+    await vi.waitFor(() => expect(text()).toContain('保存済みの曲はありません'));
+    expect(hasButton('エクスポート')).toBe(true);
+    expect(hasButton('インポート')).toBe(true);
+    expect(buttonNamed('エクスポート').disabled).toBe(true);
+    expect(buttonNamed('インポート').disabled).toBe(false);
   });
 });
 

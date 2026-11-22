@@ -10,7 +10,7 @@ import { phraseRange } from '../genius/ranges';
 import { h, isolateClicks } from './dom';
 
 const GENIUS_CLIP = 400;
-const GN_LABEL = 'Geniusの注釈を英語で読む ▾';
+const GN_LABEL = 'Geniusの注釈（英語） ▾';
 
 interface HighlightRegistry { set(name: string, value: unknown): void; delete(name: string): void }
 declare const Highlight: { new (...ranges: Range[]): unknown } | undefined;
@@ -138,7 +138,7 @@ export class NoteView {
         note.conjecture ? h('span', { class: 'll-note-conj' }, '〔推測〕') : null,
       ),
       h('p', { class: 'll-note-text' }, note.text),
-      cited ? h('p', { class: 'll-note-src' }, 'Geniusの注釈を参考にしました') : null,
+      cited ? h('p', { class: 'll-note-src' }, '参考：Geniusの注釈') : null,
       genius ? this.geniusBlock(genius, onToggle) : null,
     );
   }
@@ -161,7 +161,7 @@ export class NoteView {
         const show = body.hidden;
         body.hidden = !show;
         toggle.setAttribute('aria-expanded', String(show));
-        toggle.textContent = show ? 'たたむ ▴' : GN_LABEL;
+        toggle.textContent = show ? '閉じる ▴' : GN_LABEL;
         onToggle();
       },
     }, GN_LABEL);

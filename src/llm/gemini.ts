@@ -133,9 +133,9 @@ export class GeminiProvider implements Provider {
     if (streamError) throw streamError;
     if (blockReason) throw new LLMError('blocked', `Geminiが入力をブロックしました（${blockReason}）`, { status: 200 });
     if (!text && BLOCKED_REASONS.has(finishReason)) {
-      throw new LLMError('blocked', `Geminiが生成を止めました（${finishReason}）`, { status: 200 });
+      throw new LLMError('blocked', `Geminiが生成を停止しました（${finishReason}）`, { status: 200 });
     }
-    if (!text) throw new LLMError('empty', 'Geminiの返事が空でした', { status: 200, detail: res.text.slice(0, 2000) });
+    if (!text) throw new LLMError('empty', 'Geminiの応答が空でした', { status: 200, detail: res.text.slice(0, 2000) });
 
     const finish = finishReason === 'STOP' ? 'stop'
       : finishReason === 'MAX_TOKENS' ? 'length'
