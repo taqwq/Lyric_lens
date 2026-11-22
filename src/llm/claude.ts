@@ -61,10 +61,24 @@ export class ClaudeProvider {
     };
   }
 
-  /** Checks the key with the model list (free: no tokens are used). */
+  /** Checks the key with the model list (free: no tokens are used). Tampermonkey's stream mode
+   *  was seen to deliver nothing from Anthropic, so a silent stream is retried in text mode, and
+   *  the mode that answered is kept for translations. */
   async verify(signal?: AbortSignal): Promise<void> {
-    const res = await streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: 'GET', headers: this.headers(), signal, idleTimeoutMs: 20_000 });
+    const ask = (textMode: boolean, idleTimeoutMs: number) => streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: 'GET', headers: this.headers(), signal, idleTimeoutMs, textMode });
+    let res;
+    let textMode = false;
+    try {
+      res = await ask(false, 8_000);
+    } catch (error) {
+      if (!(error instanceof LLMError) || error.kind !== 'timeout') throw error;
+      console.info('[Lyric Lens] Claude: no answer in stream mode, trying text mode');
+      textMode = true;
+      res = await ask(true, 20_000);
+    }
+    console.info('[Lyric Lens] Claude key check answered', { mode: textMode ? 'text' : 'stream', status: res.status });
     if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
+    await setTextMode(textMode);
   }
 
   async generate(req: Omit<GenerateRequest, 'model'>): Promise<GenerateResult> {
@@ -96,6 +110,7 @@ export class ClaudeProvider {
     };
 
     const res = await streamRequest({
+      textMode: await useTextMode(),
       url: `${CLAUDE_BASE}/v1/messages`,
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -113,6 +128,18 @@ export class ClaudeProvider {
     const finish = stopReason === 'end_turn' ? 'stop' : stopReason === 'max_tokens' ? 'length' : stopReason === 'refusal' ? 'blocked' : 'unknown';
     return { finish, finishDetail: stopReason, text };
   }
+}
+
+/* ---------- how the manager delivers Anthropic's answers ---------- */
+
+const MODE_KEY = 'll3:claude:text';
+
+async function useTextMode(): Promise<boolean> {
+  try { return await getJSON<boolean>(MODE_KEY, false); } catch { return false; }
+}
+
+async function setTextMode(on: boolean): Promise<void> {
+  try { await setJSON(MODE_KEY, on); } catch { /* advice only */ }
 }
 
 /* ---------- when Claude is skipped ---------- */

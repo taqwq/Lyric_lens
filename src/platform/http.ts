@@ -18,6 +18,9 @@ export interface StreamRequest {
   /** Abort when nothing arrives for this long (the first byte may take longer: thinking). */
   idleTimeoutMs?: number;
   firstByteTimeoutMs?: number;
+  /** Ask the manager for plain text instead of a stream (Tampermonkey). The body may then
+   *  arrive in pieces through progress events, or only at the end. */
+  textMode?: boolean;
 }
 
 export interface HttpResult {
@@ -110,7 +113,7 @@ function viaGm(fn: GmXhr, req: StreamRequest): Promise<HttpResult> {
       }
     };
 
-    const wantsStream = handlerName() === 'Tampermonkey';
+    const wantsStream = handlerName() === 'Tampermonkey' && !req.textMode;
     // Managers that deliver the body only at onload give no sign of life while the model
     // works; there, only a generous overall timeout applies (see transportStreams()).
     if (!transportStreams()) watchdog.clear();

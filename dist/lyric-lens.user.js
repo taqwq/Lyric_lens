@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lyric Lens for Genius
 // @namespace    taq.replay.lyrics
-// @version      3.0.0.202611221355
+// @version      3.0.0.202611221359
 // @description  Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添えます。読み違えやすい語句にだけ短い注を付けます。無料の Gemini API キーで動きます。
 // @author       taq
 // @match        https://genius.com/*
@@ -339,7 +339,7 @@
           push(chunk);
         }
       };
-      const wantsStream = handlerName() === "Tampermonkey";
+      const wantsStream = handlerName() === "Tampermonkey" && !req.textMode;
       if (!transportStreams()) watchdog.clear();
       const details = {
         method: req.method ?? "POST",
@@ -511,10 +511,24 @@
         "anthropic-dangerous-direct-browser-access": "true"
       };
     }
-    /** Checks the key with the model list (free: no tokens are used). */
+    /** Checks the key with the model list (free: no tokens are used). Tampermonkey's stream mode
+     *  was seen to deliver nothing from Anthropic, so a silent stream is retried in text mode, and
+     *  the mode that answered is kept for translations. */
     async verify(signal) {
-      const res = await streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: "GET", headers: this.headers(), signal, idleTimeoutMs: 2e4 });
+      const ask = (textMode2, idleTimeoutMs) => streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: "GET", headers: this.headers(), signal, idleTimeoutMs, textMode: textMode2 });
+      let res;
+      let textMode = false;
+      try {
+        res = await ask(false, 8e3);
+      } catch (error) {
+        if (!(error instanceof LLMError) || error.kind !== "timeout") throw error;
+        console.info("[Lyric Lens] Claude: no answer in stream mode, trying text mode");
+        textMode = true;
+        res = await ask(true, 2e4);
+      }
+      console.info("[Lyric Lens] Claude key check answered", { mode: textMode ? "text" : "stream", status: res.status });
       if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
+      await setTextMode(textMode);
     }
     async generate(req) {
       const body = {
@@ -547,6 +561,7 @@
         if (data.type === "message_delta" && data.delta?.stop_reason) stopReason = data.delta.stop_reason;
       };
       const res = await streamRequest({
+        textMode: await useTextMode(),
         url: `${CLAUDE_BASE}/v1/messages`,
         headers: this.headers(),
         body: JSON.stringify(body),
@@ -566,6 +581,20 @@
       return { finish, finishDetail: stopReason, text: text2 };
     }
   };
+  var MODE_KEY = "ll3:claude:text";
+  async function useTextMode() {
+    try {
+      return await getJSON(MODE_KEY, false);
+    } catch {
+      return false;
+    }
+  }
+  async function setTextMode(on) {
+    try {
+      await setJSON(MODE_KEY, on);
+    } catch {
+    }
+  }
   var BENCH_KEY = "ll3:claude";
   function tag(apiKey) {
     let h2 = 0;
@@ -5735,7 +5764,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
     if (false) window.__ll = app;
     registerMenu("Lyric Lensの設定", () => app.openSettings(null));
     app.start().catch((error) => console.error("[Lyric Lens] failed to start", error));
-    console.info(`[Lyric Lens] v${"3.0.0.202611221355"}`);
+    console.info(`[Lyric Lens] v${"3.0.0.202611221359"}`);
   }
   if (document.body) boot();
   else document.addEventListener("DOMContentLoaded", boot, { once: true });

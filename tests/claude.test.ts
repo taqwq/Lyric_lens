@@ -58,6 +58,25 @@ describe('classifyClaudeError', () => {
   });
 });
 
+describe('ClaudeProvider.verify', () => {
+  it('retries a silent stream in text mode and keeps text mode for translations', async () => {
+    const base = http.getMockImplementation()!;
+    const modes: Array<boolean | undefined> = [];
+    http.mockImplementation(async (req: StreamRequest) => {
+      modes.push(req.textMode);
+      if (req.url.includes('/v1/models') && !req.textMode) {
+        const { LLMError } = await import('../src/llm/errors');
+        throw new LLMError('timeout', '返事がないため打ち切りました');
+      }
+      if (req.url.includes('/v1/models')) return { status: 200, text: '{"data":[]}', headers: '' };
+      return base(req);
+    });
+    await new ClaudeProvider(CLAUDE_KEY).verify();
+    await new ClaudeProvider(CLAUDE_KEY).generate({ system: 's', user: 'u', maxOutputTokens: 8000, onText: () => {} });
+    expect(modes).toEqual([false, true, true]);
+  });
+});
+
 describe('ClaudeProvider.generate', () => {
   it('asks Opus 5.5 at medium effort and returns the streamed text', async () => {
     const chunks: string[] = [];
