@@ -7,9 +7,10 @@
  * as the masked tail of a saved key (••••abcd). The key is never logged, and error text is
  * scrubbed (scrubKey) before it is logged or stored.
  */
-import { keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
+import { claudeKeyStatus, keyStatus, markKey, modelsFor, type KeyStatus } from '../llm/chain';
+import { ClaudeProvider, clearClaudeBench } from '../llm/claude';
 import { LLMError } from '../llm/errors';
-import { currentSettings, loadSettings, setApiKey } from '../store/settings';
+import { currentSettings, loadSettings, setApiKey, setClaudeKey } from '../store/settings';
 import { deleteAllSongs, exportSongs, importSongs, storageSummary } from '../store/songs';
 import type { StopDetail } from '../core/types';
 import { h } from './dom';
@@ -83,13 +84,53 @@ const COPY = {
   deleteAll: 'すべて消す',
   deleteFailed: '消せませんでした',
   nothingSaved: '保存した曲はありません',
+  claudeMakeKey: 'Claude Consoleでキーを作る',
+  claudeNetwork: 'Anthropicにつながりませんでした。接続を確認してください',
+  claudeBusy: 'Anthropicが混み合っていて、確かめられませんでした。少しおいてから、もう一度試してください',
   ok: '消す',
   cancel: 'やめる',
 } as const;
 
 const AI_STUDIO_URL = 'https://aistudio.google.com/app/apikey';
 
-const SERVICE_LABEL = 'Google Gemini';
+/** A key row: which service, how its key is checked (never a generation call), saved and judged. */
+interface Service {
+  id: 'gemini' | 'claude';
+  label: string;
+  makeKey: string;
+  makeKeyUrl: string;
+  network: string;
+  busy: string;
+  check(key: string): Promise<void>;
+  store(key: string): Promise<string>;
+  status(key: string): Promise<KeyStatus>;
+}
+
+const GEMINI: Service = {
+  id: 'gemini',
+  label: 'Google Gemini',
+  makeKey: COPY.makeKey,
+  makeKeyUrl: AI_STUDIO_URL,
+  network: COPY.network,
+  busy: COPY.busyCheck,
+  check: async (key) => { await modelsFor(key, { refresh: true }); },
+  store: async (key) => { if (key) await markKey(key, false); return (await setApiKey(key)).apiKey; },
+  status: (key) => keyStatus(key),
+};
+
+/** Tried before Gemini when its key is saved (llm/claude.ts). */
+const CLAUDE: Service = {
+  id: 'claude',
+  label: 'Anthropic Claude',
+  makeKey: COPY.claudeMakeKey,
+  makeKeyUrl: 'https://platform.claude.com/settings/keys',
+  network: COPY.claudeNetwork,
+  busy: COPY.claudeBusy,
+  check: (key) => new ClaudeProvider(key).verify(),
+  store: async (key) => { if (key) await clearClaudeBench(key); return (await setClaudeKey(key)).claudeKey; },
+  status: (key) => claudeKeyStatus(key),
+};
+
 
 /* ---------- small helpers ---------- */
 
@@ -139,7 +180,9 @@ function formatSize(bytes: number): string {
 /** A model id as a reader says it: gemini-3.5-flash-lite → "Gemini 3.5 Flash-Lite", gemma-4-31b-it
  *  → "Gemma 4 31B IT". An id that is not a Gemini or Gemma version stays as it is. */
 export function modelLabel(id: string): string {
-  const m = /^(gemini|gemma)-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(id);
+  const claude = /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d))?$/.exec(id);
+  if (claude) return `Claude ${claude[1]!.charAt(0).toUpperCase()}${claude[1]!.slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`;
+  const m =/^(gemini|gemma)-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(id);
   if (!m) return id;
   const words: string[] = [];
   for (const part of m[3]!.split('-').filter(Boolean)) {
@@ -208,6 +251,7 @@ type RowKind = 'pending' | 'checking' | 'missing' | 'ok' | 'resting' | 'bad';
 
 interface Row {
   id: string;
+  service: Service;
   apiKey: string;
   kind: RowKind;
   until: number;
@@ -232,6 +276,7 @@ function statusText(row: Row): string {
     case 'resting': {
       if (row.until <= 0) return COPY.statusOk;
       const when = formatWhen(row.until);
+      if (row.service.id === 'claude') return `APIの残高がありません（${when}にもう一度試します）`;
       return `今日の無料枠を使い切りました（${when}から使えます）`;
     }
     default: return '';
@@ -468,9 +513,9 @@ function mount(options: OpenSheetOptions): Active {
   }
 
   /** Verifies a key with the provider's model list (never a generation call). */
-  async function verify(apiKey: string): Promise<'ok' | 'auth' | 'network' | 'busy' | 'aborted'> {
+  async function verify(apiKey: string, service: Service = GEMINI): Promise<'ok' | 'auth' | 'network' | 'busy' | 'aborted'> {
     try {
-      await modelsFor(apiKey, { refresh: true });
+      await service.check(apiKey);
       return 'ok';
     } catch (error) {
       if (isAborted(error)) return 'aborted';
@@ -607,12 +652,12 @@ function mount(options: OpenSheetOptions): Active {
         row.controls.replaceChildren(h('div', { class: 'inline' }, h('span', { class: 'mask', role: 'img', 'aria-label': maskLabel(row.apiKey) }, maskKey(row.apiKey)), remove));
         return;
       }
-      const input = keyInput(`${SERVICE_LABEL}のAPIキー`, () => { void saveKey(row); }, () => {
+      const input = keyInput(`${row.service.label}のAPIキー`, () => { void saveKey(row); }, () => {
         if (!row.busy && (row.kind === 'bad' || row.message)) { row.kind = 'missing'; row.message = ''; paintRow(row); }
       });
       row.input = input;
       row.controls.replaceChildren(h('div', { class: 'inline' }, input, button(COPY.save, 'outline', () => { void saveKey(row); })));
-      row.controls.append(externalLink(COPY.makeKey, AI_STUDIO_URL));
+      row.controls.append(externalLink(row.service.makeKey, row.service.makeKeyUrl));
     }
 
     async function saveKey(row: Row): Promise<void> {
@@ -624,19 +669,18 @@ function mount(options: OpenSheetOptions): Active {
       row.kind = 'checking';
       row.message = '';
       paintRow(row);
-      const verdict = await verify(key);
+      const verdict = await verify(key, row.service);
       if (closed || verdict === 'aborted') return;
       if (verdict !== 'ok') {
         row.busy = false;
         row.kind = verdict === 'auth' ? 'bad' : 'missing';
-        row.message = verdict === 'auth' ? COPY.badKeyRow : verdict === 'busy' ? COPY.busyCheck : COPY.network;
+        row.message = verdict === 'auth' ? COPY.badKeyRow : verdict === 'busy' ? row.service.busy : row.service.network;
         paintRow(row);
         focusEl(row.input);
         return;
       }
       try {
-        await markKey(key, false);
-        row.apiKey = (await setApiKey(key)).apiKey;
+        row.apiKey = await row.service.store(key);
       } catch {
         if (closed) return;
         row.busy = false;
@@ -648,7 +692,7 @@ function mount(options: OpenSheetOptions): Active {
       }
       if (closed) return;
       changed = true;
-      const status = await statusOf(row.apiKey);
+      const status = await statusOf(row);
       if (closed) return;
       row.busy = false;
       row.message = '';
@@ -663,7 +707,7 @@ function mount(options: OpenSheetOptions): Active {
       row.busy = true;
       paintRow(row);
       try {
-        row.apiKey = (await setApiKey('')).apiKey;
+        row.apiKey = await row.service.store('');
       } catch {
         if (closed) return;
         row.busy = false;
@@ -689,26 +733,26 @@ function mount(options: OpenSheetOptions): Active {
       row.until = status.kind === 'resting' ? status.until : 0;
     }
 
-    async function statusOf(apiKey: string): Promise<KeyStatus> {
+    async function statusOf(row: Row): Promise<KeyStatus> {
       try {
-        return await keyStatus(apiKey);
+        return await row.service.status(row.apiKey);
       } catch {
-        return apiKey.trim() ? { kind: 'ok' } : { kind: 'missing' };
+        return row.apiKey.trim() ? { kind: 'ok' } : { kind: 'missing' };
       }
     }
 
-    function buildRow(apiKey: string): Row {
-      const id = 'gemini';
+    function buildRow(service: Service, apiKey: string): Row {
+      const id = service.id;
       const dot = h('span', { class: 'dot', 'aria-hidden': 'true' });
       const statusEl = h('span', { class: 'status' });
       const msgEl = h('p', { class: 'msg', role: 'status', 'aria-live': 'polite' });
       const controls = h('div', { class: 'controls' });
       const el = h('div', { class: 'service', 'data-service': id },
-        h('div', { class: 'service-head' }, dot, h('span', { class: 'service-name' }, SERVICE_LABEL), statusEl),
+        h('div', { class: 'service-head' }, dot, h('span', { class: 'service-name' }, service.label), statusEl),
         controls,
         msgEl);
       return {
-        id, apiKey, kind: apiKey.trim() ? 'pending' : 'missing', until: 0, message: '', busy: false,
+        id, service, apiKey, kind: apiKey.trim() ? 'pending' : 'missing', until: 0, message: '', busy: false,
         el, dot, statusEl, msgEl, controls, mode: null, input: null, removeButton: null,
       };
     }
@@ -908,20 +952,22 @@ function mount(options: OpenSheetOptions): Active {
 
     /* -- load the services -- */
 
-    const firstEmptyInput = (): HTMLInputElement | null => rows.find((r) => r.input)?.input ?? null;
+    const firstEmptyInput = (): HTMLInputElement | null => rows.find((r) => r.service.id === 'gemini' && r.input)?.input ?? null;
 
     void (async () => {
-      let apiKey: string;
+      let settings: { apiKey: string; claudeKey: string };
       try {
-        apiKey = (await loadSettings()).apiKey;
+        settings = await loadSettings();
       } catch {
-        apiKey = currentSettings().apiKey;
+        settings = currentSettings();
       }
       if (closed) return;
-      const row = buildRow(apiKey);
-      rows.push(row);
-      servicesBox.append(row.el);
-      paintRow(row);
+      for (const [service, key] of [[GEMINI, settings.apiKey], [CLAUDE, settings.claudeKey]] as const) {
+        const row = buildRow(service, key);
+        rows.push(row);
+        servicesBox.append(row.el);
+        paintRow(row);
+      }
       place(true);
       // 閉じる has focus until now.
       const untouched = (shadow as ShadowRoot & { activeElement: Element | null }).activeElement === closeButton;
@@ -929,11 +975,14 @@ function mount(options: OpenSheetOptions): Active {
       const target = firstEmptyInput();
       if (target && isDesktop() && untouched) focusEl(target);
 
-      if (!row.apiKey.trim()) return;
-      const status = await statusOf(row.apiKey);
-      if (closed || row.busy || row.apiKey !== apiKey) return;
-      applyStatus(row, status);
-      paintRow(row);
+      await Promise.all(rows.map(async (row) => {
+        const key = row.apiKey;
+        if (!key.trim()) return;
+        const status = await statusOf(row);
+        if (closed || row.busy || row.apiKey !== key) return;
+        applyStatus(row, status);
+        paintRow(row);
+      }));
     })();
 
     return { focus: () => focusEl(closeButton) };

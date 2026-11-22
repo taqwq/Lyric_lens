@@ -88,7 +88,7 @@ export function classifyHttpError(status: number, bodyText: string, rawHeaders =
 
 /** Text from a failure may echo the request URL or key: never log or store one. */
 export function scrubKey(text: string): string {
-  return text.replace(/AIza[0-9A-Za-z_-]{20,}/g, '[key]');
+  return text.replace(/AIza[0-9A-Za-z_-]{20,}/g, '[key]').replace(/sk-ant-[0-9A-Za-z_-]{10,}/g, '[key]');
 }
 
 /** The diagnostic kept per failed model: logged to the console and stored on the song's stop. */

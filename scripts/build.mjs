@@ -9,7 +9,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const watch = process.argv.includes('--watch');
 const dev = process.argv.includes('--dev');
 
-const connect = ['generativelanguage.googleapis.com'];
+const connect = ['generativelanguage.googleapis.com', 'api.anthropic.com'];
 
 // Tampermonkey updates an installed copy from GitHub when @version goes up, so every build
 // whose code differs from the committed one gets a newer version: package.json's, plus the

@@ -178,6 +178,7 @@ The seam is a stop line, not a decoration: a black 2 px rule across the column r
 - Title: `Lyric Lensの設定` · `閉じる`
 - Section: `翻訳に使うAI`
 - Row: `Google Gemini`, its status at the right, then the masked key `••••abcd` with `キーを消す` (`キーを入れ直す` while the key is rejected; the new field is then focused), or, with no key, a field, `保存` and `Google AI Studioでキーを作る`
+- A second row in the same form: `Anthropic Claude`, with `Claude Consoleでキーを作る`. When its key is saved, Claude Opus 5.5 (effort medium) is tried first and Gemini only when Claude cannot answer; a spent API credit reads `APIの残高がありません（…にもう一度試します）`
 - Row status, in words: `使えます` · `未設定` · `今日の無料枠を使い切りました（{when}から使えます）` · `キーが使えません` · `確かめています…`
 - Row messages (after a failed check): for a rejected key only the next step, `コピーし直して、貼り付けてください` (the status already says `キーが使えません`); the first-run sentences for a network failure and a busy Google
 - Section: `この曲`
@@ -334,7 +335,7 @@ The sheet (a shadow root) keeps the same five values as `--paper` `#FFFFFF`, `--
 - `保存だけする` saves the key and moves to S2.
 
 **Settings layout** (one scrolling column, three sections)
-1. **翻訳に使うAI.** One Gemini key row; the engine chooses among Gemini's models itself (§8). The row names the service, `Google Gemini`, and says its status in words at the right; below it are the masked key (`••••abcd`) with `キーを消す`, or, with no key, the field with `保存` and a link `Google AI Studioでキーを作る`. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM (apart from the field's value while the reader types).
+1. **翻訳に使うAI.** A Gemini key row, then an optional Claude key row in the same form (20px apart). With a Claude key, Claude Opus 5.5 is asked first; otherwise, or when it cannot answer (spent credit, busy, rejected), the engine chooses among Gemini's models itself (§8). The row names the service, `Google Gemini`, and says its status in words at the right; below it are the masked key (`••••abcd`) with `キーを消す`, or, with no key, the field with `保存` and a link `Google AI Studioでキーを作る`. Keys are stored only in `GM.setValue`, never in `localStorage` or the DOM (apart from the field's value while the reader types).
 2. **この曲.** Shown when this song has an edition or a recorded error and no request is writing it. One sentence gives the date and the model as a reader says it (this is the only place a model name appears), then `直近のエラー` when there is one, then `この曲を訳し直す` and `この曲の訳を消す`, each with an inline confirmation that replaces the buttons in place. Models are named by `modelLabel`: `gemini-3.5-flash-lite` reads `Gemini 3.5 Flash-Lite`, `gemma-4-31b-it` reads `Gemma 4 31B` (the `-it` build tag is dropped), `gemini-3-flash-preview` reads `Gemini 3 Flash Preview`; an id it does not recognise is shown as it is.
 3. **保存データ.** Top to bottom: the status line (count and size, `{n} KB` or `{n.n} MB`), the actions (`書き出す` · `読み込む` · `すべて消す`; with nothing saved only `読み込む` can be pressed), the explanation, and one message line for the result of the last action. Export writes `lyric-lens-YYYYMMDD.json`. Import validates every record, merges only what is strictly better (more translated lines, then finished over cut, then newer), and skips the song a request is writing. Eviction past 300 songs orders by last read and never removes a partly translated song.
 

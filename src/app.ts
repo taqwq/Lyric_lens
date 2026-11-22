@@ -246,8 +246,8 @@ export class App {
 
   /** What the configured keys allow right now, from what is already known (no request). */
   private async refreshKeys(): Promise<void> {
-    const { apiKey } = currentSettings();
-    this.avail = await availability(apiKey);
+    const { apiKey, claudeKey } = currentSettings();
+    this.avail = await availability(apiKey, claudeKey);
     // An invalid-key stop applies only while the key is not believed to work.
     this.keyBad = !apiKey.trim() || (await keyStatus(apiKey)).kind === 'bad';
   }
@@ -656,6 +656,7 @@ export class App {
         const input = annotations.length ? { ...source, meta: { ...source.meta, annotations } } : source;
         const outcome = await translateSong(input, record, {
           apiKey: settings.apiKey,
+          claudeKey: settings.claudeKey,
           signal: current.controller.signal,
           onUpdate: () => {
             if (!retranslate) current.saver.schedule(record);

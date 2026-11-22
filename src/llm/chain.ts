@@ -5,6 +5,7 @@
  * its reset instead of burning a request to rediscover it.
  */
 import { getJSON, listKeys, remove, setJSON } from '../platform/storage';
+import { CLAUDE_MODEL, ClaudeProvider, benchClaude, claudeBench, clearClaudeBench } from './claude';
 import { LLMError, errorDetail, type LLMErrorKind } from './errors';
 import { FIRST_TEXT_TIMEOUT_MS, GEMINI_BASE, GeminiProvider, rankGeminiModel } from './gemini';
 import type { GenerateRequest, GenerateResult, ModelInfo } from './types';
@@ -243,6 +244,15 @@ export async function keyStatus(apiKey: string): Promise<KeyStatus> {
   return a.ok ? { kind: 'ok' } : { kind: 'resting', until: a.until };
 }
 
+/** What the settings sheet shows next to the Claude key, from what is already known. */
+export async function claudeKeyStatus(claudeKey: string): Promise<KeyStatus> {
+  if (!claudeKey.trim()) return { kind: 'missing' };
+  const bench = await claudeBench(claudeKey);
+  if (bench?.reason === 'auth') return { kind: 'bad' };
+  if (bench?.reason === 'quota') return { kind: 'resting', until: bench.until };
+  return { kind: 'ok' };
+}
+
 /** Remembers (or clears) that a key was rejected, keyed by its fingerprint. */
 export async function markKey(apiKey: string, bad: boolean): Promise<void> {
   await setJSON(BAD_KEY_PREFIX + keyTag(apiKey), bad);
@@ -257,8 +267,9 @@ export interface Availability {
 
 /** Answers "is it worth sending a request?" from what we already know, without any
  *  network access, so an exhausted free tier never costs a wasted attempt. */
-export async function availability(apiKey: string): Promise<Availability> {
+export async function availability(apiKey: string, claudeKey = ''): Promise<Availability> {
   if (!apiKey.trim()) return { ok: false, until: 0 };
+  if (claudeKey.trim() && !(await claudeBench(claudeKey))) return { ok: true, until: 0 };
   const cooldowns = await loadCooldowns();
   const cached = await getJSON<{ models: ModelInfo[] } | null>(MODELS_KEY + cooldownId(apiKey, ''), null);
   const ids = selectCandidates(cached?.models.filter((m) => m.rank > 0).map((m) => m.id) ?? FALLBACK_GEMINI);
@@ -365,6 +376,43 @@ export interface ChainOptions {
   signal?: AbortSignal;
   /** Scripts only: try just these models, whatever their cooldowns say. */
   onlyModels?: string[];
+  /** A Claude key: Claude is tried first, and Gemini only when it cannot answer. */
+  claudeKey?: string;
+}
+
+/** One attempt with Claude. Returns the answer, or null when Gemini should take over. A stream
+ *  that broke after giving lines is returned with its error, like a Gemini one. */
+async function tryClaude(
+  claudeKey: string,
+  request: Omit<GenerateRequest, 'model' | 'signal' | 'firstTextTimeoutMs'>,
+  options: ChainOptions,
+): Promise<ChainResult | null> {
+  if (await claudeBench(claudeKey)) return null;
+  options.onStatus?.('Anthropic Claude · Opus 5.5');
+  options.onAttempt?.();
+  let produced = false;
+  try {
+    const result = await new ClaudeProvider(claudeKey).generate({
+      ...request,
+      signal: options.signal,
+      onText: (chunk) => {
+        const useful = request.onText(chunk);
+        if (useful === undefined || useful) produced = true;
+      },
+    });
+    if (!produced) throw new LLMError('unusable', 'Claude の返事から訳を読み取れませんでした', { status: 200, detail: result.text.slice(0, 2000) });
+    await clearClaudeBench(claudeKey);
+    return { ...result, model: CLAUDE_MODEL };
+  } catch (raw) {
+    if (!(raw instanceof LLMError)) throw raw;
+    if (raw.kind === 'aborted') throw raw;
+    raw.model = CLAUDE_MODEL;
+    console.warn('[Lyric Lens]', errorDetail(raw, 500));
+    await benchClaude(claudeKey, raw);
+    if (produced) return { finish: 'unknown', finishDetail: raw.kind, text: '', model: CLAUDE_MODEL, error: raw };
+    options.onStatus?.('Claude が使えないため Gemini に切り替えます');
+    return null;
+  }
 }
 
 // Transient failures outrank quota: if any model was merely busy, trying again soon can work,
@@ -399,6 +447,11 @@ export async function generateWithFallback(
 ): Promise<ChainResult> {
   const { signal, onStatus, onlyModels } = options;
   if (!apiKey.trim()) throw new LLMError('auth', 'APIキーが設定されていません');
+  if (options.claudeKey?.trim() && !onlyModels?.length) {
+    const answer = await tryClaude(options.claudeKey, request, options);
+    if (answer) return answer;
+  }
+  // Counted from here, so the time Claude took does not use up Flash's budget.
   const startedCallAt = Date.now();
 
   const cooldowns = await loadCooldowns();

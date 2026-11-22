@@ -347,7 +347,7 @@
 /* ---------- the key row ---------- */
 
 .service { padding: 0; }
-.service + .service { border-top: 1px solid var(--rule); }
+.service + .service { margin-top: 20px; }
 
 .service-head {
   display: flex;

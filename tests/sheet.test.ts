@@ -13,7 +13,13 @@ import { formatWhen } from '../src/ui/time';
 vi.mock('../src/llm/chain', () => ({
   modelsFor: vi.fn(),
   keyStatus: vi.fn(),
+  claudeKeyStatus: vi.fn(async (key: string) => (key ? { kind: 'ok' } : { kind: 'missing' })),
   markKey: vi.fn(),
+}));
+
+vi.mock('../src/llm/claude', () => ({
+  ClaudeProvider: vi.fn(),
+  clearClaudeBench: vi.fn(),
 }));
 
 const modelsForMock = vi.mocked(modelsFor);
@@ -67,7 +73,7 @@ async function ready(): Promise<void> {
 
 async function settingsReady(): Promise<void> {
   await ready();
-  await vi.waitFor(() => expect(shadow().querySelectorAll('[data-service]').length).toBe(1));
+  await vi.waitFor(() => expect(shadow().querySelectorAll('[data-service]').length).toBe(2));
   // statuses of rows that have a key resolve a moment later
   await vi.waitFor(() => expect(shadow().querySelector('.dot[data-s="pending"]')).toBeNull());
 }
@@ -426,7 +432,7 @@ describe('first-run sheet', () => {
 /* ---------- settings ---------- */
 
 describe('settings sheet', () => {
-  it('shows the one Gemini row with its status', async () => {
+  it('shows the Gemini row with its status, then the Claude row', async () => {
     const until = Date.now() + 3 * 3600_000;
     await setApiKey(GEMINI_KEY);
     keyStatusMock.mockImplementation(async () => ({ kind: 'resting', until }));
@@ -439,7 +445,8 @@ describe('settings sheet', () => {
     expect(text()).not.toMatch(/Groq|OpenRouter|上から順に/);
 
     const rows = Array.from(shadow().querySelectorAll<HTMLElement>('[data-service]'));
-    expect(rows.map((r) => r.dataset.service)).toEqual(['gemini']);
+    expect(rows.map((r) => r.dataset.service)).toEqual(['gemini', 'claude']);
+    expect(rows[1]!.querySelector('.service-name')!.textContent).toBe('Anthropic Claude');
     expect(rows[0]!.querySelector('.service-name')!.textContent).toBe('Google Gemini');
     const when = formatWhen(until);
     const status = rows[0]!.querySelector<HTMLElement>('.status')!;

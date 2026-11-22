@@ -90,6 +90,7 @@ const started = Date.now();
 let firstLineAt = 0;
 const outcome = await translateSong(source, record, {
   apiKey,
+  ...(env().ANTHROPIC_API_KEY && !pinned ? { claudeKey: env().ANTHROPIC_API_KEY } : {}),
   ...(pinned ? { onlyModels: [pinned] } : {}),
   onStatus: (s) => console.log(`  [status] ${s}`),
   onUpdate: (r) => {

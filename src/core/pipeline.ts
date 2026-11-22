@@ -18,6 +18,8 @@ const MAX_NOTES_PER_LINE = 3;
 
 export interface TranslateOptions {
   apiKey: string;
+  /** Claude key: Claude is tried first when set. */
+  claudeKey?: string;
   /** Scripts only: pin the models tried (see ChainOptions.onlyModels). */
   onlyModels?: string[];
   signal?: AbortSignal;
@@ -303,7 +305,7 @@ async function translatePass(source: SongSource, record: SongRecord, options: Tr
         // record alone lets the chain fall back to another model.
         return builder.added > 0;
       },
-    }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels });
+    }, { signal: options.signal, onStatus: options.onStatus, onAttempt: () => parser.reset(), onlyModels: options.onlyModels, claudeKey: options.claudeKey });
     if (builder.apply(parser.flush())) options.onUpdate?.(record);
     model = result.model;
     if (result.error) stop = stopWithDetail(result.error);

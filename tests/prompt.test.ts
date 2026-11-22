@@ -48,87 +48,18 @@ describe('SYSTEM_PROMPT', () => {
     for (const kind of ['slang', 'wordplay', 'reference', 'idiom', 'ambiguous']) expect(SYSTEM_PROMPT).toContain(kind);
   });
 
-  it('checks subject and tense before each line, and limits the imperative to subjectless lines', () => {
-    expect(SYSTEM_PROMPT).toContain('3. 各行を訳す前に、その英文の主語と時制を確かめる');
-    expect(SYSTEM_PROMPT).toContain('主語のある英文は命令文ではない');
-    // a leading vocative and a Don't-sentence may still be imperatives
-    expect(SYSTEM_PROMPT).toContain('行頭の呼びかけ語を除くと主語が無く、動詞の原形か Don\'t で始まる文だけ');
-    expect(SYSTEM_PROMPT).toContain('無変化の過去形');
-    expect(SYSTEM_PROMPT).toContain('三人称（あの子・あいつ）');
+  it('skips repeats and lines of sounds', () => {
+    expect(SYSTEM_PROMPT).toContain('(=L7) は L7 の繰り返し、(声) は声だけの行なので、どちらも出さない。');
   });
 
-  it('keeps names as names, translates crude idioms by their meaning, and drops no words', () => {
-    expect(SYSTEM_PROMPT).toContain('訳文でもその名前のまま書く');
-    expect(SYSTEM_PROMPT).toContain('慣用の意味を同じ強さの口語で訳す');
-    expect(SYSTEM_PROMPT).toContain('原文に無い語で解釈を補わない');
-    expect(SYSTEM_PROMPT).toContain('原文の語も落とさない');
+  it('keeps sounds in their spelling, since the page removes them', () => {
+    expect(SYSTEM_PROMPT).toContain('原文のつづりのまま書く（画面では取り除く）');
   });
 
-  it('keeps sounds in their own spelling (never katakana, never words) and keeps address terms translated', () => {
-    expect(SYSTEM_PROMPT).toContain('原文のつづりのまま、同じ数だけ同じ位置に書く。');
-    expect(SYSTEM_PROMPT).toContain('カタカナ（オー／ウォー／イェー／エイ／バップ）にも、意味のある語（なあ・行くぜ等）にもしない');
-    // an invented example, so a live run on a real song still shows whether the rule generalizes
-    expect(SYSTEM_PROMPT).toContain("Money keep comin' in, ayy＝金がどんどん入ってくる、ayy");
-    // an example that opened with Ayy made the model open every line with one
-    expect(SYSTEM_PROMPT).not.toContain('＝Ayy、');
-    expect(SYSTEM_PROMPT).not.toContain('this shit way too crazy');
-    expect(SYSTEM_PROMPT).toContain('発声は motifs に入れない');
-    // a group of sounds keeps its spelling and stays one group
-    expect(SYSTEM_PROMPT).toContain('中身が発声だけ（yeah／ayy など）なら原文のつづりのまま書き、語が1つでもあれば、こだまでも訳す。1つの ( ) を、訳と原文の2つの（）にしない。');
-    // an interjection or a call that means something is still translated by its meaning
-    expect(SYSTEM_PROMPT).toContain('ただし驚き・疑問・制止・呼びかけ・否定の意味を持つ感動詞と、hold up のような意味のある掛け声は、その意味を自然な日本語で訳す');
-    // frames and vocatives may be なあ again: the ban was only ever about sounds
-    expect(SYSTEM_PROMPT).toContain('枠の語も訳に残す。');
-    expect(SYSTEM_PROMPT).not.toContain('「なあ」「だろ」のような同意を求める語にしない');
-    expect(SYSTEM_PROMPT).not.toContain('音のまま');
-    expect(SYSTEM_PROMPT).not.toMatch(/motifs[^。]*ayy/);
-    // address terms stay in the keep-the-word bullet, translated as address terms
-    expect(SYSTEM_PROMPT).toContain('行頭・行末の呼びかけ（nigga／motherfucker／homie／girl など）');
-    // the sound rule names only sounds, never words that carry meaning
-    expect(SYSTEM_PROMPT).not.toMatch(/(?:hold up|bitch|homie)[^。]*原文のつづりのまま/);
-  });
-
-  it('reads like spoken Japanese: no katakana stand-ins, no translationese endings, no noun クソ for a placeholder', () => {
-    expect(SYSTEM_PROMPT).toContain('意味のある英語をカタカナ読みで済ませない');
-    // a name stays a name, katakana included
-    expect(SYSTEM_PROMPT).toContain('人名は別：Lil Baby＝リル・ベイビー、Snoop Dogg＝スヌープ・ドッグ');
-    expect(SYSTEM_PROMPT).toContain('日本語では別の意味に読めるカタカナ語（ホールドアップ＝強盗の合図、シスター＝修道女、ノート＝帳面）も使わない。');
-    expect(SYSTEM_PROMPT).toContain('辞書の訳語より、その場面で口にする語を選ぶ');
-    expect(SYSTEM_PROMPT).toContain('〜わ／〜わよ／〜のよ／〜かしら のような翻訳調の語尾は使わず（させないわ→させない、やったのよ→やった）、今の話し言葉で書く');
-    expect(SYSTEM_PROMPT).toContain('名前は変えない');
-    // one song came back with spaces for every 読点
-    expect(SYSTEM_PROMPT).toContain('句の区切りには読点「、」を使い、半角スペースで区切らない。');
-    expect(SYSTEM_PROMPT).toContain('名詞の「クソ」にしない');
-    expect(SYSTEM_PROMPT).toContain('get off my dick＝俺にまとわりつくな');
-  });
-
-  it('says a line of sounds has no id and is not written', () => {
-    expect(SYSTEM_PROMPT).toContain('(声) の行には ID が無く、出さない。');
-  });
-
-  it('keeps slurs and address terms as strong as the original, adds no age, and tells different words apart', () => {
-    expect(SYSTEM_PROMPT).toContain('罵倒語（bitch／ho など）は原文と同じ強さで訳し、「女」「奴」「なあ」のような中立の語に薄めない。');
-    // the word for whom it is aimed at, and nigga by how it is used, not one motif
-    expect(SYSTEM_PROMPT).toContain('男に向けた bitch を「アマ」「女」のような女を指す語にしない');
-    expect(SYSTEM_PROMPT).toContain('nigga は motifs に入れず、使われ方で訳す（呼びかけ＝なあ／人を指す＝奴・奴ら／自分を指す a nigga＝俺／my nigga＝ダチ）。');
-    expect(SYSTEM_PROMPT).toContain('lil\' を「ガキ」「小僧」のような年齢の語にしない（「ちっぽけな」程度か、訳さない）。');
-    expect(SYSTEM_PROMPT).toContain('英語の語が違えば訳語も分け（bitch と ho を同じにしない）、motifs と訳文で同じ訳語を使う。');
-    expect(SYSTEM_PROMPT).not.toContain('罵倒の呼びかけ語は who の相手に合わせ、性別や年齢を足さない。');
-  });
-
-  it('limits the preface to one short who and a plain, short what', () => {
-    expect(SYSTEM_PROMPT).toContain('「AからBへ」の形の自然な1文（例：語り手から別れた恋人へ／兄から弟へ。40字以内。矢印・括弧書き・MVや経歴の情報は書かない）');
-    expect(SYSTEM_PROMPT).toContain('歌詞の中で語り手が何をしているか（1〜2文・80字以内。歌詞から言えることだけ。評価語やジャンル名で締めない）');
-    expect(SYSTEM_PROMPT).not.toContain('あらすじではなく狙いや構図');
-  });
-
-  it('asks for one contiguous quoted phrase and no dictionary definitions in notes', () => {
-    expect(SYSTEM_PROMPT).toContain('q は原文の行の連続した一部をそのまま1つ');
-    expect(SYSTEM_PROMPT).toContain('文頭でも文末でも');
-  });
-
-  it('does not spell out glosses the models produced and might copy', () => {
-    for (const bad of ['高級ブランデー', '高級マスタード', 'グレード', '股間', 'ナニ']) expect(SYSTEM_PROMPT).not.toContain(bad);
+  it('leaves how to translate to the model: no style rules or sample endings', () => {
+    expect(SYSTEM_PROMPT).toContain('どう訳すかは任せます');
+    for (const ending of ['ぜ／', 'じゃねえ', 'みてえ']) expect(SYSTEM_PROMPT).not.toContain(ending);
+    expect(SYSTEM_PROMPT.length).toBeLessThan(1500);
   });
 
   it('is what buildPrompt returns as system', () => {

@@ -18,7 +18,7 @@ beforeEach(() => setKV(memoryStorage()));
 
 describe('defaultSettings', () => {
   it('has no key and shows the translation', () => {
-    expect(defaultSettings()).toEqual({ apiKey: '', hideTranslation: false });
+    expect(defaultSettings()).toEqual({ apiKey: '', claudeKey: '', hideTranslation: false });
     expect(hasKey(defaultSettings())).toBe(false);
   });
 });
@@ -30,7 +30,7 @@ describe('loadSettings', () => {
 
   it('reads the current shape', async () => {
     await setJSON(KEY, { apiKey: ' gm-key ', hideTranslation: true });
-    expect(await loadSettings()).toEqual({ apiKey: 'gm-key', hideTranslation: true });
+    expect(await loadSettings()).toEqual({ apiKey: 'gm-key', claudeKey: '', hideTranslation: true });
   });
 
   it('migrates the v3.0 provider list: only the Gemini key survives', async () => {
@@ -44,12 +44,12 @@ describe('loadSettings', () => {
       thinking: 'high',
       hideTranslation: true,
     });
-    expect(await loadSettings()).toEqual({ apiKey: 'gm-key', hideTranslation: true });
+    expect(await loadSettings()).toEqual({ apiKey: 'gm-key', claudeKey: '', hideTranslation: true });
   });
 
   it('drops a Groq or OpenRouter key from old settings that have no Gemini key', async () => {
     await setJSON(KEY, { providers: [{ preset: 'gemini', apiKey: '' }, { preset: 'groq', apiKey: 'gk' }, { preset: 'openrouter', apiKey: 'ork' }], thinking: 'low', hideTranslation: false });
-    expect(await loadSettings()).toEqual({ apiKey: '', hideTranslation: false });
+    expect(await loadSettings()).toEqual({ apiKey: '', claudeKey: '', hideTranslation: false });
   });
 
   it('finds the Gemini entry by kind when the preset is missing', async () => {
@@ -105,7 +105,7 @@ describe('setApiKey / updateSettings', () => {
     await loadSettings();
     await setJSON(KEY, { apiKey: 'gm', hideTranslation: true }); // another tab
     const s = await updateSettings((fresh) => ({ ...fresh }));
-    expect(s).toEqual({ apiKey: 'gm', hideTranslation: true });
+    expect(s).toEqual({ apiKey: 'gm', claudeKey: '', hideTranslation: true });
   });
 
   it('notifies listeners with the new settings until they unsubscribe', async () => {
@@ -121,7 +121,7 @@ describe('setApiKey / updateSettings', () => {
 
   it('updateSettings applies any change and sanitises the result', async () => {
     const s = await updateSettings((fresh) => ({ ...fresh, apiKey: ' k ', hideTranslation: true }));
-    expect(s).toEqual({ apiKey: 'k', hideTranslation: true });
+    expect(s).toEqual({ apiKey: 'k', claudeKey: '', hideTranslation: true });
   });
 });
 

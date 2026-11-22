@@ -7,6 +7,8 @@ import { getJSON, getRaw, setJSON } from '../platform/storage';
 export interface Settings {
   /** The Gemini API key ('' = none yet). */
   apiKey: string;
+  /** The Anthropic (Claude) API key ('' = none). Tried before Gemini when set. */
+  claudeKey: string;
   /** Legacy (v3): 訳を隠す used to be one switch for every song. The reading surface now follows SongRecord.hidden; old data still reads. */
   hideTranslation: boolean;
 }
@@ -15,7 +17,7 @@ const KEY = 'll3:settings';
 const LEGACY_GEMINI_KEY = 'gemini_api_key';
 
 export function defaultSettings(): Settings {
-  return { apiKey: '', hideTranslation: false };
+  return { apiKey: '', claudeKey: '', hideTranslation: false };
 }
 
 /** Reads every shape this script has stored: `{ apiKey, hideTranslation }`, the v3.0 provider
@@ -24,7 +26,7 @@ function sanitize(raw: unknown): Settings {
   const base = defaultSettings();
   if (!raw || typeof raw !== 'object') return base;
   const r = raw as {
-    apiKey?: unknown; providers?: unknown; hideTranslation?: unknown; showTranslation?: unknown;
+    apiKey?: unknown; claudeKey?: unknown; providers?: unknown; hideTranslation?: unknown; showTranslation?: unknown;
   };
   let apiKey = typeof r.apiKey === 'string' ? r.apiKey : '';
   if (!apiKey && Array.isArray(r.providers)) {
@@ -34,6 +36,7 @@ function sanitize(raw: unknown): Settings {
   }
   return {
     apiKey: apiKey.trim(),
+    claudeKey: typeof r.claudeKey === 'string' ? r.claudeKey.trim() : '',
     hideTranslation: typeof r.hideTranslation === 'boolean' ? r.hideTranslation : r.showTranslation === false,
   };
 }
@@ -77,6 +80,10 @@ export async function updateSettings(change: (fresh: Settings) => Settings): Pro
 
 export async function setApiKey(apiKey: string): Promise<Settings> {
   return updateSettings((s) => ({ ...s, apiKey: apiKey.trim() }));
+}
+
+export async function setClaudeKey(claudeKey: string): Promise<Settings> {
+  return updateSettings((s) => ({ ...s, claudeKey: claudeKey.trim() }));
 }
 
 export function onSettings(fn: (s: Settings) => void): () => void {
