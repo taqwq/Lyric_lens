@@ -22,6 +22,8 @@ const CLAUDE_BASE = 'https://api.anthropic.com';
 const API_VERSION = '2026-10-21';
 /** Opus thinks before its first line; allow it longer than a Gemini model. */
 const CLAUDE_FIRST_TEXT_TIMEOUT_MS = 90_000;
+/** How long the model list may take, in either mode (a first connection can be slow). */
+const PROBE_TIMEOUT_MS = 20_000;
 /** Room for thinking, which counts against max_tokens. */
 const THINKING_ROOM = 16_000;
 const MAX_TOKENS = 128_000;
@@ -61,24 +63,46 @@ export class ClaudeProvider {
     };
   }
 
-  /** Checks the key with the model list (free: no tokens are used). Tampermonkey's stream mode
-   *  was seen to deliver nothing from Anthropic, so a silent stream is retried in text mode, and
-   *  the mode that answered is kept for translations. */
+  /** The model list: free (no tokens are used), so it serves to check the key and the transport. */
+  private listModels(textMode: boolean, signal?: AbortSignal) {
+    return streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: 'GET', headers: this.headers(), signal, idleTimeoutMs: PROBE_TIMEOUT_MS, textMode });
+  }
+
+  /** Checks the key with the model list. Tampermonkey's stream mode was seen to deliver nothing
+   *  from Anthropic, so a silent stream is retried in text mode, and the mode that answered is
+   *  kept for translations. */
   async verify(signal?: AbortSignal): Promise<void> {
-    const ask = (textMode: boolean, idleTimeoutMs: number) => streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: 'GET', headers: this.headers(), signal, idleTimeoutMs, textMode });
     let res;
     let textMode = false;
     try {
-      res = await ask(false, 8_000);
+      res = await this.listModels(false, signal);
     } catch (error) {
       if (!(error instanceof LLMError) || error.kind !== 'timeout') throw error;
       console.info('[Lyric Lens] Claude: no answer in stream mode, trying text mode');
       textMode = true;
-      res = await ask(true, 20_000);
+      res = await this.listModels(true, signal);
     }
     console.info('[Lyric Lens] Claude key check answered', { mode: textMode ? 'text' : 'stream', status: res.status });
     if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
-    await setTextMode(textMode);
+    await saveMode(textMode);
+  }
+
+  /** Text mode shows nothing until the whole answer is in, so it is kept only while stream mode
+   *  still fails: once a day, before a translation, stream mode is tried again on the free model
+   *  list. Any answer at all (even an error status) means streams arrive again. */
+  private async useTextMode(signal?: AbortSignal): Promise<boolean> {
+    const mode = await loadMode();
+    if (!mode.text || Date.now() - mode.at < RECHECK_MS) return mode.text;
+    try {
+      await this.listModels(false, signal);
+      console.info('[Lyric Lens] Claude: stream mode answers again');
+      await saveMode(false);
+      return false;
+    } catch (error) {
+      if (error instanceof LLMError && error.kind === 'aborted') throw error;
+      if (error instanceof LLMError && error.kind === 'timeout') await saveMode(true);
+      return true;
+    }
   }
 
   async generate(req: Omit<GenerateRequest, 'model'>): Promise<GenerateResult> {
@@ -110,7 +134,7 @@ export class ClaudeProvider {
     };
 
     const res = await streamRequest({
-      textMode: await useTextMode(),
+      textMode: await this.useTextMode(req.signal),
       url: `${CLAUDE_BASE}/v1/messages`,
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -133,13 +157,23 @@ export class ClaudeProvider {
 /* ---------- how the manager delivers Anthropic's answers ---------- */
 
 const MODE_KEY = 'll3:claude:text';
+/** How long a failed stream-mode check stands before stream mode is tried again. */
+const RECHECK_MS = 24 * 60 * 60_000;
 
-async function useTextMode(): Promise<boolean> {
-  try { return await getJSON<boolean>(MODE_KEY, false); } catch { return false; }
+interface Mode { text: boolean; at: number }
+
+async function loadMode(): Promise<Mode> {
+  try {
+    const saved = await getJSON<unknown>(MODE_KEY, false);
+    // Earlier versions stored a bare true: check stream mode again at once.
+    if (saved === true) return { text: true, at: 0 };
+    if (saved && typeof saved === 'object' && (saved as Mode).text === true) return { text: true, at: Number((saved as Mode).at) || 0 };
+  } catch { /* advice only */ }
+  return { text: false, at: 0 };
 }
 
-async function setTextMode(on: boolean): Promise<void> {
-  try { await setJSON(MODE_KEY, on); } catch { /* advice only */ }
+async function saveMode(text: boolean): Promise<void> {
+  try { await setJSON(MODE_KEY, text ? { text: true, at: Date.now() } : false); } catch { /* advice only */ }
 }
 
 /* ---------- when Claude is skipped ---------- */

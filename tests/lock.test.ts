@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getJSON, getRaw, memoryStorage, setJSON, setKV, type KV } from '../src/platform/storage';
 import { acquireLock, readLock, requestAbort, TAB_ID, type Lock, type LockHandle } from '../src/store/lock';
 
-const KEY = 'll3:lock';
+const KEY = 'll3:lock:song-1';
+const KEY2 = 'll3:lock:song-2';
 const T0 = Date.UTC(2026, 9, 26, 3, 0);
 
 let kv: KV;
@@ -35,33 +36,33 @@ async function acquire(id = 'song-1', title = 'Song One'): Promise<LockHandle | 
 
 /** A lock another tab wrote (TAB_ID is fixed per module instance, so any other `tab` string is "someone else"). */
 function theirs(over: Partial<Lock> = {}): Lock {
-  return { id: 'song-9', title: 'Their Song', tab: 'other-tab', beat: Date.now(), ...over };
+  return { id: 'song-1', title: 'Their Song', tab: 'other-tab', beat: Date.now(), ...over };
 }
 
 describe('readLock', () => {
   it('is null when nothing is stored', async () => {
-    expect(await readLock()).toBeNull();
+    expect(await readLock('song-1')).toBeNull();
   });
 
   it('returns a fresh lock as stored', async () => {
     const lock = theirs();
     await setJSON(KEY, lock);
-    expect(await readLock()).toEqual(lock);
+    expect(await readLock('song-1')).toEqual(lock);
   });
 
   it('a lock is stale only after more than 10 s without a beat', async () => {
     await setJSON(KEY, theirs({ beat: T0 - 10_000 }));
-    expect(await readLock()).not.toBeNull();
+    expect(await readLock('song-1')).not.toBeNull();
     await setJSON(KEY, theirs({ beat: T0 - 10_001 }));
-    expect(await readLock()).toBeNull();
+    expect(await readLock('song-1')).toBeNull();
   });
 
   it('goes stale as the clock runs on', async () => {
     await setJSON(KEY, theirs());
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(await readLock()).not.toBeNull();
+    expect(await readLock('song-1')).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1);
-    expect(await readLock()).toBeNull();
+    expect(await readLock('song-1')).toBeNull();
   });
 });
 
@@ -72,7 +73,7 @@ describe('acquireLock', () => {
     const expected: Lock = { id: 'song-1', title: 'Song One', tab: TAB_ID, beat: T0 };
     expect(handle!.lock).toEqual(expected);
     expect(await getJSON<Lock | null>(KEY, null)).toEqual(expected);
-    expect(await readLock()).toEqual(expected);
+    expect(await readLock('song-1')).toEqual(expected);
   });
 
   it('is refused while another tab holds a fresh lock, and leaves it untouched', async () => {
@@ -82,11 +83,12 @@ describe('acquireLock', () => {
     expect(await getJSON<Lock | null>(KEY, null)).toEqual(other);
   });
 
-  it('is refused even for the same song if another tab holds it', async () => {
-    const other = theirs({ id: 'song-1' });
-    await setJSON(KEY, other);
-    expect(await acquire('song-1')).toBeNull();
-    expect(await getJSON<Lock | null>(KEY, null)).toEqual(other);
+  it('is not blocked by another tab translating another song', async () => {
+    const other = theirs({ id: 'song-2' });
+    await setJSON(KEY2, other);
+    expect(await acquire('song-1')).not.toBeNull();
+    expect(await getJSON<Lock | null>(KEY2, null)).toEqual(other);
+    expect(await readLock('song-2')).toEqual(other);
   });
 
   it('is refused for a lock that is only a little old', async () => {
@@ -107,13 +109,14 @@ describe('acquireLock', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const second = await acquire('song-1');
     expect(second).not.toBeNull();
-    expect((await readLock())?.tab).toBe(TAB_ID);
+    expect((await readLock('song-1'))?.tab).toBe(TAB_ID);
   });
 
-  it('this tab is refused a second song while it holds a lock (one in-flight request across songs)', async () => {
+  it('locks are per song: holding one song does not stop another from being taken', async () => {
     expect(await acquire('song-1')).not.toBeNull();
-    expect(await acquire('song-2')).toBeNull();
-    expect((await readLock())?.id).toBe('song-1');
+    expect(await acquire('song-2')).not.toBeNull();
+    expect((await readLock('song-1'))?.id).toBe('song-1');
+    expect((await readLock('song-2'))?.id).toBe('song-2');
   });
 
   it('loses the race when another tab writes during the 80 ms verification window', async () => {
@@ -126,14 +129,6 @@ describe('acquireLock', () => {
     expect(await pending).toBeNull();
     expect(await getJSON<Lock | null>(KEY, null)).toEqual(winner);
   });
-
-  it('also loses when the winner is another song from this very tab id', async () => {
-    const pending = acquireLock('song-1', 'Song One');
-    await vi.advanceTimersByTimeAsync(10);
-    await setJSON(KEY, { id: 'song-2', title: 'Two', tab: TAB_ID, beat: Date.now() });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(await pending).toBeNull();
-  });
 });
 
 describe('release', () => {
@@ -141,7 +136,7 @@ describe('release', () => {
     const handle = (await acquire())!;
     await handle.release();
     expect(await getRaw(KEY)).toBeUndefined();
-    expect(await readLock()).toBeNull();
+    expect(await readLock('song-1')).toBeNull();
   });
 
   it('leaves another tab’s lock alone', async () => {
@@ -152,12 +147,11 @@ describe('release', () => {
     expect(await getJSON<Lock | null>(KEY, null)).toEqual(other);
   });
 
-  it('leaves a lock this tab holds for another song alone', async () => {
+  it('leaves this tab’s lock on another song alone', async () => {
     const handle = (await acquire('song-1'))!;
-    const mine = { id: 'song-2', title: 'Two', tab: TAB_ID, beat: Date.now() };
-    await setJSON(KEY, mine);
+    const two = (await acquire('song-2', 'Two'))!;
     await handle.release();
-    expect(await getJSON<Lock | null>(KEY, null)).toEqual(mine);
+    expect(await getJSON<Lock | null>(KEY2, null)).toEqual(two.lock);
   });
 
   it('does nothing when the lock is already gone', async () => {
@@ -185,12 +179,12 @@ describe('heartbeat', () => {
     const started = Date.now();
 
     await vi.advanceTimersByTimeAsync(1_999);
-    expect((await readLock())?.beat).toBe(T0);
+    expect((await readLock('song-1'))?.beat).toBe(T0);
     await vi.advanceTimersByTimeAsync(1);
     expect(await getJSON<Lock | null>(KEY, null)).toEqual({ id: 'song-1', title: 'Song One', tab: TAB_ID, beat: started + 2_000 });
 
     await vi.advanceTimersByTimeAsync(60_000);
-    const lock = await readLock();
+    const lock = await readLock('song-1');
     expect(lock).not.toBeNull();
     expect(lock!.tab).toBe(TAB_ID);
     expect(Date.now() - lock!.beat).toBeLessThanOrEqual(2_000);
@@ -234,43 +228,40 @@ describe('heartbeat', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('stops when the stored lock is this tab’s but for another song', async () => {
-    const handle = (await acquire('song-1'))!;
-    handle.start(vi.fn());
-    const mine = { id: 'song-2', title: 'Two', tab: TAB_ID, beat: Date.now() };
-    await setJSON(KEY, mine);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(await getJSON<Lock | null>(KEY, null)).toEqual(mine);
-  });
-
   it('writes the lock back if it has vanished from storage', async () => {
     const handle = (await acquire('song-1', 'Song One'))!;
     handle.start(vi.fn());
     await kv.del(KEY);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(await readLock()).toMatchObject({ id: 'song-1', title: 'Song One', tab: TAB_ID });
+    expect(await readLock('song-1')).toMatchObject({ id: 'song-1', title: 'Song One', tab: TAB_ID });
     expect(vi.getTimerCount()).toBe(1);
   });
 });
 
 describe('requestAbort', () => {
+  it('flags only the named song’s lock', async () => {
+    const other = theirs({ id: 'song-2' });
+    await setJSON(KEY2, other);
+    await requestAbort('song-1');
+    expect(await getJSON<Lock | null>(KEY2, null)).toEqual(other);
+  });
+
   it('flags the current lock and leaves the rest of it intact', async () => {
     const other = theirs();
     await setJSON(KEY, other);
-    await requestAbort();
+    await requestAbort('song-1');
     expect(await getJSON<Lock | null>(KEY, null)).toEqual({ ...other, abort: true });
   });
 
   it('does nothing when there is no lock', async () => {
-    await requestAbort();
+    await requestAbort('song-1');
     expect(await getRaw(KEY)).toBeUndefined();
   });
 
   it('does nothing to a stale lock', async () => {
     const stale = theirs({ beat: T0 - 20_000 });
     await setJSON(KEY, stale);
-    await requestAbort();
+    await requestAbort('song-1');
     expect(await getJSON<Lock | null>(KEY, null)).toEqual(stale);
   });
 
@@ -279,8 +270,8 @@ describe('requestAbort', () => {
     const handle = (await acquire('song-1'))!;
     handle.start(onAbort);
 
-    await requestAbort();
-    expect((await readLock())?.abort).toBe(true);
+    await requestAbort('song-1');
+    expect((await readLock('song-1'))?.abort).toBe(true);
     expect(onAbort).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1_999);
@@ -292,9 +283,9 @@ describe('requestAbort', () => {
   it('the owner keeps the lock while it winds down (flag kept, beat refreshed)', async () => {
     const handle = (await acquire('song-1', 'Song One'))!;
     handle.start(vi.fn());
-    await requestAbort();
+    await requestAbort('song-1');
     await vi.advanceTimersByTimeAsync(2_000);
-    const lock = await readLock();
+    const lock = await readLock('song-1');
     expect(lock).toMatchObject({ id: 'song-1', title: 'Song One', tab: TAB_ID, abort: true });
     expect(Date.now() - lock!.beat).toBeLessThanOrEqual(2_000);
   });
@@ -304,7 +295,7 @@ describe('requestAbort', () => {
     const handle = (await acquire())!;
     handle.start(onAbort);
     await handle.release();
-    await requestAbort();
+    await requestAbort('song-1');
     expect(await getRaw(KEY)).toBeUndefined();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(onAbort).not.toHaveBeenCalled();
@@ -313,11 +304,11 @@ describe('requestAbort', () => {
   it('after the owner released, a new tab can take the lock without inheriting the flag', async () => {
     const handle = (await acquire('song-1'))!;
     handle.start(vi.fn());
-    await requestAbort();
+    await requestAbort('song-1');
     await handle.release();
-    const next = await acquire('song-2', 'Two');
+    const next = await acquire('song-1', 'Again');
     expect(next).not.toBeNull();
-    expect(await readLock()).toEqual({ id: 'song-2', title: 'Two', tab: TAB_ID, beat: next!.lock.beat });
-    expect(await readLock()).not.toHaveProperty('abort');
+    expect(await readLock('song-1')).toEqual({ id: 'song-1', title: 'Again', tab: TAB_ID, beat: next!.lock.beat });
+    expect(await readLock('song-1')).not.toHaveProperty('abort');
   });
 });

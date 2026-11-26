@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lyric Lens for Genius
 // @namespace    taq.replay.lyrics
-// @version      3.0.0.202611221416
+// @version      3.0.0.202611270203
 // @description  Genius の歌詞の各行の下に、曲全体の文脈を踏まえた自然な日本語訳を添えます。読み違えやすい語句にだけ短い注を付けます。無料の Gemini API キーで動きます。
 // @author       taq
 // @match        https://genius.com/*
@@ -476,6 +476,7 @@
   var CLAUDE_BASE = "https://api.anthropic.com";
   var API_VERSION = "2026-10-21";
   var CLAUDE_FIRST_TEXT_TIMEOUT_MS = 9e4;
+  var PROBE_TIMEOUT_MS = 2e4;
   var THINKING_ROOM = 16e3;
   var MAX_TOKENS = 128e3;
   var CREDIT = /credit balance|billing|purchase credits/i;
@@ -511,24 +512,44 @@
         "anthropic-dangerous-direct-browser-access": "true"
       };
     }
-    /** Checks the key with the model list (free: no tokens are used). Tampermonkey's stream mode
-     *  was seen to deliver nothing from Anthropic, so a silent stream is retried in text mode, and
-     *  the mode that answered is kept for translations. */
+    /** The model list: free (no tokens are used), so it serves to check the key and the transport. */
+    listModels(textMode, signal) {
+      return streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: "GET", headers: this.headers(), signal, idleTimeoutMs: PROBE_TIMEOUT_MS, textMode });
+    }
+    /** Checks the key with the model list. Tampermonkey's stream mode was seen to deliver nothing
+     *  from Anthropic, so a silent stream is retried in text mode, and the mode that answered is
+     *  kept for translations. */
     async verify(signal) {
-      const ask = (textMode2, idleTimeoutMs) => streamRequest({ url: `${CLAUDE_BASE}/v1/models?limit=1`, method: "GET", headers: this.headers(), signal, idleTimeoutMs, textMode: textMode2 });
       let res;
       let textMode = false;
       try {
-        res = await ask(false, 8e3);
+        res = await this.listModels(false, signal);
       } catch (error) {
         if (!(error instanceof LLMError) || error.kind !== "timeout") throw error;
         console.info("[Lyric Lens] Claude: no answer in stream mode, trying text mode");
         textMode = true;
-        res = await ask(true, 2e4);
+        res = await this.listModels(true, signal);
       }
       console.info("[Lyric Lens] Claude key check answered", { mode: textMode ? "text" : "stream", status: res.status });
       if (res.status < 200 || res.status >= 300) throw classifyClaudeError(res.status, res.text, res.headers);
-      await setTextMode(textMode);
+      await saveMode(textMode);
+    }
+    /** Text mode shows nothing until the whole answer is in, so it is kept only while stream mode
+     *  still fails: once a day, before a translation, stream mode is tried again on the free model
+     *  list. Any answer at all (even an error status) means streams arrive again. */
+    async useTextMode(signal) {
+      const mode = await loadMode();
+      if (!mode.text || Date.now() - mode.at < RECHECK_MS) return mode.text;
+      try {
+        await this.listModels(false, signal);
+        console.info("[Lyric Lens] Claude: stream mode answers again");
+        await saveMode(false);
+        return false;
+      } catch (error) {
+        if (error instanceof LLMError && error.kind === "aborted") throw error;
+        if (error instanceof LLMError && error.kind === "timeout") await saveMode(true);
+        return true;
+      }
     }
     async generate(req) {
       const body = {
@@ -561,7 +582,7 @@
         if (data.type === "message_delta" && data.delta?.stop_reason) stopReason = data.delta.stop_reason;
       };
       const res = await streamRequest({
-        textMode: await useTextMode(),
+        textMode: await this.useTextMode(req.signal),
         url: `${CLAUDE_BASE}/v1/messages`,
         headers: this.headers(),
         body: JSON.stringify(body),
@@ -582,16 +603,19 @@
     }
   };
   var MODE_KEY = "ll3:claude:text";
-  async function useTextMode() {
+  var RECHECK_MS = 24 * 60 * 6e4;
+  async function loadMode() {
     try {
-      return await getJSON(MODE_KEY, false);
+      const saved = await getJSON(MODE_KEY, false);
+      if (saved === true) return { text: true, at: 0 };
+      if (saved && typeof saved === "object" && saved.text === true) return { text: true, at: Number(saved.at) || 0 };
     } catch {
-      return false;
     }
+    return { text: false, at: 0 };
   }
-  async function setTextMode(on) {
+  async function saveMode(text2) {
     try {
-      await setJSON(MODE_KEY, on);
+      await setJSON(MODE_KEY, text2 ? { text: true, at: Date.now() } : false);
     } catch {
     }
   }
@@ -2203,12 +2227,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
 
   // src/store/lock.ts
-  var KEY = "ll3:lock";
+  var PREFIX = "ll3:lock:";
+  var keyOf = (id) => PREFIX + id;
   var STALE_MS = 1e4;
   var BEAT_MS = 2e3;
   var TAB_ID = Math.random().toString(36).slice(2, 10);
-  async function readLock() {
-    const lock = await getJSON(KEY, null);
+  async function readLock(id) {
+    const lock = await getJSON(keyOf(id), null);
     if (!lock || Date.now() - lock.beat > STALE_MS) return null;
     return lock;
   }
@@ -2216,11 +2241,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     constructor(lock) {
       __publicField(this, "lock", lock);
       __publicField(this, "timer", null);
+      __publicField(this, "key");
+      this.key = keyOf(lock.id);
     }
     /** Keeps the lock alive; calls onAbort if another tab asks this one to stop. */
     start(onAbort) {
       this.timer = setInterval(async () => {
-        const current = await getJSON(KEY, null);
+        const current = await getJSON(this.key, null);
         const ours = current?.tab === TAB_ID && current.id === this.lock.id;
         if (current && !ours) {
           if (this.timer) clearInterval(this.timer);
@@ -2228,33 +2255,33 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           return;
         }
         if (ours && current?.abort) onAbort();
-        await setJSON(KEY, { ...this.lock, beat: Date.now(), ...ours && current?.abort ? { abort: true } : {} });
+        await setJSON(this.key, { ...this.lock, beat: Date.now(), ...ours && current?.abort ? { abort: true } : {} });
       }, BEAT_MS);
     }
     async release() {
       if (this.timer) clearInterval(this.timer);
       this.timer = null;
-      const current = await getJSON(KEY, null);
-      if (current?.tab === TAB_ID && current.id === this.lock.id) await remove(KEY);
+      const current = await getJSON(this.key, null);
+      if (current?.tab === TAB_ID && current.id === this.lock.id) await remove(this.key);
     }
   };
   async function acquireLock(id, title) {
-    const current = await readLock();
-    if (current && (current.tab !== TAB_ID || current.id !== id)) return null;
+    const current = await readLock(id);
+    if (current && current.tab !== TAB_ID) return null;
     const lock = { id, title, tab: TAB_ID, beat: Date.now() };
-    await setJSON(KEY, lock);
+    await setJSON(keyOf(id), lock);
     await new Promise((r) => setTimeout(r, 80));
-    const check = await getJSON(KEY, null);
+    const check = await getJSON(keyOf(id), null);
     if (check?.tab !== TAB_ID || check.id !== id) return null;
     return new LockHandle(lock);
   }
-  async function requestAbort() {
-    const current = await readLock();
-    if (current) await setJSON(KEY, { ...current, abort: true });
+  async function requestAbort(id) {
+    const current = await readLock(id);
+    if (current) await setJSON(keyOf(id), { ...current, abort: true });
   }
 
   // src/store/settings.ts
-  var KEY2 = "ll3:settings";
+  var KEY = "ll3:settings";
   var LEGACY_GEMINI_KEY = "gemini_api_key";
   function defaultSettings() {
     return { apiKey: "", claudeKey: "", hideTranslation: false };
@@ -2278,13 +2305,13 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   var cached = defaultSettings();
   var listeners = /* @__PURE__ */ new Set();
   async function loadSettings() {
-    const stored = await getJSON(KEY2, null);
+    const stored = await getJSON(KEY, null);
     let settings = sanitize(stored);
     if (!stored) {
       const legacy = (await getRaw(LEGACY_GEMINI_KEY))?.replace(/^"|"$/g, "").trim();
       if (legacy) {
         settings = { ...settings, apiKey: legacy };
-        await setJSON(KEY2, settings);
+        await setJSON(KEY, settings);
       }
     }
     cached = settings;
@@ -2295,7 +2322,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
   }
   async function write(next) {
     cached = sanitize(next);
-    await setJSON(KEY2, cached);
+    await setJSON(KEY, cached);
     listeners.forEach((fn) => fn(cached));
   }
   async function updateSettings(change) {
@@ -4951,9 +4978,10 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
       this.avail = await availability(apiKey, claudeKey);
       this.keyBad = !apiKey.trim() || (await keyStatus(apiKey)).kind === "bad";
     }
-    /** A lock held by another tab. */
+    /** A lock on the song on screen held by another tab. */
     async otherLock() {
-      const lock = await readLock();
+      if (!this.identity) return null;
+      const lock = await readLock(this.identity);
       return lock && lock.tab !== TAB_ID ? lock : null;
     }
     affectsLyrics(m) {
@@ -5194,7 +5222,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
           this.stop();
           break;
         case "stopMirror":
-          void requestAbort();
+          void requestAbort(this.identity);
           break;
         case "stopOther":
           this.stopOther();
@@ -5286,7 +5314,7 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
         lock = await acquireLock(id, source.meta.title || "前の曲");
         if (!lock) {
           this.foreignLock = await this.otherLock();
-          cannotRetranslate("別の曲を翻訳中です。完了後に再試行できます");
+          cannotRetranslate("別のタブでこの曲を翻訳中です。完了後に再試行できます");
           this.renderNow();
           return;
         }
@@ -5440,7 +5468,6 @@ ${ask}${what}${noteSentence(notesLeft, bonusLeft)}最後に {"t":"end"} を書�
     }
     stopOther() {
       if (this.run && this.run.id !== this.identity) this.run.controller.abort();
-      else void requestAbort();
     }
     /** 訳を隠す belongs to the song: it is saved on the record (without touching its date). */
     async toggleHidden() {
@@ -5764,7 +5791,7 @@ html.ll-hidden .ll-line, html.ll-hidden .ll-note, html.ll-hidden .ll-preface { d
     if (false) window.__ll = app;
     registerMenu("Lyric Lensの設定", () => app.openSettings(null));
     app.start().catch((error) => console.error("[Lyric Lens] failed to start", error));
-    console.info(`[Lyric Lens] v${"3.0.0.202611221416"}`);
+    console.info(`[Lyric Lens] v${"3.0.0.202611270203"}`);
   }
   if (document.body) boot();
   else document.addEventListener("DOMContentLoaded", boot, { once: true });

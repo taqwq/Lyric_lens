@@ -1985,7 +1985,7 @@ describe('cleanOtherProviders', () => {
     await setJSON('ll3:s:id:1', { v: 2 });
     await setJSON('ll3:index', []);
     await setJSON('ll3:settings', { apiKey: KEY, hideTranslation: false });
-    await setJSON('ll3:lock', { id: 'x' });
+    await setJSON('ll3:lock:x', { id: 'x' });
   }
 
   it('drops other services models lists, cooldowns, health and bad-key marks, and nothing else', async () => {
@@ -1995,7 +1995,7 @@ describe('cleanOtherProviders', () => {
     expect(Object.keys(await getJSON<Record<string, unknown>>('ll3:health', {}))).toEqual([mine(A)]);
     expect(Object.keys(await getJSON<Record<string, unknown>>('ll3:flashdegraded', {}))).toEqual([mine('')]);
     expect((await listKeys()).sort()).toEqual([
-      `ll3:badkey:${keyTagOf(KEY)}`, 'll3:cooldowns', 'll3:flashdegraded', 'll3:health', 'll3:index', 'll3:lock', `ll3:models:${mine('')}`, 'll3:s:id:1', 'll3:settings',
+      `ll3:badkey:${keyTagOf(KEY)}`, 'll3:cooldowns', 'll3:flashdegraded', 'll3:health', 'll3:index', 'll3:lock:x', `ll3:models:${mine('')}`, 'll3:s:id:1', 'll3:settings',
     ].sort());
   });
 

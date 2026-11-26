@@ -252,11 +252,12 @@ export class App {
     this.keyBad = !apiKey.trim() || (await keyStatus(apiKey)).kind === 'bad';
   }
 
-  /** A lock held by another tab. */
+  /** A lock on the song on screen held by another tab. */
   private async otherLock(): Promise<Lock | null> {
+    if (!this.identity) return null;
     // This tab's own request (for any song) is this.run; its lock is never "another tab",
     // even in the moment between acquiring it and setting this.run.
-    const lock = await readLock();
+    const lock = await readLock(this.identity);
     return lock && lock.tab !== TAB_ID ? lock : null;
   }
 
@@ -499,7 +500,7 @@ export class App {
       case 'start': this.opening = true; void this.translate('start').catch((e) => console.error('[Lyric Lens]', e)); break;
       case 'resume': this.opening = true; void this.translate('resume').catch((e) => console.error('[Lyric Lens]', e)); break;
       case 'stop': this.stop(); break;
-      case 'stopMirror': void requestAbort(); break;
+      case 'stopMirror': void requestAbort(this.identity); break;
       case 'stopOther': this.stopOther(); break;
       case 'hide': void this.toggleHidden(); break;
       case 'settings': this.openSettings(el); break;
@@ -596,7 +597,7 @@ export class App {
       lock = await acquireLock(id, source.meta.title || '前の曲');
       if (!lock) {
         this.foreignLock = await this.otherLock();
-        cannotRetranslate('別の曲を翻訳中です。完了後に再試行できます');
+        cannotRetranslate('別のタブでこの曲を翻訳中です。完了後に再試行できます');
         this.renderNow();
         return;
       }
@@ -771,7 +772,6 @@ export class App {
 
   private stopOther(): void {
     if (this.run && this.run.id !== this.identity) this.run.controller.abort();
-    else void requestAbort();
   }
 
   /** 訳を隠す belongs to the song: it is saved on the record (without touching its date). */

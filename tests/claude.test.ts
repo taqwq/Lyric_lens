@@ -75,6 +75,59 @@ describe('ClaudeProvider.verify', () => {
     await new ClaudeProvider(CLAUDE_KEY).generate({ system: 's', user: 'u', maxOutputTokens: 8000, onText: () => {} });
     expect(modes).toEqual([false, true, true]);
   });
+
+  it('tries stream mode again a day after it failed, and keeps it when it answers', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 10, 27, 3, 0));
+    try {
+      const base = http.getMockImplementation()!;
+      const calls: Array<[string, boolean | undefined]> = [];
+      let streamWorks = false;
+      http.mockImplementation(async (req: StreamRequest) => {
+        calls.push([req.url.includes('/v1/models') ? 'models' : 'messages', req.textMode]);
+        if (req.url.includes('/v1/models')) {
+          if (!req.textMode && !streamWorks) {
+            const { LLMError } = await import('../src/llm/errors');
+            throw new LLMError('timeout', '返事がないため打ち切りました');
+          }
+          return { status: 200, text: '{"data":[]}', headers: '' };
+        }
+        return base(req);
+      });
+      const generate = () => new ClaudeProvider(CLAUDE_KEY).generate({ system: 's', user: 'u', maxOutputTokens: 8000, onText: () => {} });
+      await new ClaudeProvider(CLAUDE_KEY).verify();
+      await generate();
+      // A day later stream mode still fails: text mode stays, checked again after another day.
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      await generate();
+      await generate();
+      // Another day on, stream mode answers: translations stream again, with no further check.
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      streamWorks = true;
+      await generate();
+      await generate();
+      expect(calls).toEqual([
+        ['models', false], ['models', true], ['messages', true],
+        ['models', false], ['messages', true], ['messages', true],
+        ['models', false], ['messages', false], ['messages', false],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks stream mode at once when an earlier version saved text mode', async () => {
+    const { setJSON } = await import('../src/platform/storage');
+    await setJSON('ll3:claude:text', true);
+    const modes: Array<[string, boolean | undefined]> = [];
+    const base = http.getMockImplementation()!;
+    http.mockImplementation(async (req: StreamRequest) => {
+      modes.push([req.url.includes('/v1/models') ? 'models' : 'messages', req.textMode]);
+      return base(req);
+    });
+    await new ClaudeProvider(CLAUDE_KEY).generate({ system: 's', user: 'u', maxOutputTokens: 8000, onText: () => {} });
+    expect(modes).toEqual([['models', false], ['messages', false]]);
+  });
 });
 
 describe('ClaudeProvider.generate', () => {

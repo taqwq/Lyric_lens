@@ -61,7 +61,7 @@ The song identity is the numeric Genius song ID read from the page's song data. 
 | **S2 Never read** | Primary `日本語に翻訳` · `設定` | — | None | Start the request |
 | **S2q Quota known exhausted** (every candidate model is in a quota cooldown, see §8) | `本日の無料枠を使い切りました` · `設定` | `{when}から再び翻訳できます` (omitted once that time has passed) | None | Nothing is sent. At reset the primary `日本語に翻訳` is back. |
 | **S2f First request failed** (a stop is recorded and no line arrived) | Primary `再試行` with the button rule of the seam table below · `設定`. An invalid key shows the primary `設定を開く` alone. | The reason, in a sentence that points at nothing on the page (no `ここ`, no `続き`; see §4) | None | Retry by tapping. A stop that no longer applies (quota reset, key fixed) reads as plain S2. |
-| **S2b Another song translating** (global lock held) | `別の曲を翻訳しています` · `その曲を停止` in the `停止` slot | `「{title}」の翻訳が終わると、この曲を翻訳できます` | None | Stop the other job. When the lock is released the row returns to S2 by itself; no request is sent until the reader taps. |
+| **S2b Another song translating** (this tab is translating another song) | `別の曲を翻訳しています` · `その曲を停止` in the `停止` slot | `「{title}」の翻訳が終わると、この曲を翻訳できます` | None | Stop the other job. When the lock is released the row returns to S2 by itself; no request is sent until the reader taps. |
 | **S3 Waiting** (before the preface) | `歌詞を読み込んでいます` · `停止`. Track: a short segment travels along it. | After 15 s with no preface and no line: `AIの応答を待っています。混雑時は1分ほどかかる場合があります`. Where answers arrive in one piece: `この環境では、訳はまとめて表示されます`. | A reserved blank slot under every line (a `♪` under a line of sounds); the pen stands in the first | Scroll, listen, use Genius, stop |
 | **S4 Arriving** | `翻訳しています` `（{done}/{total}行）` (no count on phones) · `停止` · `訳を隠す` · `設定`. Track: fills with {done}/{total}. | `この環境では、訳はまとめて表示されます` where answers arrive in one piece; the preface | Slots fill in order. The pen stands at the first missing line after the last filled one. Repeats fill together with their first occurrence. | Read, open notes, stop, hide |
 | **S4m Mirrored** (the same song is running in another tab) | `別のタブで翻訳しています` · `停止` · `訳を隠す` | The preface | Filled live from storage; the pen stands at the frontier | Read, stop (this sets an abort flag the owner tab obeys) |
@@ -92,13 +92,13 @@ A continuable reason reaches the seam only when the automatic follow-up (§1, pr
 | reader stopped | `ここで停止しました` | `続きを翻訳` |
 | output-length cut (long song) | `曲が長いため、ここで一度区切りました` | `続きを翻訳` |
 | tab closed or suspended (partial record found, no live lock), or a stop that no longer applies | `ここまで翻訳済みです` | `続きを翻訳` |
-| another song holds the lock, or today's quota is known spent | The reason's first sentence, then the blocker: `別の曲の翻訳が終わると、この曲を翻訳できます` / `本日の無料枠を使い切りました。{when}から翻訳できます` (`後ほど翻訳できます` once the time has passed). A busy, per-minute, no-model or silent stop next to a spent quota says only `ここで中断しました`, so two limits are never named. | Disabled until the blocker clears |
+| this tab is translating another song, or today's quota is known spent | The reason's first sentence, then the blocker: `別の曲の翻訳が終わると、この曲を翻訳できます` / `本日の無料枠を使い切りました。{when}から翻訳できます` (`後ほど翻訳できます` once the time has passed). A busy, per-minute, no-model or silent stop next to a spent quota says only `ここで中断しました`, so two limits are never named. | Disabled until the blocker clears |
 
 The seam is a stop line, not a decoration: a black 2 px rule across the column right after the last translated line, the reason under it, and the next step as an underlined bold button. It is the border between what has been translated and the plain English that follows, so it reads as a statement about the page, not as the translation of the lyric above it. Below it nothing of ours is drawn (no slots, no gaps, no translated repeats) until the reader resumes.
 
 `{when}` is the next Pacific midnight, computed with `Intl` in `America/Los_Angeles` and formatted in `Asia/Tokyo` as `H:MM` (no leading zero: `9:05`). It reads `16:00` or `17:00`, with the prefix `明日 ` when the reset falls on the next JST date.
 
-**Request guards.** A button locks the moment it is pressed. There is one global lock in GM storage, `{songId, tabId, heartbeat}`, with a heartbeat every 2 s; a lock older than 10 s is stale. Before every request the client checks the exhausted registry. Nothing restarts on reload.
+**Request guards.** A button locks the moment it is pressed. There is one lock per song in GM storage, `{songId, tabId, heartbeat}`, with a heartbeat every 2 s; a lock older than 10 s is stale. Before every request the client checks the exhausted registry. Nothing restarts on reload.
 
 **Head guards.** A tapped primary action locks at once, and the next render decides from state whether it stays locked. `停止` ignores a tap in its first 600 ms on screen, so a double tap or a repeating key on `日本語に翻訳` cannot stop what it just started; focus then rests on the status sentence instead of landing on `停止`. Otherwise focus follows the slot: a link keeps focus when the row around it changes, and never lands on an invisible placeholder.
 
@@ -413,7 +413,7 @@ There is no auto-translate, no note-amount setting, no font-size control (the pa
 
 **SPA navigation to another song.** On a new identity, tear down all our nodes, highlights and the sheet, then render the new song from cache or its entry state. An in-flight stream keeps writing to its own song's record and lock. Returning to that song shows S4, filled from storage.
 
-**Two songs at once.** The global lock allows only one in-flight request. The other song shows S2b or the lock-held seam. **The same song in two tabs:** the second tab becomes S4m and follows via `GM_addValueChangeListener`, or by polling every 1.5 s while the tab is visible.
+**Two songs at once.** Different songs translate at the same time in different tabs; one tab runs one request, so within a tab the other song shows S2b or the lock-held seam. **The same song in two tabs:** the second tab becomes S4m and follows via `GM_addValueChangeListener`, or by polling every 1.5 s while the tab is visible.
 
 **Repeated choruses.** Each is translated once. Every occurrence fills at the same moment its first occurrence arrives, rendered in the quiet grey with no mark, and carries a quiet `※` if the original has notes. A line that differs by one word is a distinct line and gets normal ink.
 
